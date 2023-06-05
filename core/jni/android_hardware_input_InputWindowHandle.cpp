@@ -75,6 +75,11 @@ static struct {
     jfieldID transform;
     jfieldID windowToken;
     jfieldID isClone;
+    // MIUI ADD: START Activity Embedding
+    jfieldID miuiEmbeddedMidRegion;
+    jfieldID miuiEmbeddedHotRegion;
+    jfieldID isNeedMiuiEmbeddedEventMapping;
+    // END
 } gInputWindowHandleClassInfo;
 
 static struct {
@@ -115,6 +120,10 @@ bool NativeInputWindowHandle::updateInfo() {
     }
 
     mInfo.touchableRegion.clear();
+    // MIUI ADD: START Activity Embedding
+    mInfo.miuiEmbeddedMidRegion.clear();
+    mInfo.miuiEmbeddedHotRegion.clear();
+    // END
 
     jobject tokenObj = env->GetObjectField(obj, gInputWindowHandleClassInfo.token);
     if (tokenObj) {
@@ -216,6 +225,31 @@ bool NativeInputWindowHandle::updateInfo() {
     } else {
         mInfo.windowToken.clear();
     }
+
+    // MIUI ADD: START Activity Embedding
+    jobject miuiEmbeddedMidRegionObj = env->GetObjectField(obj,
+                    gInputWindowHandleClassInfo.miuiEmbeddedMidRegion);
+    if (miuiEmbeddedMidRegionObj) {
+        for (graphics::RegionIterator it(env, miuiEmbeddedMidRegionObj); !it.isDone(); it.next()) {
+            ARect rect = it.getRect();
+            mInfo.addMiuiEmbeddedMidRegion(Rect(rect.left, rect.top, rect.right, rect.bottom));
+        }
+        env->DeleteLocalRef(miuiEmbeddedMidRegionObj);
+    }
+
+    jobject miuiEmbeddedHotRegionObj = env->GetObjectField(obj,
+                gInputWindowHandleClassInfo.miuiEmbeddedHotRegion);
+    if (miuiEmbeddedHotRegionObj) {
+        for (graphics::RegionIterator it(env, miuiEmbeddedHotRegionObj); !it.isDone(); it.next()) {
+            ARect rect = it.getRect();
+            mInfo.addMiuiEmbeddedHotRegion(Rect(rect.left, rect.top, rect.right, rect.bottom));
+        }
+        env->DeleteLocalRef(miuiEmbeddedHotRegionObj);
+    }
+
+    mInfo.isNeedMiuiEmbeddedEventMapping = env->GetBooleanField(obj,
+                gInputWindowHandleClassInfo.isNeedMiuiEmbeddedEventMapping);
+    // END
 
     env->DeleteLocalRef(obj);
     return true;
@@ -456,6 +490,16 @@ int register_android_view_InputWindowHandle(JNIEnv* env) {
     FIND_CLASS(regionClazz, "android/graphics/Region");
     gRegionClassInfo.clazz = MakeGlobalRefOrDie(env, regionClazz);
     GET_METHOD_ID(gRegionClassInfo.ctor, gRegionClassInfo.clazz, "<init>", "(J)V");
+
+    // MIUI ADD: START Activity Embedding
+    GET_FIELD_ID(gInputWindowHandleClassInfo.miuiEmbeddedMidRegion, clazz,
+            "miuiEmbeddedMidRegion", "Landroid/graphics/Region;");
+    GET_FIELD_ID(gInputWindowHandleClassInfo.miuiEmbeddedHotRegion, clazz,
+            "miuiEmbeddedHotRegion", "Landroid/graphics/Region;");
+    GET_FIELD_ID(gInputWindowHandleClassInfo.isNeedMiuiEmbeddedEventMapping, clazz,
+            "isNeedMiuiEmbeddedEventMapping", "Z");
+    // END
+
     return 0;
 }
 

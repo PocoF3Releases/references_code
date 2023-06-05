@@ -206,6 +206,19 @@ public:
     // without replaying the matrix transform OPs from the display list.
     // Child receiver node will set the matrix and then clip with the outline of their parent.
     SkMatrix mParentMatrix;
+
+// MIUI ADD: START
+public:
+    int getBitmapStreams() {
+        return mDisplayList.getBitmapStreams();
+    }
+    void setIsForeground(bool isForeground) {
+        mDisplayList.setIsForeground(isForeground);
+    }
+    bool isForeground() {
+        return mDisplayList.isForeground();
+    }
+// END
 };
 
 }  // namespace skiapipeline

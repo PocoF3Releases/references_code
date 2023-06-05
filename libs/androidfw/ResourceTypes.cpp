@@ -65,6 +65,15 @@ namespace android {
 
 #define IDMAP_MAGIC             0x504D4449
 
+// MIUI ADD: Start
+#ifdef MIUI_RES_HOOK
+#include "res_hook.h"
+#endif
+#ifdef MIUI_AAPT_HOOK
+#include "aapt_hook.h"
+#endif
+// MIUI ADD: End
+
 #define APP_PACKAGE_ID      0x7f
 #define SYS_PACKAGE_ID      0x01
 
@@ -2254,6 +2263,18 @@ bool ResTable_config::isMoreSpecificThan(const ResTable_config& o) const {
     // configuration parameter over another.  Those tests first are more
     // important, trumping any values in those following them.
     if (imsi || o.imsi) {
+
+#ifdef MIUI_RES_HOOK
+        switch (isMiuiMccMncBetterThan(mcc, mnc, o.mcc, o.mnc)) {
+            case COMPARE_BETTER:
+                return true;
+            case COMPARE_WORSE:
+                return false;
+            default:
+                break;
+        }
+#endif
+
         if (mcc != o.mcc) {
             if (!mcc) return false;
             if (!o.mcc) return true;
@@ -2529,6 +2550,18 @@ bool ResTable_config::isBetterThan(const ResTable_config& o,
         const ResTable_config* requested) const {
     if (requested) {
         if (imsi || o.imsi) {
+
+#ifdef MIUI_RES_HOOK
+            switch (isMiuiMccMncBetterThan(mcc, mnc, o.mcc, o.mnc)) {
+                case COMPARE_BETTER:
+                    return true;
+                case COMPARE_WORSE:
+                    return false;
+                default:
+                    break;
+            }
+#endif
+
             if ((mcc != o.mcc) && requested->mcc) {
                 return (mcc);
             }
@@ -2787,12 +2820,22 @@ bool ResTable_config::isBetterThan(const ResTable_config& o,
 
 bool ResTable_config::match(const ResTable_config& settings) const {
     if (imsi != 0) {
+
+#ifdef MIUI_RES_HOOK
+        int matchMiuiMccMncResult = matchMiuiMccMnc(mcc, mnc);
+        if (matchMiuiMccMncResult == MATCH_UNMATCH) return false;
+        else if (matchMiuiMccMncResult == MATCH_CONTINUE) {
+#endif
         if (mcc != 0 && mcc != settings.mcc) {
             return false;
         }
         if (mnc != 0 && mnc != settings.mnc) {
             return false;
         }
+#ifdef MIUI_RES_HOOK
+        }
+#endif
+
     }
     if (locale != 0) {
         // Don't consider country and variants when deciding matches.
@@ -3397,6 +3440,23 @@ String8 ResTable_config::toString() const {
             case ResTable_config::UI_MODE_TYPE_VR_HEADSET:
                 res.append("vrheadset");
                 break;
+            // MIUI ADD: START
+            case ResTable_config::UI_MODE_TYPE_GODZILLAUI:
+                res.append("godzillaui");
+                break;
+            case ResTable_config::UI_MODE_TYPE_SMALLUI:
+                res.append("smallui");
+                break;
+            case ResTable_config::UI_MODE_TYPE_MEDIUMUI:
+                res.append("mediumui");
+                break;
+            case ResTable_config::UI_MODE_TYPE_LARGEUI:
+                res.append("largeui");
+                break;
+            case ResTable_config::UI_MODE_TYPE_HUGEUI:
+                res.append("hugeui");
+                break;
+            // END
             default:
                 res.appendFormat("uiModeType=%d",
                         dtohs(screenLayout&ResTable_config::MASK_UI_MODE_TYPE));
@@ -3436,6 +3496,13 @@ String8 ResTable_config::toString() const {
             case ResTable_config::DENSITY_XHIGH:
                 res.append("xhdpi");
                 break;
+
+#ifdef MIUI_AAPT_HOOK
+            case MIUI_DENSITY_NXHDPI:
+                res.append("nxhdpi");
+                break;
+#endif
+
             case ResTable_config::DENSITY_XXHIGH:
                 res.append("xxhdpi");
                 break;
@@ -5667,7 +5734,7 @@ bool ResTable::stringToValue(Res_value* outValue, String16* outString,
                         outValue->data = rid;
                         outValue->dataType = Res_value::TYPE_DYNAMIC_REFERENCE;
                         return true;
-                    } else if (packageId == APP_PACKAGE_ID || packageId == SYS_PACKAGE_ID) {
+                    } else /*if (packageId == APP_PACKAGE_ID || packageId == SYS_PACKAGE_ID)*/ { // MIUI WORKAROUND
                         // We accept packageId's generated as 0x01 in order to support
                         // building the android system resources
                         outValue->data = rid;
@@ -5828,7 +5895,7 @@ bool ResTable::stringToValue(Res_value* outValue, String16* outString,
                     outValue->data = rid;
                     outValue->dataType = Res_value::TYPE_DYNAMIC_ATTRIBUTE;
                     return true;
-                } else if (packageId == APP_PACKAGE_ID || packageId == SYS_PACKAGE_ID) {
+                } else/* if (packageId == APP_PACKAGE_ID || packageId == SYS_PACKAGE_ID)*/ { // MIUI WORKAROUND
                     // We accept packageId's generated as 0x01 in order to support
                     // building the android system resources
                     outValue->data = rid;
@@ -7115,14 +7182,20 @@ status_t DynamicRefTable::lookupResourceId(uint32_t* resId) const {
     // Do a proper lookup.
     uint8_t translatedId = mLookupTable[packageId];
     if (translatedId == 0) {
-        ALOGW("DynamicRefTable(0x%02x): No mapping for build-time package ID 0x%02x.",
+
+        // MIUI WORKAROUND: Start
+        // ignore the id has diffrent package id
+        /* ALOGW("DynamicRefTable(0x%02x): No mapping for build-time package ID 0x%02x.",
                 (uint8_t)mAssignedPackageId, (uint8_t)packageId);
         for (size_t i = 0; i < 256; i++) {
             if (mLookupTable[i] != 0) {
                 ALOGW("e[0x%02x] -> 0x%02x", (uint8_t)i, mLookupTable[i]);
             }
         }
-        return UNKNOWN_ERROR;
+        return UNKNOWN_ERROR;*/
+        // do nothing
+        return NO_ERROR;
+        // MIUI WORKAROUND: End
     }
 
     *resId = (res & 0x00ffffff) | (((uint32_t) translatedId) << 24);

@@ -595,9 +595,16 @@ BitmapPalette Tree::computePalette() {
     MinMaxAverage hue, saturation, value;
     int sampledCount = 0;
 
+    // MIUI ADD START:
+    const SkRect& bounds = stagingProperties().getBounds();
+    bool isSmall = bounds.width() <= 160 && bounds.height() <= 160;
+    // END
+
     // Sample a grid of 100 pixels to get an overall estimation of the colors in play
     mRootNode->forEachFillColor([&](SkColor color) {
-        if (SkColorGetA(color) < 75) {
+        // MIUI MOD
+        // if (SkColorGetA(color) < 75) {
+        if (SkColorGetA(color) < 75 && !isSmall) {
             return;
         }
         sampledCount++;
@@ -617,6 +624,16 @@ BitmapPalette Tree::computePalette() {
           "%f]; value [min = %f, max = %f, avg = %f]",
           sampledCount, hue.min(), hue.max(), hue.average(), saturation.min(), saturation.max(),
           saturation.average(), value.min(), value.max(), value.average());
+
+    // MIUI ADD START:
+    if (isSmall){
+        if (value.average() > .6f) {
+            return BitmapPalette::Light;
+        } else {
+            return BitmapPalette::Dark;
+        }
+    }
+    // END
 
     if (hue.delta() <= 20 && saturation.delta() <= .1f) {
         if (value.average() >= .5f) {

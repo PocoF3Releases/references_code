@@ -412,6 +412,18 @@ static jint nativeForceScopedDisconnect(JNIEnv *env, jclass clazz, jlong nativeO
     return surface->disconnect(-1, IGraphicBufferProducer::DisconnectMode::AllLocal);
 }
 
+// MIUI ADD:START
+static void nativeSetInverseDisplayEnable(JNIEnv *env, jclass clazz, jlong nativeObject, jboolean enable) {
+    Surface* surface = reinterpret_cast<Surface*>(nativeObject);
+    surface->setInverseDisplayEnable(bool(enable));
+}
+
+static void nativeSetDequeueTimeout(JNIEnv *env, jclass clazz, jlong nativeObject, jint timeout) {
+    Surface* surface = reinterpret_cast<Surface*>(nativeObject);
+    surface->setDequeueTimeout(int64_t(timeout));
+}
+// END
+
 static jint nativeAttachAndQueueBufferWithColorSpace(JNIEnv* env, jclass clazz, jlong nativeObject,
                                                      jobject hardwareBuffer, jint colorSpaceId) {
     Surface* surface = reinterpret_cast<Surface*>(nativeObject);
@@ -483,6 +495,11 @@ static const JNINativeMethod gSurfaceMethods[] = {
         {"nativeSetFrameRate", "(JFII)I", (void*)nativeSetFrameRate},
         {"nativeGetFromBlastBufferQueue", "(JJ)J", (void*)nativeGetFromBlastBufferQueue},
         {"nativeDestroy", "(J)V", (void*)nativeDestroy},
+        // MIUI ADD: START
+        {"nativeSetInverseDisplayEnable", "(JZ)V", (void*)nativeSetInverseDisplayEnable},
+        {"nativeSetDequeueTimeout", "(JI)V", (void*)nativeSetDequeueTimeout},
+        // END
+
 };
 
 int register_android_view_Surface(JNIEnv* env)

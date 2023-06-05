@@ -390,13 +390,31 @@ struct DrawImageLattice final : Op {
 
 struct DrawTextBlob final : Op {
     static const auto kType = Type::DrawTextBlob;
-    DrawTextBlob(const SkTextBlob* blob, SkScalar x, SkScalar y, const SkPaint& paint)
-        : blob(sk_ref_sp(blob)), x(x), y(y), paint(paint), drawTextBlobMode(gDrawTextBlobMode) {}
+    // MIUI MOD: START
+    /*DrawTextBlob(const SkTextBlob* blob, SkScalar x, SkScalar y, const SkPaint& paint)
+        : blob(sk_ref_sp(blob)), x(x), y(y), paint(paint), drawTextBlobMode(gDrawTextBlobMode) {}*/
+    DrawTextBlob(const SkTextBlob* blob, SkScalar x, SkScalar y, const SkPaint& paint, bool forceDark)
+        : blob(sk_ref_sp(blob)), x(x), y(y), paint(paint), drawTextBlobMode(gDrawTextBlobMode), forceDark(forceDark) {}
+    // END
     sk_sp<const SkTextBlob> blob;
     SkScalar x, y;
     SkPaint paint;
     DrawTextBlobMode drawTextBlobMode;
-    void draw(SkCanvas* c, const SkMatrix&) const { c->drawTextBlob(blob.get(), x, y, paint); }
+    // MIUI ADD: START
+    bool forceDark;
+    // END
+    void draw(SkCanvas* c, const SkMatrix&) const {
+        // MIUI ADD: START
+        // All text must be highlighted under force dark
+        if(MiuiForceDarkConfigStub::getMainRule() & MiuiForceDarkConfigStub::RULE_ALWAYS_LIGHT_TEXT) {
+            if (forceDark){
+                android::uirenderer::transformPaint(uirenderer::ColorTransform::Light,
+                    const_cast<SkPaint*>(&paint));
+            }
+        }
+        // END
+        c->drawTextBlob(blob.get(), x, y, paint);
+    }
 };
 
 struct DrawPatch final : Op {
@@ -715,17 +733,41 @@ void DisplayListData::drawPicture(const SkPicture* picture, const SkMatrix* matr
 void DisplayListData::drawImage(sk_sp<const SkImage> image, SkScalar x, SkScalar y,
                                 const SkSamplingOptions& sampling, const SkPaint* paint,
                                 BitmapPalette palette) {
+    // MIUI ADD: START
+    //根据paltette记录bitmap种类
+    if(BitmapPalette::NoInvert == palette) {
+        mBitmapStreams += 100;
+    } else {
+        mBitmapStreams += 1;
+    }
+    // END
     this->push<DrawImage>(0, std::move(image), x, y, sampling, paint, palette);
 }
 void DisplayListData::drawImageRect(sk_sp<const SkImage> image, const SkRect* src,
                                     const SkRect& dst, const SkSamplingOptions& sampling,
                                     const SkPaint* paint, SkCanvas::SrcRectConstraint constraint,
                                     BitmapPalette palette) {
+    // MIUI ADD: START
+    //根据paltette记录bitmap种类
+    if(BitmapPalette::NoInvert == palette) {
+        mBitmapStreams += 100;
+    } else {
+        mBitmapStreams += 1;
+    }
+    // END
     this->push<DrawImageRect>(0, std::move(image), src, dst, sampling, paint, constraint, palette);
 }
 void DisplayListData::drawImageLattice(sk_sp<const SkImage> image, const SkCanvas::Lattice& lattice,
                                        const SkRect& dst, SkFilterMode filter, const SkPaint* paint,
                                        BitmapPalette palette) {
+    // MIUI ADD: START
+    //根据paltette记录bitmap种类
+    if(BitmapPalette::NoInvert == palette) {
+        mBitmapStreams += 100;
+    } else {
+        mBitmapStreams += 1;
+    }
+    // END
     int xs = lattice.fXCount, ys = lattice.fYCount;
     int fs = lattice.fRectTypes ? (xs + 1) * (ys + 1) : 0;
     size_t bytes = (xs + ys) * sizeof(int) + fs * sizeof(SkCanvas::Lattice::RectType) +
@@ -737,9 +779,16 @@ void DisplayListData::drawImageLattice(sk_sp<const SkImage> image, const SkCanva
            fs);
 }
 
+// MIUI MOD: START
+// void DisplayListData::drawTextBlob(const SkTextBlob* blob, SkScalar x, SkScalar y,
+//                                   const SkPaint& paint) {
 void DisplayListData::drawTextBlob(const SkTextBlob* blob, SkScalar x, SkScalar y,
-                                   const SkPaint& paint) {
-    this->push<DrawTextBlob>(0, blob, x, y, paint);
+                                       const SkPaint& paint, bool forceDark) {
+// END
+    // MIUI MOD: START
+    //this->push<DrawTextBlob>(0, blob, x, y, paint);
+    this->push<DrawTextBlob>(0, blob, x, y, paint, forceDark);
+    // END
     mHasText = true;
 }
 
@@ -819,6 +868,8 @@ void DisplayListData::reset() {
 
     // Leave fBytes and fReserved alone.
     fUsed = 0;
+    // MIUI ADD:START
+    mBitmapStreams = 0;
 }
 
 template <class T>
@@ -843,6 +894,11 @@ constexpr color_transform_fn colorTransformForOp() {
                 // Unclear, but this is the quick fix
                 const T* op = reinterpret_cast<const T*>(opRaw);
                 const SkPaint* paint = &op->paint;
+                // MIUI ADD: START
+                if (transform == ColorTransform::DarkExcludeText) {
+                    transform = ColorTransform::Dark;
+                }
+                // END
                 transformPaint(transform, const_cast<SkPaint*>(paint), op->palette);
             };
         }
@@ -853,6 +909,15 @@ constexpr color_transform_fn colorTransformForOp() {
                 // Unclear, but this is the quick fix
                 const T* op = reinterpret_cast<const T*>(opRaw);
                 const SkPaint* paint = &op->paint;
+                 // MIUI ADD: START
+                if (transform == ColorTransform::DarkExcludeText) {
+                    if (op->kType == Type::DrawTextBlob) {
+                        transform = ColorTransform::Light;
+                    } else {
+                        transform = ColorTransform::Dark;
+                    }
+                }
+                // END
                 transformPaint(transform, const_cast<SkPaint*>(paint));
             };
         }
@@ -1028,7 +1093,10 @@ void RecordingCanvas::onDrawAnnotation(const SkRect& rect, const char key[], SkD
 
 void RecordingCanvas::onDrawTextBlob(const SkTextBlob* blob, SkScalar x, SkScalar y,
                                      const SkPaint& paint) {
-    fDL->drawTextBlob(blob, x, y, paint);
+    // MIUI MOD: START
+    // fDL->drawTextBlob(blob, x, y, paint);
+    fDL->drawTextBlob(blob, x, y, paint, forceDark());
+    // END
 }
 
 void RecordingCanvas::drawRippleDrawable(const skiapipeline::RippleDrawableParams& params) {

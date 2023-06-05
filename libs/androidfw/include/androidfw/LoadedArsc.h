@@ -229,6 +229,9 @@ class LoadedPackage {
   base::expected<std::monostate, IOError> CollectConfigurations(
       bool exclude_mipmap, std::set<ResTable_config>* out_configs) const;
 
+  // MIUI ADD:
+  bool IsDarkModeSupported() const;
+
   // Populates a set of strings representing locales.
   // If `canonicalize` is set to true, each locale is transformed into its canonical format
   // before being inserted into the set. This may cause some equivalent locales to de-dupe.

@@ -175,7 +175,8 @@ static bool needsFineScale(const SkISize fullSize, const SkISize decodedSize,
 
 static jobject doDecode(JNIEnv* env, std::unique_ptr<SkStreamRewindable> stream,
                         jobject padding, jobject options, jlong inBitmapHandle,
-                        jlong colorSpaceHandle) {
+                        jlong colorSpaceHandle, /* MIUI ADD */bool isAsset) {
+
     // Set default values for the options parameters.
     int sampleSize = 1;
     bool onlyDecodeSize = false;
@@ -484,6 +485,8 @@ static jobject doDecode(JNIEnv* env, std::unique_ptr<SkStreamRewindable> stream,
     bool isPremultiplied = !requireUnpremultiplied;
     if (javaBitmap != nullptr) {
         bitmap::reinitBitmap(env, javaBitmap, outputBitmap.info(), isPremultiplied);
+        // MIUI ADD:
+        bitmap::setAsset(env, javaBitmap, isAsset);
         outputBitmap.notifyPixelsChanged();
         // If a java bitmap was passed in for reuse, pass it back
         return javaBitmap;
@@ -498,13 +501,25 @@ static jobject doDecode(JNIEnv* env, std::unique_ptr<SkStreamRewindable> stream,
         if (!hardwareBitmap.get()) {
             return nullObjectReturn("Failed to allocate a hardware bitmap");
         }
-        return bitmap::createBitmap(env, hardwareBitmap.release(), bitmapCreateFlags,
+        // MIUI MODE: START
+        // return bitmap::createBitmap(env, hardwareBitmap.release(), bitmapCreateFlags,
+        //               ninePatchChunk, ninePatchInsets, -1);
+        Bitmap* bitmap = hardwareBitmap.release();
+        bitmap->setAsset(isAsset);
+        return bitmap::createBitmap(env, bitmap, bitmapCreateFlags,
                 ninePatchChunk, ninePatchInsets, -1);
+        // END
     }
 
     // now create the java bitmap
-    return bitmap::createBitmap(env, defaultAllocator.getStorageObjAndReset(),
+    // MIUI MODE: START
+    // return bitmap::createBitmap(env, defaultAllocator.getStorageObjAndReset(),
+    //            bitmapCreateFlags, ninePatchChunk, ninePatchInsets, -1);
+    Bitmap* bitmap = defaultAllocator.getStorageObjAndReset();
+    bitmap->setAsset(isAsset);
+    return bitmap::createBitmap(env, bitmap,
             bitmapCreateFlags, ninePatchChunk, ninePatchInsets, -1);
+    // END
 }
 
 static jobject nativeDecodeStream(JNIEnv* env, jobject clazz, jobject is, jbyteArray storage,
@@ -518,7 +533,7 @@ static jobject nativeDecodeStream(JNIEnv* env, jobject clazz, jobject is, jbyteA
                 std::move(stream), SkCodec::MinBufferedBytesNeeded()));
         SkASSERT(bufferedStream.get() != NULL);
         bitmap = doDecode(env, std::move(bufferedStream), padding, options, inBitmapHandle,
-                          colorSpaceHandle);
+                          colorSpaceHandle,/* MIUI ADD */ false);
     }
     return bitmap;
 }
@@ -563,7 +578,7 @@ static jobject nativeDecodeFileDescriptor(JNIEnv* env, jobject clazz, jobject fi
     if (::lseek(descriptor, 0, SEEK_CUR) == 0) {
         assert(isSeekable(dupDescriptor));
         return doDecode(env, std::move(fileStream), padding, bitmapFactoryOptions,
-                        inBitmapHandle, colorSpaceHandle);
+                        inBitmapHandle, colorSpaceHandle,/* MIUI ADD */ false);
     }
 
     // Use a buffered stream. Although an SkFILEStream can be rewound, this
@@ -573,7 +588,7 @@ static jobject nativeDecodeFileDescriptor(JNIEnv* env, jobject clazz, jobject fi
             std::move(fileStream), SkCodec::MinBufferedBytesNeeded()));
 
     return doDecode(env, std::move(stream), padding, bitmapFactoryOptions, inBitmapHandle,
-                    colorSpaceHandle);
+                    colorSpaceHandle,/* MIUI ADD */ false);
 #endif
 }
 
@@ -584,7 +599,7 @@ static jobject nativeDecodeAsset(JNIEnv* env, jobject clazz, jlong native_asset,
     // since we know we'll be done with the asset when we return, we can
     // just use a simple wrapper
     return doDecode(env, std::make_unique<AssetStreamAdaptor>(asset), padding, options,
-                    inBitmapHandle, colorSpaceHandle);
+                    inBitmapHandle, colorSpaceHandle,/* MIUI ADD */ true);
 }
 
 static jobject nativeDecodeByteArray(JNIEnv* env, jobject, jbyteArray byteArray,
@@ -592,7 +607,7 @@ static jobject nativeDecodeByteArray(JNIEnv* env, jobject, jbyteArray byteArray,
 
     AutoJavaByteArray ar(env, byteArray);
     return doDecode(env, std::make_unique<SkMemoryStream>(ar.ptr() + offset, length, false),
-                    nullptr, options, inBitmapHandle, colorSpaceHandle);
+                    nullptr, options, inBitmapHandle, colorSpaceHandle,/* MIUI ADD */ false);
 }
 
 static jboolean nativeIsSeekable(JNIEnv* env, jobject, jobject fileDescriptor) {

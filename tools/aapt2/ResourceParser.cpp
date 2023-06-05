@@ -243,6 +243,18 @@ class UntranslatableNode : public Node {
   }
 };
 
+// MIUI ADD: START
+void ResourceParser::ReplaceWlanString(std::string& raw_string) {
+  for(auto replace=wlan_replace.begin();replace!=wlan_replace.end();replace++) {
+    size_t pos = 0;
+    while((pos = raw_string.find(*replace, pos)) != std::string::npos) {
+      raw_string.replace(pos, replace->length(), "WLAN");
+      pos += 4;
+    }
+  }
+}
+// END
+
 // Build a string from XML that converts nested elements into Span objects.
 bool ResourceParser::FlattenXmlSubtree(
     xml::XmlPullParser* parser, std::string* out_raw_string, StyleString* out_style_string,
@@ -270,6 +282,9 @@ bool ResourceParser::FlattenXmlSubtree(
         || event == xml::XmlPullParser::Event::kEndElement) {
       if (!current_text.empty()) {
         auto segment_node = util::make_unique<SegmentNode>();
+        // MIUI ADD:
+        ReplaceWlanString(current_text);
+
         segment_node->data = std::move(current_text);
 
         last_segment = node_stack.back()->AddChild(std::move(segment_node));
@@ -388,6 +403,9 @@ bool ResourceParser::FlattenXmlSubtree(
   }
 
   ResourceUtils::FlattenedXmlString flattened_string = builder.GetFlattenedString();
+  // MIUI ADD:
+  ReplaceWlanString(raw_string);
+
   *out_raw_string = std::move(raw_string);
   *out_untranslatable_sections = std::move(flattened_string.untranslatable_sections);
   out_style_string->str = std::move(flattened_string.text);

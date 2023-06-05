@@ -240,6 +240,33 @@ bool DeserializeConfigFromPb(const pb::Configuration& pb_config, ConfigDescripti
                            ConfigDescription::UI_MODE_TYPE_VR_HEADSET;
       break;
 
+    // MIUI ADD: START
+    case pb::Configuration_UiModeType_UI_MODE_TYPE_SMALLUI:
+      out_config->uiMode = (out_config->uiMode & ~ConfigDescription::MASK_UI_MODE_TYPE) |
+                           ConfigDescription::UI_MODE_TYPE_SMALLUI;
+      break;
+
+    case pb::Configuration_UiModeType_UI_MODE_TYPE_MEDIUMUI:
+      out_config->uiMode = (out_config->uiMode & ~ConfigDescription::MASK_UI_MODE_TYPE) |
+                           ConfigDescription::UI_MODE_TYPE_MEDIUMUI;
+      break;
+
+    case pb::Configuration_UiModeType_UI_MODE_TYPE_LARGEUI:
+      out_config->uiMode = (out_config->uiMode & ~ConfigDescription::MASK_UI_MODE_TYPE) |
+                           ConfigDescription::UI_MODE_TYPE_LARGEUI;
+      break;
+
+    case pb::Configuration_UiModeType_UI_MODE_TYPE_HUGEUI:
+      out_config->uiMode = (out_config->uiMode & ~ConfigDescription::MASK_UI_MODE_TYPE) |
+                           ConfigDescription::UI_MODE_TYPE_HUGEUI;
+      break;
+
+    case pb::Configuration_UiModeType_UI_MODE_TYPE_GODZILLAUI:
+      out_config->uiMode = (out_config->uiMode & ~ConfigDescription::MASK_UI_MODE_TYPE) |
+                           ConfigDescription::UI_MODE_TYPE_GODZILLAUI;
+      break;
+    // END
+
     default:
       break;
   }

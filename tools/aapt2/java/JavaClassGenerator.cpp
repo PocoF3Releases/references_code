@@ -90,7 +90,7 @@ static std::string TransformNestedAttr(const ResourceNameRef& attr_name,
   // We may reference IDs from other packages, so prefix the entry name with
   // the package.
   if (!attr_name.package.empty() &&
-      package_name_to_generate != attr_name.package) {
+      (package_name_to_generate != attr_name.package || attr_name.package == "miui")) {
     output += "_" + JavaClassGenerator::TransformToFieldName(attr_name.package);
   }
   output += "_" + JavaClassGenerator::TransformToFieldName(attr_name.entry);

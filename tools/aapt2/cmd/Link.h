@@ -166,9 +166,13 @@ class LinkCommand : public Command {
     AddOptionalFlagList("-c",
         "Comma separated list of configurations to include. The default\n"
             "is all configurations.", &configs_);
-    AddOptionalFlag("--preferred-density",
+    // MIUI MOD:
+    // AddOptionalFlag("--preferred-density",
+    AddOptionalFlagList("--preferred-density",
         "Selects the closest matching density and strips out all others.",
-        &preferred_density_);
+        // MIUI MOD:
+        // &preferred_density_);
+        &preferred_densities_);
     AddOptionalFlag("--product", "Comma separated list of product names to keep", &product_list_);
     AddOptionalSwitch("--output-to-dir", "Outputs the APK contents to a directory specified by -o.",
         &options_.output_to_directory);
@@ -323,7 +327,9 @@ class LinkCommand : public Command {
   std::vector<std::string> extra_java_packages_;
   std::optional<std::string> package_id_;
   std::vector<std::string> configs_;
-  std::optional<std::string> preferred_density_;
+  // MIUI MOD:
+  // std::optional<std::string> preferred_density_;
+  std::vector<std::string> preferred_densities_;
   std::optional<std::string> product_list_;
   std::optional<std::string> no_compress_regex;
   bool legacy_x_flag_ = false;

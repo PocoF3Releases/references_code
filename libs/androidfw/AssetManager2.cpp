@@ -136,6 +136,15 @@ void AssetManager2::BuildDynamicRefTable() {
     apk_assets_cookies[apk_assets_[i]] = static_cast<ApkAssetsCookie>(i);
   }
 
+  // MIUI ADD: START
+  // Some package id is reserved for oem, like:
+  // 0x08 --- MTK
+  // 0x10 --- miuisdk
+  // 0x11 --- framework-ext-res
+  // 0x12 --- miuisystemsdk
+  std::set<int> non_dynamic_package_ids;
+  // END
+
   // 0x01 is reserved for the android package.
   int next_package_id = 0x02;
   for (const ApkAssets* apk_assets : sorted_apk_assets) {
@@ -174,9 +183,16 @@ void AssetManager2::BuildDynamicRefTable() {
       // Get the package ID or assign one if a shared library.
       int package_id;
       if (package->IsDynamic()) {
+        // MIUI ADD: START
+        while (non_dynamic_package_ids.find(next_package_id) != non_dynamic_package_ids.end()) {
+            next_package_id++;
+        }
+        // END
         package_id = next_package_id++;
       } else {
         package_id = package->GetPackageId();
+        // MIUI ADD:
+        non_dynamic_package_ids.insert(package_id);
       }
 
       uint8_t idx = package_ids_[package_id];
@@ -447,6 +463,31 @@ base::expected<std::set<ResTable_config>, IOError> AssetManager2::GetResourceCon
   }
   return configurations;
 }
+
+// MIUI ADD: START
+bool AssetManager2::IsDarkModeSupported() const {
+    ATRACE_NAME("AssetManager::IsDarkModeSupported");
+    std::set<ResTable_config> configurations;
+    for (const PackageGroup& package_group : package_groups_) {
+        bool found_system_package = false;
+        for (const ConfiguredPackage& package : package_group.packages_) {
+            if (package.loaded_package_->IsSystem()) {
+                found_system_package = true;
+                continue;
+            }
+            if (package.loaded_package_->IsOverlay() && found_system_package) {
+                // Overlays must appear after the target package to take effect. Any overlay found in the
+                // same package as a system package is able to overlay system resources.
+                continue;
+            }
+            if (package.loaded_package_->IsDarkModeSupported()) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+// END
 
 std::set<std::string> AssetManager2::GetResourceLocales(bool exclude_system,
                                                         bool merge_equivalent_languages) const {

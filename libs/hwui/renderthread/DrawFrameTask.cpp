@@ -146,6 +146,13 @@ void DrawFrameTask::run() {
 
     bool canUnblockUiThread;
     bool canDrawThisFrame;
+
+    // MIUI ADD: START
+    if (mContext && mContext->mInspector) {
+        mContext->mInspector->getRenderToken();
+    }
+    // MIUI END
+
     {
         TreeInfo info(TreeInfo::MODE_FULL, *mContext);
         info.forceDrawFrame = mForceDrawFrame;
@@ -199,6 +206,12 @@ void DrawFrameTask::run() {
         // wait on fences so tasks don't overlap next frame
         context->waitOnFences();
     }
+
+    // MIUI ADD: START
+    if (context && context->mInspector) {
+        context->mInspector->releaseRenderToken();
+    }
+    // MIUI END
 
     if (CC_UNLIKELY(frameCompleteCallback)) {
         std::invoke(frameCompleteCallback);

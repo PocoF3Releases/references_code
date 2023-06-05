@@ -198,7 +198,25 @@ status_t hasSubstitutionErrors(const char* fileName,
     return NO_ERROR;
 }
 
-status_t parseStyledString(Bundle* /* bundle */,
+// MIUI ADD:
+static String8 replace(String16* orig, const char* from, const char* to) {
+    String8 replaced;
+    String8 oldstr = String8(*orig);
+    const char* find;
+
+    while( ( find = strstr(oldstr.string(), from) ) != NULL ) {
+        replaced.append(oldstr, find-oldstr);
+        replaced.append(to);
+        oldstr = String8(find+strlen(from));
+    }
+
+    replaced.append(oldstr);
+    return replaced;
+}
+
+// MIUI MOD:
+// status_t parseStyledString(Bundle* /* bundle */,
+status_t parseStyledString(Bundle* bundle,
                            const char* fileName,
                            ResXMLTree* inXml,
                            const String16& endTag,
@@ -395,6 +413,17 @@ moveon:
         rawString.append(curString);
         outString->setTo(rawString);
     }
+
+    // MIUI ADD: START
+    const Vector<const char *>& wlans = bundle->getWlanReplacement();
+    const size_t count = wlans.size();
+    for (size_t i=0; i<count; i++) {
+        const char *res = wlans[i];
+        if (strstr(String8(*outString).string(), res) != NULL) {
+            outString->setTo(String16(replace(outString, res, "WLAN")));
+        }
+    }
+    // END
 
     return NO_ERROR;
 }

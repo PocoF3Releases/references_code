@@ -341,6 +341,57 @@ base::expected<std::monostate, IOError> LoadedPackage::CollectConfigurations(
   return {};
 }
 
+// MIUI ADD: START
+bool LoadedPackage::IsDarkModeSupported() const {
+    const static std::u16string kDrawable = u"drawable";
+    const size_t type_count = type_specs_.size();
+    for (const auto& type_spec : type_specs_) {
+        const int type_idx = type_spec.second.type_spec->id - 1;
+        size_t type_name_len;
+        const char16_t* type_name16 = UnpackOptionalString(type_string_pool_.stringAt(type_idx), &type_name_len);
+        if (type_name16 != nullptr) {
+            if (kDrawable.compare(0, std::u16string::npos, type_name16, type_name_len) != 0) {
+                // This is a drawable type, skip.
+                continue;
+            }
+        }
+        const char* type_name = UnpackOptionalString(type_string_pool_.string8At(type_idx), &type_name_len);
+        if (type_name != nullptr) {
+            if (strncmp(type_name, "drawable", type_name_len) != 0) {
+                // This is a drawable type, skip.
+                continue;
+            }
+        }
+
+        size_t res_count = 0;
+        for (const auto& type_entry : type_spec.second.type_entries) {
+            if ((type_entry.config.uiMode & ResTable_config::MASK_UI_MODE_NIGHT)
+                != ResTable_config::UI_MODE_NIGHT_YES) {
+                continue;
+            }
+            const incfs::verified_map_ptr<ResTable_type>& type = type_entry.type;
+            size_t entry_count = dtohl(type->entryCount);
+
+            for (uint16_t entry_idx = 0; entry_idx < entry_count; entry_idx++) {
+                auto entry_offset_ptr = type.offset(dtohs(type->header.headerSize)).convert<uint32_t>() + entry_idx;
+                if (!entry_offset_ptr) {
+                    //return base::unexpected(IOError::PAGES_MISSING);
+                    continue;
+                }
+                auto offset = dtohl(entry_offset_ptr.value());
+                if (offset != ResTable_type::NO_ENTRY) {
+                    res_count++;
+                    if (res_count > 20) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+// END
+
 void LoadedPackage::CollectLocales(bool canonicalize, std::set<std::string>* out_locales) const {
   char temp_locale[RESTABLE_MAX_LOCALE_LEN];
   for (const auto& type_spec : type_specs_) {

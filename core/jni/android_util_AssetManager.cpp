@@ -1434,11 +1434,21 @@ static jlong NativeAssetGetRemainingLength(JNIEnv* /*env*/, jclass /*clazz*/, jl
   return static_cast<jlong>(asset->getRemainingLength());
 }
 
+// MIUI ADD: START
+static jboolean NativeIsDarkModeSupported(JNIEnv* /*env*/, jclass /*clazz*/, jlong ptr) {
+  ScopedLock<AssetManager2> assetmanager(AssetManagerFromLong(ptr));
+  //return static_cast<jboolean>(assetmanager->IsDarkModeSupported());
+  return false;
+}
+// END
+
 // ----------------------------------------------------------------------------
 
 // JNI registration.
 static const JNINativeMethod gAssetManagerMethods[] = {
     // AssetManager setup methods.
+    // MIUI ADD
+    {"nativeIsDarkModeSupported", "(J)Z", (void*)NativeIsDarkModeSupported},
     {"nativeCreate", "()J", (void*)NativeCreate},
     {"nativeDestroy", "(J)V", (void*)NativeDestroy},
     {"nativeSetApkAssets", "(J[Landroid/content/res/ApkAssets;Z)V", (void*)NativeSetApkAssets},

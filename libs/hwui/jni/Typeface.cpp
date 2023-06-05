@@ -223,6 +223,15 @@ static std::shared_ptr<minikin::MinikinFont> loadMinikinFontSkia(minikin::Buffer
     std::string_view fontPath = reader.readString();
     std::string path(fontPath.data(), fontPath.size());
     ATRACE_FORMAT("Loading font %s", path.c_str());
+    // MIUI ADD: Start
+    // workaround for Miui WebView font: https://jira.n.xiaomi.com/browse/MIUIROM-611838
+    struct stat sb;
+    if (path.find("MiSansVF_Overlay") != std::string::npos && stat(path.c_str(), &sb) < 0) {
+        ALOGE("Loading font not exist %s", path.c_str());
+        path = "/system/fonts/MiSansVF.ttf";
+        fontPath = path;
+    }
+    // END
     int fontIndex = reader.read<int>();
     const minikin::FontVariation* axesPtr;
     uint32_t axesCount;

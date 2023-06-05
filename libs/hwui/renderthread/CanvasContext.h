@@ -45,6 +45,8 @@
 #include <string>
 #include <utility>
 #include <vector>
+// MIUI ADD:
+#include "MiuiRenderInspectorStub.h"
 
 namespace android {
 namespace uirenderer {
@@ -161,6 +163,8 @@ public:
     void resetFrameStats();
 
     void setName(const std::string&& name);
+    // MIUI ADD
+    const std::string& name() { return mName; }
 
     void addRenderNode(RenderNode* node, bool placeFront);
     void removeRenderNode(RenderNode* node);
@@ -176,6 +180,9 @@ public:
     uint64_t getFrameNumber();
 
     void waitOnFences();
+
+    // MIUI ADD
+    MiuiRenderInspectorStub* mInspector = nullptr;
 
     IRenderPipeline* getRenderPipeline() { return mRenderPipeline.get(); }
 
@@ -213,6 +220,12 @@ public:
     void prepareSurfaceControlForWebview();
 
     static CanvasContext* getActiveContext();
+
+    // MIUI ADD: START
+    void setFrameDroppedCallback(const std::function<void(int)>& callback) {
+        mFrameDroppedCallback = callback;
+    }
+    // END
 
 private:
     CanvasContext(RenderThread& thread, bool translucent, RenderNode* rootRenderNode,
@@ -332,6 +345,9 @@ private:
     std::function<void()> mPrepareSurfaceControlForWebviewCallback;
 
     void cleanupResources();
+
+    // MIUI ADD:
+    std::function<void(int)> mFrameDroppedCallback;
 };
 
 } /* namespace renderthread */

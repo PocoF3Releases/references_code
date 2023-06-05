@@ -17,7 +17,9 @@
 #pragma once
 
 #include "hwui/Bitmap.h"
-
+// MIUI ADD
+#include "hwui/MiuiForceDarkConfigStub.h"
+// END
 #include <SkCanvas.h>
 #include <SkPaintFilterCanvas.h>
 
@@ -29,12 +31,31 @@ enum class UsageHint {
     Unknown = 0,
     Background = 1,
     Foreground = 2,
+    // MIUI ADD START:
+    // should keep sync with RenderNode.java
+    MiuiFirstUsageHint = 99,
+    BigView = 100,
+    Button = 101,
+    DarkColorFilter = 102,
+    ForceInvert = 103,
+    DarkExcludeText = 104,
+    ForceTransparent = 105,
+    InvertExcludeBitmap = 106,
+    // END
 };
 
 enum class ColorTransform {
     None,
     Light,
     Dark,
+    // MIUI ADD START:
+    BigView,
+    DarkColorFilter,
+    ForceInvert,
+    DarkExcludeText,
+    ForceTransparent,
+    InvertExcludeBitmap,
+    // END
 };
 
 // True if the paint was modified, false otherwise

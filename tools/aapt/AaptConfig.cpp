@@ -21,6 +21,13 @@
 #include "AaptAssets.h"
 #include "AaptUtil.h"
 #include "ResourceFilter.h"
+
+// MIUI ADD: Start
+#ifdef MIUI_RES_HOOK
+#include "aapt_hook.h"
+#endif
+// MIUI ADD: End
+
 #include "SdkConstants.h"
 
 using android::String8;
@@ -315,7 +322,14 @@ bool parseMcc(const char* name, ResTable_config* out) {
         c++;
     }
     if (*c != 0) return false;
+
+// MIUI MOD: Start
+#ifdef MIUI_RES_HOOK
+    if (!isValidMccLength(c-val)) return false;
+#else
     if (c-val != 3) return false;
+#endif
+// MIUI MOD: End
 
     int d = atoi(val);
     if (d != 0) {
@@ -345,7 +359,14 @@ bool parseMnc(const char* name, ResTable_config* out) {
         c++;
     }
     if (*c != 0) return false;
+
+// MIUI MOD: Start
+#ifdef MIUI_RES_HOOK
+    if (!isValidMncLength(c-val)) return false;
+#else
     if (c-val == 0 || c-val > 3) return false;
+#endif
+// MIUI MOD: End
 
     if (out) {
         out->mnc = atoi(val);
@@ -544,6 +565,29 @@ bool parseUiModeType(const char* name, ResTable_config* out) {
               | ResTable_config::UI_MODE_TYPE_VR_HEADSET;
         return true;
     }
+    // MIUI ADD: START
+    else if (strcmp(name, "smallui") == 0) {
+        if (out) out->uiMode = (out->uiMode&~ResTable_config::MASK_UI_MODE_TYPE)
+                               | ResTable_config::UI_MODE_TYPE_SMALLUI;
+        return true;
+    } else if (strcmp(name, "mediumui") == 0) {
+        if (out) out->uiMode = (out->uiMode&~ResTable_config::MASK_UI_MODE_TYPE)
+                               | ResTable_config::UI_MODE_TYPE_MEDIUMUI;
+        return true;
+    } else if (strcmp(name, "largeui") == 0) {
+        if (out) out->uiMode = (out->uiMode&~ResTable_config::MASK_UI_MODE_TYPE)
+                               | ResTable_config::UI_MODE_TYPE_LARGEUI;
+        return true;
+    } else if (strcmp(name, "hugeui") == 0) {
+        if (out) out->uiMode = (out->uiMode&~ResTable_config::MASK_UI_MODE_TYPE)
+                               | ResTable_config::UI_MODE_TYPE_HUGEUI;
+        return true;
+    } else if (strcmp(name, "godzillaui") == 0) {
+        if (out) out->uiMode = (out->uiMode&~ResTable_config::MASK_UI_MODE_TYPE)
+                               | ResTable_config::UI_MODE_TYPE_GODZILLAUI;
+        return true;
+    }
+    // END
 
     return false;
 }
@@ -609,6 +653,13 @@ bool parseDensity(const char* name, ResTable_config* out) {
         if (out) out->density = ResTable_config::DENSITY_XHIGH;
         return true;
     }
+
+#ifdef MIUI_RES_HOOK
+    if (strcmp(name, "nxhdpi") == 0) {
+        if (out) out->density = MIUI_DENSITY_NXHDPI;
+        return true;
+    }
+#endif
 
     if (strcmp(name, "xxhdpi") == 0) {
         if (out) out->density = ResTable_config::DENSITY_XXHIGH;

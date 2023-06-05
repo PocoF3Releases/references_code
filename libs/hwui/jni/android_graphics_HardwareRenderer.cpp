@@ -80,6 +80,12 @@ struct {
     jmethodID onFrameComplete;
 } gFrameCompleteCallback;
 
+// MIUI ADD: START
+struct {
+    jmethodID onFrameDropped;
+} gFrameDroppedCallback;
+// END
+
 static JNIEnv* getenv(JavaVM* vm) {
     JNIEnv* env;
     if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) {
@@ -135,6 +141,39 @@ private:
         }
     }
 };
+
+// MIUI ADD: START
+class FrameDropWrapper : public LightRefBase<FrameDropWrapper> {
+public:
+    explicit FrameDropWrapper(JNIEnv* env, jobject jobject) {
+        env->GetJavaVM(&mVm);
+        mObject = env->NewGlobalRef(jobject);
+        LOG_ALWAYS_FATAL_IF(!mObject, "Failed to make global ref");
+    }
+
+    ~FrameDropWrapper() { releaseObject(); }
+
+    void onFrameDropped(int count) {
+        if (mObject) {
+            ATRACE_FORMAT("frameDropped %d", count);
+            getenv(mVm)->CallVoidMethod(mObject, gFrameDroppedCallback.onFrameDropped,
+                                        count);
+            releaseObject();
+        }
+    }
+
+private:
+    JavaVM* mVm;
+    jobject mObject;
+
+    void releaseObject() {
+        if (mObject) {
+            getenv(mVm)->DeleteGlobalRef(mObject);
+            mObject = nullptr;
+        }
+    }
+};
+// END
 
 static void android_view_ThreadedRenderer_rotateProcessStatsBuffer(JNIEnv* env, jobject clazz) {
     RenderProxy::rotateProcessStatsBuffer();
@@ -257,6 +296,14 @@ static void android_view_ThreadedRenderer_setIsHighEndGfx(JNIEnv* env, jobject c
         jboolean jIsHighEndGfx) {
     Properties::setIsHighEndGfx(jIsHighEndGfx);
 }
+
+// MIUI ADD: START
+static void android_view_ThreadedRenderer_setDisableWCGFlag(JNIEnv* env, jobject clazz,
+        jlong proxyPtr, jboolean flag) {
+    RenderProxy* proxy = reinterpret_cast<RenderProxy*>(proxyPtr);
+    proxy->setDisableWCGFlag(flag);
+}
+// END
 
 static int android_view_ThreadedRenderer_syncAndDrawFrame(JNIEnv* env, jobject clazz,
                                                           jlong proxyPtr, jlongArray frameInfo,
@@ -881,6 +928,20 @@ static jboolean android_view_ThreadedRenderer_isWebViewOverlaysEnabled(JNIEnv* e
     return Properties::enableWebViewOverlays;
 }
 
+// MIUI ADD: START
+static void android_view_ThreadedRenderer_setFrameDroppedCallback(JNIEnv* env, jobject clazz,
+                                                                  jlong proxyPtr, jobject callback) {
+    RenderProxy* proxy = reinterpret_cast<RenderProxy*>(proxyPtr);
+    if (!callback) {
+        proxy->setFrameDroppedCallback(nullptr);
+    } else {
+        sp<FrameDropWrapper> wrapper = new FrameDropWrapper{env, callback};
+        proxy->setFrameDroppedCallback(
+                [wrapper](int count) { wrapper->onFrameDropped(count); });
+    }
+}
+// END
+
 // ----------------------------------------------------------------------------
 // JNI Glue
 // ----------------------------------------------------------------------------
@@ -910,6 +971,8 @@ static const JNINativeMethod gMethods[] = {
         {"nSetColorMode", "(JI)V", (void*)android_view_ThreadedRenderer_setColorMode},
         {"nSetSdrWhitePoint", "(JF)V", (void*)android_view_ThreadedRenderer_setSdrWhitePoint},
         {"nSetIsHighEndGfx", "(Z)V", (void*)android_view_ThreadedRenderer_setIsHighEndGfx},
+        // MIUI ADD:
+        { "nSetDisableWCGFlag", "(JZ)V", (void*) android_view_ThreadedRenderer_setDisableWCGFlag },
         {"nSyncAndDrawFrame", "(J[JI)I", (void*)android_view_ThreadedRenderer_syncAndDrawFrame},
         {"nDestroy", "(JJ)V", (void*)android_view_ThreadedRenderer_destroy},
         {"nRegisterAnimatingRenderNode", "(JJ)V",
@@ -982,6 +1045,9 @@ static const JNINativeMethod gMethods[] = {
         {"nIsDrawingEnabled", "()Z", (void*)android_view_ThreadedRenderer_isDrawingEnabled},
         {"nSetRtAnimationsEnabled", "(Z)V",
          (void*)android_view_ThreadedRenderer_setRtAnimationsEnabled},
+        // MIUI ADD:
+        {"nSetFrameDroppedCallback", "(JLandroid/graphics/HardwareRenderer$FrameDroppedCallback;)V",
+         (void*)android_view_ThreadedRenderer_setFrameDroppedCallback},
 };
 
 static JavaVM* mJvm = nullptr;
@@ -1033,6 +1099,13 @@ int register_android_view_ThreadedRenderer(JNIEnv* env) {
             "android/graphics/HardwareRenderer$FrameCompleteCallback");
     gFrameCompleteCallback.onFrameComplete =
             GetMethodIDOrDie(env, frameCompleteClass, "onFrameComplete", "()V");
+
+    // MIUI ADD: START
+    jclass frameDroppedClass =
+            FindClassOrDie(env, "android/graphics/HardwareRenderer$FrameDroppedCallback");
+    gFrameDroppedCallback.onFrameDropped =
+            GetMethodIDOrDie(env, frameDroppedClass, "onFrameDropped", "(I)V");
+    // END
 
     void* handle_ = dlopen("libandroid.so", RTLD_NOW | RTLD_NODELETE);
     fromSurface = (ANW_fromSurface)dlsym(handle_, "ANativeWindow_fromSurface");

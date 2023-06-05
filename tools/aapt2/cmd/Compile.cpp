@@ -173,6 +173,8 @@ static bool CompileTable(IAaptContext* context, const CompileOptions& options,
 
     ResourceParser res_parser(context->GetDiagnostics(), &table, path_data.source, path_data.config,
         parser_options);
+    // MIUI ADD:
+    res_parser.wlan_replace = options.wlan_replace;
     if (!res_parser.Parse(&xml_parser)) {
       return false;
     }

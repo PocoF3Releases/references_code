@@ -562,6 +562,8 @@ EGLint EglManager::queryBufferAge(EGLSurface surface) {
 
 Frame EglManager::beginFrame(EGLSurface surface) {
     LOG_ALWAYS_FATAL_IF(surface == EGL_NO_SURFACE, "Tried to beginFrame on EGL_NO_SURFACE!");
+    // MIUI ADD:
+    ATRACE_CALL();
     makeCurrent(surface);
     Frame frame;
     frame.mSurface = surface;

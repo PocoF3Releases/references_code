@@ -90,6 +90,8 @@ void SkiaPipeline::renderLayers(const LightGeometry& lightGeometry,
 }
 
 void SkiaPipeline::renderLayersImpl(const LayerUpdateQueue& layers, bool opaque) {
+    // MIUI ADD:
+    ATRACE_CALL();
     sk_sp<GrDirectContext> cachedContext;
 
     // Render all layers that need to be updated, in order.
@@ -442,6 +444,8 @@ void SkiaPipeline::renderFrame(const LayerUpdateQueue& layers, const SkRect& cli
                                const std::vector<sp<RenderNode>>& nodes, bool opaque,
                                const Rect& contentDrawBounds, sk_sp<SkSurface> surface,
                                const SkMatrix& preTransform) {
+    // MIUI ADD:
+    ATRACE_CALL();
     bool previousSkpEnabled = Properties::skpCaptureEnabled;
     if (mPictureCapturedCallback) {
         Properties::skpCaptureEnabled = true;
@@ -476,6 +480,8 @@ void SkiaPipeline::renderFrameImpl(const SkRect& clip,
                                    const std::vector<sp<RenderNode>>& nodes, bool opaque,
                                    const Rect& contentDrawBounds, SkCanvas* canvas,
                                    const SkMatrix& preTransform) {
+    // MIUI ADD:
+    ATRACE_CALL();
     SkAutoCanvasRestore saver(canvas, true);
     auto clipRestriction = preTransform.mapRect(clip).roundOut();
     if (CC_UNLIKELY(isCapturingSkp())) {

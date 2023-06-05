@@ -690,6 +690,24 @@ static void ImageReader_discardFreeBuffers(JNIEnv* env, jobject thiz) {
     }
 }
 
+static void ImageReader_setName(JNIEnv *env, jobject thiz, jstring consumerName) {
+    ALOGV("%s: ", __FUNCTION__);
+    JNIImageReaderContext *ctx = ImageReader_getContext(env, thiz);
+    if (ctx == NULL)
+    {
+        jniThrowException(env, "java/lang/IllegalStateException", "ImageReader was already closed");
+        return;
+    }
+    const char *name = env->GetStringUTFChars(consumerName, NULL);
+    if (name)
+    {
+        BufferItemConsumer *bufferConsumer = ctx->getBufferConsumer();
+        bufferConsumer->setName(String8(name));
+        env->ReleaseStringUTFChars(consumerName, name);
+    }
+
+}
+
 static jobject ImageReader_getSurface(JNIEnv* env, jobject thiz)
 {
     ALOGV("%s: ", __FUNCTION__);
@@ -971,7 +989,9 @@ static const JNINativeMethod gImageReaderMethods[] = {
                                                              (void*)ImageReader_createImagePlanes },
     {"nativeUnlockGraphicBuffer",
         "(Landroid/graphics/GraphicBuffer;)V",             (void*)ImageReader_unlockGraphicBuffer },
-    {"nativeDiscardFreeBuffers", "()V",                      (void*)ImageReader_discardFreeBuffers }
+    {"nativeDiscardFreeBuffers", "()V",                      (void*)ImageReader_discardFreeBuffers },
+    //MI ADD
+    {"nativeSetName",           "(Ljava/lang/String;)V",     (void*)ImageReader_setName }
 };
 
 static const JNINativeMethod gImageMethods[] = {

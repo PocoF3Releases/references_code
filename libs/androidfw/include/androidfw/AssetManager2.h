@@ -161,6 +161,9 @@ class AssetManager2 {
   std::set<std::string> GetResourceLocales(bool exclude_system = false,
                                            bool merge_equivalent_languages = false) const;
 
+   // MIUI ADD:
+   bool IsDarkModeSupported() const;
+
   // Searches the set of APKs loaded by this AssetManager and opens the first one found located
   // in the assets/ directory.
   // `mode` controls how the file is opened.

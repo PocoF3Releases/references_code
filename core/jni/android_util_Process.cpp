@@ -1349,6 +1349,61 @@ static jint android_os_Process_nativePidFdOpen(JNIEnv* env, jobject, jint pid, j
     return fd;
 }
 
+// MIUI ADD: START
+void android_os_Process_setSchedAffinity(JNIEnv* env, jobject clazz, jint tid, jintArray cpus)
+{
+    if (cpus == nullptr || tid <= 0) {
+        return;
+    }
+
+    const jsize NC = env->GetArrayLength(cpus);
+    if (NC == 0) {
+        return;
+    }
+    jint* affinityCpus = env->GetIntArrayElements(cpus, 0);
+
+    cpu_set_t cpuSet;
+    CPU_ZERO(&cpuSet);
+    if (affinityCpus != NULL) {
+        for (int i = 0; i < NC; i++) {
+            CPU_SET(affinityCpus[i], &cpuSet);
+        }
+        sched_setaffinity(tid, sizeof(cpuSet), &cpuSet);
+    }
+    env->ReleaseIntArrayElements(cpus, affinityCpus, 0);
+}
+// END
+
+// MIUI ADD: START
+jint android_os_Process_getCpusetThreadGroup(JNIEnv* env, jobject clazz, jint tid)
+{
+    SchedPolicy sp;
+    if (get_cpuset_policy(tid, &sp) != 0) {
+        signalExceptionForGroupError(env, errno, tid);
+    }
+    return (int) sp;
+}
+
+void android_os_Process_setCameraBackgroundCpusetGroup(JNIEnv* env, jobject clazz, int pid, int grp = 0)
+{
+    ALOGD("set  pid =%d grp=%d  to camera-background cpuset group", pid, grp);
+
+    if (grp == 0) {
+        if (!SetProcessProfilesCached(0,pid, {"CPUSET_SP_CAMERA_BACKGROUND"})) {
+            signalExceptionForGroupError(env, errno ? errno : EPERM, pid);
+        }
+    } else if (grp == 1) {
+        if (!SetProcessProfilesCached(0,pid, {"CPUSET_SP_CAMERA_LOWER_BACKGROUND"})) {
+            signalExceptionForGroupError(env, errno ? errno : EPERM, pid);
+        }
+    } else {
+        if (!SetProcessProfilesCached(0,pid, {"CPUSET_SP_CAMERA_LIMIT_BACKGROUND"})) {
+            signalExceptionForGroupError(env, errno ? errno : EPERM, pid);
+        }
+    }
+}
+// END
+
 static const JNINativeMethod methods[] = {
         {"getUidForName", "(Ljava/lang/String;)I", (void*)android_os_Process_getUidForName},
         {"getGidForName", "(Ljava/lang/String;)I", (void*)android_os_Process_getGidForName},
@@ -1391,6 +1446,11 @@ static const JNINativeMethod methods[] = {
         {"killProcessGroup", "(II)I", (void*)android_os_Process_killProcessGroup},
         {"removeAllProcessGroups", "()V", (void*)android_os_Process_removeAllProcessGroups},
         {"nativePidFdOpen", "(II)I", (void*)android_os_Process_nativePidFdOpen},
+        // MIUI ADD: START
+        {"setSchedAffinity", "(I[I)V", (void*)android_os_Process_setSchedAffinity},
+        {"setCameraBackgroundCpusetGroup",  "(II)V", (void*)android_os_Process_setCameraBackgroundCpusetGroup},
+        {"getCpusetThreadGroup",  "(I)I", (void*)android_os_Process_getCpusetThreadGroup},
+        //END
 };
 
 int register_android_os_Process(JNIEnv* env)

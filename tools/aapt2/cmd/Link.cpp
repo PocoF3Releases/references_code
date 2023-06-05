@@ -2324,14 +2324,16 @@ int LinkCommand::Action(const std::vector<std::string>& args) {
     }
 
     const uint32_t package_id_int = maybe_package_id_int.value();
-    if (package_id_int > std::numeric_limits<uint8_t>::max()
-        || package_id_int == kFrameworkPackageId
-        || (!options_.allow_reserved_package_id && package_id_int < kAppPackageId)) {
-      context.GetDiagnostics()->Error(
-          DiagMessage() << StringPrintf(
-              "invalid package ID 0x%02x. Must be in the range 0x7f-0xff.", package_id_int));
-      return 1;
-    }
+    // MIUI MOD: START
+    // if (package_id_int > std::numeric_limits<uint8_t>::max()
+    //    || package_id_int == kFrameworkPackageId
+    //    || (!options_.allow_reserved_package_id && package_id_int < kAppPackageId)) {
+    //  context.GetDiagnostics()->Error(
+    //      DiagMessage() << StringPrintf(
+    //          "invalid package ID 0x%02x. Must be in the range 0x7f-0xff.", package_id_int));
+    //  return 1;
+    // }
+    // END
     context.SetPackageId(static_cast<uint8_t>(package_id_int));
   }
 
@@ -2360,14 +2362,22 @@ int LinkCommand::Action(const std::vector<std::string>& args) {
     options_.table_splitter_options.config_filter = filter.get();
   }
 
-  if (preferred_density_) {
-    std::optional<uint16_t> density =
-        ParseTargetDensityParameter(preferred_density_.value(), context.GetDiagnostics());
-    if (!density) {
-      return 1;
+  // MIUI MOD:STRAT
+  // if (preferred_density_) {
+  //   std::optional<uint16_t> density =
+  //       ParseTargetDensityParameter(preferred_density_.value(), context.GetDiagnostics());
+  //   if (!density) {
+  //     return 1;
+  //   }
+  // }
+    for (std::string& preferred_density : preferred_densities_) {
+        std::optional<uint16_t> density =
+        ParseTargetDensityParameter(preferred_density, context.GetDiagnostics());
+        if (!density) {
+            return 1;
+        }
     }
-    options_.table_splitter_options.preferred_densities.push_back(density.value());
-  }
+  // END
 
   // Parse the split parameters.
   for (const std::string& split_arg : split_args_) {

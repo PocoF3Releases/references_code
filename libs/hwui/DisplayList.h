@@ -149,6 +149,26 @@ public:
         }
     }
 
+    // MIUI ADD: START
+    int getBitmapStreams() {
+        if(mImpl) {
+            return mImpl->getBitmapStreams();
+        }
+        return 0;
+    }
+    void setIsForeground(bool isForeground) {
+        if(mImpl) {
+            mImpl->setIsForeground(isForeground);
+        }
+    }
+    bool isContent() {
+        if(mImpl) {
+            return mImpl->isForeground();
+        }
+        return false;
+    }
+    // END
+
 private:
     std::unique_ptr<skiapipeline::SkiaDisplayList> mImpl;
 };

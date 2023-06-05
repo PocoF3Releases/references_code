@@ -56,6 +56,14 @@
 #include <GLES2/gl2ext.h>
 #include <EGL/eglext.h>
 
+// MIUI ADD: START
+#include <fstream>
+#include <media/AudioSystem.h>
+#include <media/mediaplayer.h>
+#include <media/IMediaHTTPService.h>
+#include <media/AudioDeviceTypeAddr.h>
+// END
+
 #include "BootAnimation.h"
 
 #define ANIM_PATH_MAX 255
@@ -81,6 +89,29 @@ static constexpr const char* PRODUCT_USERSPACE_REBOOT_ANIMATION_FILE = "/product
 static constexpr const char* OEM_USERSPACE_REBOOT_ANIMATION_FILE = "/oem/media/userspace-reboot.zip";
 static constexpr const char* SYSTEM_USERSPACE_REBOOT_ANIMATION_FILE = "/system/media/userspace-reboot.zip";
 
+//MIUI ADD： START
+constexpr ui::LayerStack LAYER_STACK{1u};
+
+static const char SYSTEM_BACK_BOOTANIMATION_FILE[] = "/system/media/bootanimation-back.zip";
+static const char PRODUCT_BACK_BOOTANIMATION_FILE[] = "/product/media/bootanimation-back.zip";
+static const char THEME_BOOT_ANIMATION_FILE[] = "/data/system/theme/boots/bootanimation.zip";
+static const char THEME_BOOT_MUSIC_FILE[] = "/data/system/theme/boots/bootaudio.mp3";
+static const char PRODUCT_BOOT_MUSIC_FILE[] = "/product/media/bootaudio.mp3";
+
+static constexpr const char* OPERATOR_CUST_CONFIG_FILE = "/product/opcust/cust_config/bootanim.config";
+static constexpr const char* SYSTEM_CUST_CONFIG_FILE = "/system/media/theme/cust_config/bootanim.config";
+
+static const char BOOT_ANIMATION_FILE_NAME[] = "bootanimation.zip";
+static const char BOOT_AUDIO_FILE_NAME[] = "bootaudio.mp3";
+static const char SHUTDOWN_ANIMATION_FILE_NAME[] = "shutdownanimation.zip";
+static const char SHUTDOWN_AUDIO_FILE_NAME[] = "shutdownaudio.mp3";
+
+static const char OPERATOR_CUST_BOOTAUDIO_FILE[] = "/product/opcust/%s/theme/operator/boots/bootaudio.mp3";
+static const char OPERATOR_CUST_SHUTDOWNAUDIO_FILE[] = "/product/opcust/%s/theme/operator/boots/shutdownaudio.mp3";
+static const char OPERATOR_CUST_BOOTANIMATION_FILE[] = "/product/opcust/%s/theme/operator/boots/bootanimation.zip";
+static const char OPERATOR_CUST_SHUTDOWNANIMATION_FILE[] = "/product/opcust/%s/theme/operator/boots/shutdownanimation.zip";
+// END
+
 static const char BOOTANIM_DATA_DIR_PATH[] = "/data/bootanim";
 static const char BOOTANIM_TIME_DIR_NAME[] = "time";
 static const char BOOTANIM_TIME_DIR_PATH[] = "/data/bootanim/time";
@@ -104,7 +135,7 @@ static const int TEXT_CENTER_VALUE = INT_MAX;
 static const int TEXT_MISSING_VALUE = INT_MIN;
 static const char EXIT_PROP_NAME[] = "service.bootanim.exit";
 static const char PROGRESS_PROP_NAME[] = "service.bootanim.progress";
-static const char DISPLAYS_PROP_NAME[] = "persist.service.bootanim.displays";
+//static const char DISPLAYS_PROP_NAME[] = "persist.service.bootanim.displays";
 static const char CLOCK_ENABLED_PROP_NAME[] = "persist.sys.bootanim.clock.enabled";
 static const int ANIM_ENTRY_NAME_MAX = ANIM_PATH_MAX + 1;
 static constexpr size_t TEXT_POS_LEN_MAX = 16;
@@ -196,7 +227,81 @@ static GLfloat quadUVs[] = {
     0.0f, 1.0f
 };
 
+// MIUI ADD: START
+static void* playMusic(void* arg);
+// END
+
 // ---------------------------------------------------------------------------
+
+// MIUI ADD: START
+static pthread_mutex_t mp_lock;
+static pthread_cond_t mp_cond;
+static bool isMPlayerPrepared = false;
+static bool isMPlayerCompleted = true;
+
+class MPlayerListener : public MediaPlayerListener {
+
+    void notify(int msg, int ext1, int ext2, const Parcel *obj) {
+        switch (msg) {
+            case MEDIA_NOP: // interface test message
+                break;
+            case MEDIA_PREPARED:
+                pthread_mutex_lock(&mp_lock);
+                isMPlayerPrepared = true;
+                pthread_cond_signal(&mp_cond);
+                pthread_mutex_unlock(&mp_lock);
+                break;
+            case MEDIA_PLAYBACK_COMPLETE:
+                pthread_mutex_lock(&mp_lock);
+                isMPlayerCompleted = true;
+                pthread_cond_signal(&mp_cond);
+                pthread_mutex_unlock(&mp_lock);
+                break;
+            default:
+                break;
+        }
+    }
+};
+
+static char* sCustConfigBootAnimation     = nullptr;
+static char* sCustConfigBootMusic         = nullptr;
+static char* sCustConfigShutdownAnimation = nullptr;
+static char* sCustConfigShutdownMusic     = nullptr;
+
+void* bootDaemon(void *arg) {
+    char value[PROPERTY_VALUE_MAX];
+    while(true) {
+        sleep(1);
+        property_get(EXIT_PROP_NAME, value, "0");
+        int exitnow = atoi(value);
+        if (exitnow) {
+            ALOGE("boot daemon has checked EXIT signal");
+            sleep(15);
+            ALOGE("boot daemon sends SIGKILL");
+            kill(getpid(), SIGKILL);
+        }
+    }
+
+    return NULL;
+}
+
+BootAnimation::BootAnimation(sp<Callbacks> callbacks, bool isExternalDisplay)
+        : Thread(false), mLooper(new Looper(false)), mClockEnabled(true), mTimeIsAccurate(false),
+        mTimeFormat12Hour(false), mTimeCheckThread(nullptr), mCallbacks(callbacks),
+        mExternalDisplay(isExternalDisplay) {
+    mSession = new SurfaceComposerClient();
+    ALOGD("Back BootAnimation create");
+
+    std::string powerCtl = android::base::GetProperty("sys.powerctl", "");
+    if (powerCtl.empty()) {
+        mShuttingDown = false;
+    } else {
+        mShuttingDown = true;
+    }
+    ALOGD("%sAnimationStartTiming start time: %" PRId64 "ms", mShuttingDown ? "Shutdown" : "Boot",
+            elapsedRealtime());
+}
+// END
 
 BootAnimation::BootAnimation(sp<Callbacks> callbacks)
         : Thread(false), mLooper(new Looper(false)), mClockEnabled(true), mTimeIsAccurate(false),
@@ -493,10 +598,29 @@ ui::Size BootAnimation::limitSurfaceSize(int width, int height) const {
     return limited;
 }
 
+// MIUI ADD: START
+std::optional<PhysicalDisplayId> getExternalDisplayId() {
+    const auto displayIds = SurfaceComposerClient::getPhysicalDisplayIds();
+    return displayIds.empty() ? std::nullopt : std::make_optional(displayIds.back());
+}
+
+sp<IBinder> getExternalDisplayToken() {
+    const auto displayId = getExternalDisplayId();
+    return displayId ? SurfaceComposerClient::getPhysicalDisplayToken(*displayId) : nullptr;
+}
+//END
+
 status_t BootAnimation::readyToRun() {
     mAssets.addDefaultAssets();
+// MIUI MOD : START
+//    mDisplayToken = SurfaceComposerClient::getInternalDisplayToken();
+    if (mExternalDisplay) {
+        mDisplayToken = getExternalDisplayToken();
+    } else {
+        mDisplayToken = SurfaceComposerClient::getInternalDisplayToken();
+    }
+// END
 
-    mDisplayToken = SurfaceComposerClient::getInternalDisplayToken();
     if (mDisplayToken == nullptr)
         return NAME_NOT_FOUND;
 
@@ -510,54 +634,83 @@ status_t BootAnimation::readyToRun() {
     mMaxHeight = android::base::GetIntProperty("ro.surface_flinger.max_graphics_height", 0);
     ui::Size resolution = displayMode.resolution;
     resolution = limitSurfaceSize(resolution.width, resolution.height);
-    // create the native surface
-    sp<SurfaceControl> control = session()->createSurface(String8("BootAnimation"),
-            resolution.getWidth(), resolution.getHeight(), PIXEL_FORMAT_RGB_565);
+//MIUI ADD: START
+    //some products supports DPU resolution switch, DPU resolution is
+    //saved in property "persist.sys.miui_resolution" but not in displayMode.
+    char value[PROPERTY_VALUE_MAX];
+    property_get("persist.sys.miui_resolution", value, "-1,-1,-1");
+    int new_w, new_h, density;
+    sscanf(value,"%d,%d,%d", &new_w, &new_h, &density);
+    if (new_w > 0 && new_h > 0 && resolution.width != new_w) {
+        resolution.width = new_w;
+        resolution.height = new_h;
+        ALOGV("readyToRun change resolution width =%d height= %d ", new_w, new_h);
+    }
+//END
 
-    SurfaceComposerClient::Transaction t;
+//MIUI MOD： START
+    // create the native surface
+//    sp<SurfaceControl> control = session()->createSurface(String8("BootAnimation"),
+//            resolution.getWidth(), resolution.getHeight(), PIXEL_FORMAT_RGB_565);
+
+//    SurfaceComposerClient::Transaction t;
 
     // this guest property specifies multi-display IDs to show the boot animation
     // multiple ids can be set with comma (,) as separator, for example:
     // setprop persist.boot.animation.displays 19260422155234049,19261083906282754
-    Vector<PhysicalDisplayId> physicalDisplayIds;
-    char displayValue[PROPERTY_VALUE_MAX] = "";
-    property_get(DISPLAYS_PROP_NAME, displayValue, "");
-    bool isValid = displayValue[0] != '\0';
-    if (isValid) {
-        char *p = displayValue;
-        while (*p) {
-            if (!isdigit(*p) && *p != ',') {
-                isValid = false;
-                break;
-            }
-            p ++;
-        }
-        if (!isValid)
-            SLOGE("Invalid syntax for the value of system prop: %s", DISPLAYS_PROP_NAME);
-    }
-    if (isValid) {
-        std::istringstream stream(displayValue);
-        for (PhysicalDisplayId id; stream >> id.value; ) {
-            physicalDisplayIds.add(id);
-            if (stream.peek() == ',')
-                stream.ignore();
-        }
+//    Vector<PhysicalDisplayId> physicalDisplayIds;
+//    char displayValue[PROPERTY_VALUE_MAX] = "";
+//    property_get(DISPLAYS_PROP_NAME, displayValue, "");
+//    bool isValid = displayValue[0] != '\0';
+//    if (isValid) {
+//        char *p = displayValue;
+//        while (*p) {
+//            if (!isdigit(*p) && *p != ',') {
+//                isValid = false;
+//                break;
+//            }
+//            p ++;
+//        }
+//        if (!isValid)
+//            SLOGE("Invalid syntax for the value of system prop: %s", DISPLAYS_PROP_NAME);
+//    }
+//    if (isValid) {
+//        std::istringstream stream(displayValue);
+//        for (PhysicalDisplayId id; stream >> id.value; ) {
+//            physicalDisplayIds.add(id);
+//            if (stream.peek() == ',')
+//                stream.ignore();
+//        }
 
         // In the case of multi-display, boot animation shows on the specified displays
         // in addition to the primary display
-        const auto ids = SurfaceComposerClient::getPhysicalDisplayIds();
-        for (const auto id : physicalDisplayIds) {
-            if (std::find(ids.begin(), ids.end(), id) != ids.end()) {
-                if (const auto token = SurfaceComposerClient::getPhysicalDisplayToken(id)) {
-                    t.setDisplayLayerStack(token, ui::DEFAULT_LAYER_STACK);
-                }
-            }
-        }
-        t.setLayerStack(control, ui::DEFAULT_LAYER_STACK);
-    }
+//        const auto ids = SurfaceComposerClient::getPhysicalDisplayIds();
+//        for (const auto id : physicalDisplayIds) {
+//            if (std::find(ids.begin(), ids.end(), id) != ids.end()) {
+//                if (const auto token = SurfaceComposerClient::getPhysicalDisplayToken(id)) {
+//                    t.setDisplayLayerStack(token, ui::DEFAULT_LAYER_STACK);
+//                }
+//            }
+//        }
+//        t.setLayerStack(control, ui::DEFAULT_LAYER_STACK);
+//    }
 
-    t.setLayer(control, 0x40000000)
-        .apply();
+//    t.setLayer(control, 0x40000000)
+//        .apply();
+    sp<SurfaceControl> control;
+    if (mExternalDisplay) {
+        control = session()->createSurface(String8("BackBootAnimation"),resolution.width, resolution.height, PIXEL_FORMAT_RGB_565);
+        SurfaceComposerClient::Transaction t;
+        t.setLayer(control, 0x40000000).setLayerStack(control,LAYER_STACK).apply();
+    } else {
+        // To fix the issue of the transparent background image shows transparent background
+        // unexpectedly on some MTK platforms, we add the flag ISurfaceComposerClient::eOpaque.
+        control = session()->createSurface(String8("BootAnimation"),
+        resolution.width, resolution.height, PIXEL_FORMAT_RGB_565, ISurfaceComposerClient::eOpaque);
+        SurfaceComposerClient::Transaction t;
+        t.setLayer(control, 0x40000000).apply();
+    }
+//END
 
     sp<Surface> s = control->getSurface();
 
@@ -634,7 +787,63 @@ void BootAnimation::resizeSurface(int newWidth, int newHeight) {
     mSurface = surface;
 }
 
+// MIUI ADD: START
+void initCustConfigResource() {
+    std::string custDirPath;
+    std::ifstream ifs(OPERATOR_CUST_CONFIG_FILE, std::ios::in);
+    if (!ifs){
+        ifs.open(SYSTEM_CUST_CONFIG_FILE, std::ios::in);
+    }
+    if (ifs){
+        std::string word;
+        std::string propName;
+        std::string propValue;
+        std::string tempValue;
+        while (!ifs.eof()){
+            ifs >> word;
+            if (!word.empty() && word.compare("default") == 0){
+                ifs >> word;
+                custDirPath = word;
+                break;
+            } else {
+                propName = word;
+                ifs >> propValue;
+                ifs >> word;
+
+                char operatorName[PROPERTY_VALUE_MAX];
+                property_get(propName.c_str(), operatorName, "");
+                if (strlen(operatorName) > 0){
+                    tempValue = std::string(operatorName);
+                    if (tempValue.compare(propValue) == 0){
+                    custDirPath = word;
+                    break;
+                    }
+                }
+            }
+        }
+        ifs.close();
+    }
+
+    if (custDirPath.length() > 0){
+        sCustConfigBootAnimation = new char[strlen((custDirPath + BOOT_ANIMATION_FILE_NAME).c_str()) + 1];
+        strcpy(sCustConfigBootAnimation, (custDirPath + BOOT_ANIMATION_FILE_NAME).c_str());
+
+        sCustConfigBootMusic = new char[strlen((custDirPath + BOOT_AUDIO_FILE_NAME).c_str()) + 1];
+        strcpy(sCustConfigBootMusic, (custDirPath + BOOT_AUDIO_FILE_NAME).c_str());
+
+        sCustConfigShutdownAnimation = new char[strlen((custDirPath + SHUTDOWN_ANIMATION_FILE_NAME).c_str()) + 1];
+        strcpy(sCustConfigShutdownAnimation, (custDirPath + SHUTDOWN_ANIMATION_FILE_NAME).c_str());
+
+        sCustConfigShutdownMusic = new char[strlen((custDirPath + SHUTDOWN_AUDIO_FILE_NAME).c_str()) + 1];
+        strcpy(sCustConfigShutdownMusic, (custDirPath + SHUTDOWN_AUDIO_FILE_NAME).c_str());
+    }
+}
+//END
+
 bool BootAnimation::preloadAnimation() {
+// MIUI ADD: START
+    initCustConfigResource();
+//END
     findBootAnimationFile();
     if (!mZipFileName.isEmpty()) {
         mAnimation = loadAnimation(mZipFileName);
@@ -672,6 +881,26 @@ void BootAnimation::findBootAnimationFile() {
         }
     }
 
+//MIUI ADD: START
+    if (mExternalDisplay) {
+        static const std::vector<std::string> backBootFiles = {
+            SYSTEM_BACK_BOOTANIMATION_FILE, PRODUCT_BACK_BOOTANIMATION_FILE,
+        };
+        if (findBootAnimationFileInternal(backBootFiles)) {
+            return;
+        }
+    }
+
+    if (!mShuttingDown) {
+        static const std::vector<std::string> themeBootFiles = {
+            THEME_BOOT_ANIMATION_FILE,
+        };
+        if (findBootAnimationFileInternal(themeBootFiles)) {
+            return;
+        }
+    }
+//END
+
     std::string custAnimProp = !mShuttingDown ?
         android::base::GetProperty("persist.sys.customanim.boot", ""):
         android::base::GetProperty("persist.sys.customanim.shutdown", "");
@@ -684,25 +913,74 @@ void BootAnimation::findBootAnimationFile() {
     }
 
     const bool playDarkAnim = android::base::GetIntProperty("ro.boot.theme", 0) == 1;
-    static const std::vector<std::string> bootFiles = {
+//MIUI MOD: START
+    // static const std::vector<std::string> bootFiles = {
+    static std::vector<std::string> bootFiles = {
         APEX_BOOTANIMATION_FILE, playDarkAnim ? PRODUCT_BOOTANIMATION_DARK_FILE : PRODUCT_BOOTANIMATION_FILE,
         OEM_BOOTANIMATION_FILE, SYSTEM_BOOTANIMATION_FILE
     };
-    static const std::vector<std::string> shutdownFiles = {
+    // static const std::vector<std::string> shutdownFiles = {
+    static std::vector<std::string> shutdownFiles = {
         PRODUCT_SHUTDOWNANIMATION_FILE, OEM_SHUTDOWNANIMATION_FILE, SYSTEM_SHUTDOWNANIMATION_FILE, ""
     };
+//END
     static const std::vector<std::string> userspaceRebootFiles = {
         PRODUCT_USERSPACE_REBOOT_ANIMATION_FILE, OEM_USERSPACE_REBOOT_ANIMATION_FILE,
         SYSTEM_USERSPACE_REBOOT_ANIMATION_FILE,
     };
+//MIUI ADD:START
+    char miShutting[PROPERTY_VALUE_MAX];
+    property_get("sys.shutdown.requested", miShutting, "");
+    SLOGD("miShutting = %s", miShutting);
 
+    char operatorName[PROPERTY_VALUE_MAX];
+    property_get("ro.miui.customized.region", operatorName, "");
+    if (strlen(operatorName) != 0) {
+        char buf[strlen(OPERATOR_CUST_SHUTDOWNANIMATION_FILE) + strlen(operatorName)];
+
+        if (strlen(miShutting) != 0) {
+            sprintf(buf,OPERATOR_CUST_SHUTDOWNANIMATION_FILE, operatorName);
+            shutdownFiles.insert(shutdownFiles.begin(),buf);
+        } else {
+            sprintf(buf,OPERATOR_CUST_BOOTANIMATION_FILE, operatorName);
+            bootFiles.insert(bootFiles.begin(),buf);
+
+            char region[PROPERTY_VALUE_MAX];
+            property_get("ro.miui.region", region, "CN");
+            SLOGD("region = %s", region);
+            if (strcmp(operatorName,"lm_cr") == 0 && strcmp(region,"CL") == 0) {
+                bootFiles.erase(bootFiles.begin());
+            }
+
+            char iccidName[PROPERTY_VALUE_MAX];
+            property_get("persist.radio.op.name", iccidName, "AT");
+            SLOGD("iccidName = %s", iccidName);
+            if (strcmp(operatorName,"mx_at") == 0 && strcmp(iccidName,"AT") != 0) {
+                bootFiles.erase(bootFiles.begin());
+            }
+        }
+    } else {
+        if (strlen(miShutting) != 0) {
+            if (sCustConfigShutdownAnimation != nullptr) {
+                shutdownFiles.insert(shutdownFiles.begin(), sCustConfigShutdownAnimation);
+            }
+        } else {
+            if (sCustConfigBootAnimation != nullptr) {
+                bootFiles.insert(bootFiles.begin(), sCustConfigBootAnimation);
+            }
+        }
+    }
+//END
     if (android::base::GetBoolProperty("sys.init.userspace_reboot.in_progress", false)) {
         findBootAnimationFileInternal(userspaceRebootFiles);
-    } else if (mShuttingDown) {
+//MIUI MOD: START
+//    } else if (mShuttingDown) {
+    } else if (strlen(miShutting) != 0) {
         findBootAnimationFileInternal(shutdownFiles);
     } else {
         findBootAnimationFileInternal(bootFiles);
     }
+//END
 }
 
 GLuint compileShader(GLenum shaderType, const GLchar *source) {
@@ -1129,6 +1407,33 @@ bool BootAnimation::parseAnimationDesc(Animation& animation)  {
         int topLineNumbers = sscanf(l, "%d %d %d %d", &width, &height, &fps, &progress);
         if (topLineNumbers == 3 || topLineNumbers == 4) {
             // SLOGD("> w=%d, h=%d, fps=%d, progress=%d", width, height, fps, progress);
+
+            // MIUI ADD: START
+            //some products supports DPU resolution switch, DPU resolution is
+            //saved in property "persist.sys.miui_resolution" but not in displayMode.
+            char value[PROPERTY_VALUE_MAX];
+            property_get("persist.sys.miui_resolution", value, "-1,-1,-1");
+            int new_w, new_h, density;
+            sscanf(value,"%d,%d,%d", &new_w, &new_h, &density);
+            if (new_w > 0 && new_h > 0 ) {
+                mWidth = new_w;
+                mHeight = new_h;
+                ALOGV("readyToRun change resolution width =%d height= %d ", new_w, new_h);
+            }
+
+           if ((width == 480 || width == 720 || width == 1080 || width == 1440)
+               && width != mWidth && mWidth > 0) {
+               float ratio;
+               if (mWidth * height < mHeight * width) {
+                   ratio = mWidth * 1.0f / width;
+               } else {
+                   ratio = mHeight * 1.0f / height;
+               }
+               width *= ratio;
+               height *= ratio;
+           }
+            // END
+
             animation.width = width;
             animation.height = height;
             animation.fps = fps;
@@ -1354,6 +1659,23 @@ bool BootAnimation::movie() {
         }
     }
 
+// MIUI ADD: START
+    int index = 0;
+    int aindex = 0;
+    char value[PROPERTY_VALUE_MAX];
+    char operatorName[PROPERTY_VALUE_MAX];
+    property_get("ro.miui.customized.region", operatorName, "");
+    bool amx_carrier = strcmp(operatorName,"mx_telcel") == 0 || strcmp(operatorName,"lm_cr") == 0;
+    property_get("persist.sys.boot_audio.enabled", value, amx_carrier ? "0" : "1");
+    if (strncmp(value, "1", 1) == 0) {
+        ALOGD("boot audio is enabled.");
+        AudioSystem::getStreamVolumeIndex(AUDIO_STREAM_MUSIC, &index, AUDIO_DEVICE_OUT_SPEAKER);
+        AudioSystem::setStreamVolumeIndex(AUDIO_STREAM_MUSIC, 7, AUDIO_DEVICE_OUT_SPEAKER);
+        sendFCTProfile(1);
+        playBackgroundMusic();
+    }
+// END
+
     // Blend required to draw time on top of animation frames.
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDisable(GL_DITHER);
@@ -1394,7 +1716,28 @@ bool BootAnimation::movie() {
     if (clockFontInitialized) {
         glDeleteTextures(1, &mAnimation->clockFont.texture.name);
     }
+// MIUI ADD: START
+    ALOGD("waiting for media player to complete.");
+    struct timespec timeout;
+    clock_gettime(CLOCK_REALTIME, &timeout);
+    timeout.tv_sec += 5; //timeout after 5s.
 
+    pthread_mutex_lock(&mp_lock);
+    while (!isMPlayerCompleted) {
+        int err = pthread_cond_timedwait(&mp_cond, &mp_lock, &timeout);
+        if (err == ETIMEDOUT) {
+            break;
+        }
+    }
+    pthread_mutex_unlock(&mp_lock);
+    ALOGD("media player is completed.");
+
+    AudioSystem::getStreamVolumeIndex(AUDIO_STREAM_MUSIC, &aindex, AUDIO_DEVICE_OUT_SPEAKER);
+    if (aindex == 7){
+        AudioSystem::setStreamVolumeIndex(AUDIO_STREAM_MUSIC, index, AUDIO_DEVICE_OUT_SPEAKER);
+    }
+    sendFCTProfile(0);
+//END
     releaseAnimation(mAnimation);
     mAnimation = nullptr;
 
@@ -1883,6 +2226,107 @@ status_t BootAnimation::TimeCheckThread::readyToRun() {
 
     return NO_ERROR;
 }
+
+// MIUI ADD: START
+char *BootAnimation::getBootRingtoneCustFileName() {
+    char miShutting[PROPERTY_VALUE_MAX];
+    property_get("sys.shutdown.requested", miShutting, "");
+    ALOGD("miShutting = %s", miShutting);
+
+    char operatorName[PROPERTY_VALUE_MAX];
+    property_get("ro.miui.customized.region", operatorName, "");
+
+    char* audioFileName = new char[strlen(OPERATOR_CUST_SHUTDOWNAUDIO_FILE) + strlen(operatorName)];
+
+    if (strlen(operatorName) != 0) {
+        ALOGD("getBootRingtoneCustFileName operatorName = %s", operatorName);
+        char iccidName[PROPERTY_VALUE_MAX];
+        property_get("persist.radio.op.name", iccidName, "AT");
+        SLOGD("iccidName = %s", iccidName);
+        if (strcmp(operatorName,"mx_at") == 0 && strcmp(iccidName,"AT") != 0) {
+            return audioFileName;
+        }
+        if (strlen(miShutting) != 0) {
+            sprintf(audioFileName, OPERATOR_CUST_SHUTDOWNAUDIO_FILE, operatorName);
+        } else {
+            sprintf(audioFileName, OPERATOR_CUST_BOOTAUDIO_FILE, operatorName);
+        }
+    } else {
+        audioFileName = sCustConfigBootMusic;
+    }
+
+    ALOGD("getBootRingtoneCustFileName audioFileName = %s", audioFileName);
+    return audioFileName;
+}
+
+void BootAnimation::sendFCTProfile(int fctmode) {
+    ALOGD("send profile");
+    String8 str;
+    if(fctmode == 1) {
+        str += "audio_profile=fct";
+    } else {
+        str += "audio_profile=normal";
+    }
+    AudioSystem::setParameters(0, str);
+}
+
+void BootAnimation::playBackgroundMusic(void) {
+    /* Make sure sound cards are populated */
+    FILE* fp = NULL;
+    if ((fp = fopen("/proc/asound/cards", "r")) == NULL) {
+        ALOGW("Cannot open /proc/asound/cards file to get sound card info.");
+    } else {
+        fclose(fp);
+    }
+    char *fileName = nullptr;
+    if ((access((char*)THEME_BOOT_MUSIC_FILE, R_OK) == 0 && (fileName = ((char*)THEME_BOOT_MUSIC_FILE)) != nullptr)  ||
+    ((fileName = getBootRingtoneCustFileName()) != NULL && access(fileName, R_OK) == 0) ||
+    (access((char*)PRODUCT_BOOT_MUSIC_FILE, R_OK) == 0 && (fileName = ((char*)PRODUCT_BOOT_MUSIC_FILE)) != nullptr)) {
+        ALOGD("playBackgroundMusic fileName = %s", fileName);
+        isMPlayerCompleted = false;
+        pthread_t tid;
+        pthread_create(&tid, NULL, playMusic, (void *)fileName);
+        pthread_join(tid, NULL);
+    } else {
+        ALOGW("Cannot find boot music file.");
+    }
+}
+
+void* playMusic(void* arg) {
+    int index = 0;
+    char *fileName = (char *)arg;
+    sp<MediaPlayer> mp = new MediaPlayer();
+    sp<MPlayerListener> mListener = new MPlayerListener();
+    if (mp != NULL) {
+        ALOGD("starting to play %s", fileName);
+        mp->setListener(mListener);
+        if (mp->setDataSource(NULL, fileName, NULL) == NO_ERROR) {
+            mp->setAudioStreamType(AUDIO_STREAM_ENFORCED_AUDIBLE);
+            mp->prepare();
+        } else {
+            ALOGE("failed to setDataSource for %s", fileName);
+            return NULL;
+        }
+        //waiting for media player is prepared.
+        pthread_mutex_lock(&mp_lock);
+        while (!isMPlayerPrepared) {
+            pthread_cond_wait(&mp_cond, &mp_lock);
+        }
+        pthread_mutex_unlock(&mp_lock);
+
+        AudioSystem::initStreamVolume(AUDIO_STREAM_ENFORCED_AUDIBLE,0,7);
+        AudioSystem::setStreamVolumeIndex(AUDIO_STREAM_ENFORCED_AUDIBLE, 7, AUDIO_DEVICE_OUT_SPEAKER);
+        AudioSystem::getStreamVolumeIndex(AUDIO_STREAM_ENFORCED_AUDIBLE, &index, AUDIO_DEVICE_OUT_SPEAKER);
+        if (!(index > 0)) {
+            ALOGW("current volume is invalid.");
+        }
+        ALOGD("playing %s", fileName);
+        mp->seekTo(0);
+        mp->start();
+    }
+    return NULL;
+}
+// END
 
 // ---------------------------------------------------------------------------
 

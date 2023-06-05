@@ -753,6 +753,15 @@ void SkiaCanvas::drawGlyphs(ReadGlyphFunc glyphFunc, int count, const Paint& pai
 
     sk_sp<SkTextBlob> textBlob(builder.make());
 
+    // MIUI ADD START:
+    // All text must be highlighted under force dark
+    if (MiuiForceDarkConfigStub::getMainRule() & MiuiForceDarkConfigStub::RULE_ALWAYS_LIGHT_TEXT) {
+        if (getForceDark()) {
+            android::uirenderer::transformPaint(uirenderer::ColorTransform::Light, &paintCopy);
+        }
+    }
+    // END
+
     applyLooper(&paintCopy, [&](const SkPaint& p) { mCanvas->drawTextBlob(textBlob, 0, 0, p); });
     drawTextDecorations(x, y, totalAdvance, paintCopy);
 }
@@ -790,6 +799,14 @@ void SkiaCanvas::drawLayoutOnPath(const minikin::Layout& layout, float hOffset, 
         xform[i - start].fTx = pos.x() - tan.y() * y - halfWidth * tan.x();
         xform[i - start].fTy = pos.y() + tan.x() * y - halfWidth * tan.y();
     }
+
+    // MIUI ADD START:
+    if (MiuiForceDarkConfigStub::getMainRule() & MiuiForceDarkConfigStub::RULE_ALWAYS_LIGHT_TEXT) {
+        if (getForceDark()) {
+            android::uirenderer::transformPaint(uirenderer::ColorTransform::Light, &paintCopy);
+        }
+    }
+    // END
 
     sk_sp<SkTextBlob> textBlob(builder.make());
 

@@ -176,7 +176,9 @@ bool IsAndroidPackageName(const StringPiece& str) {
   if (str.size() > kMaxPackageNameSize) {
     return false;
   }
-  return IsAndroidNameImpl(str) > 1 || str == "android";
+  // MIUI MOD:
+  // return IsAndroidNameImpl(str) > 1 || str == "android";
+  return IsAndroidNameImpl(str) > 1 || str == "android" || str == "miui";
 }
 
 bool IsAndroidSharedUserId(const android::StringPiece& package_name,

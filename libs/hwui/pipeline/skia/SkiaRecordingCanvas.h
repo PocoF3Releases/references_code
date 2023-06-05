@@ -80,6 +80,8 @@ public:
     virtual void drawRenderNode(uirenderer::RenderNode* renderNode) override;
 
     void drawWebViewFunctor(int functor) override;
+    // MIUI ADD
+    virtual void setForceDark(bool forceDark) override;
 
 private:
     RecordingCanvas mRecorder;

@@ -19,6 +19,7 @@
 #include <apex/window.h>
 #include <fcntl.h>
 #include <gui/TraceUtils.h>
+#include <gui/SurfaceComposerClient.h>
 #include <strings.h>
 #include <sys/stat.h>
 #include <ui/Fence.h>
@@ -154,6 +155,12 @@ void CanvasContext::destroy() {
     freePrefetchedLayers();
     destroyHardwareResources();
     mAnimationContext->destroy();
+    // MIUI ADD: START
+    if (mInspector) {
+        delete mInspector;
+        mInspector = nullptr;
+    }
+    // END
 }
 
 static void setBufferCount(ANativeWindow* window) {
@@ -181,9 +188,20 @@ void CanvasContext::setSurface(ANativeWindow* window, bool enableTimeout) {
             // TODO: Fix error handling & re-shorten timeout
             ANativeWindow_setDequeueTimeout(window, 4000_ms);
         }
+        // MIUI ADD: START
+        if (mInspector) {
+            mInspector->ignoreNextFrame();
+        }
+        // END
     } else {
         mNativeSurface = nullptr;
     }
+    // MIUI ADD: START
+    if (mRenderThread.isWCGWhiteList() ) {
+        ColorMode colorMode = mRenderThread.isDisableWCG() ? ColorMode::Default : ColorMode::WideColorGamut;
+        mRenderPipeline->setSurfaceColorProperties(colorMode);
+    }
+    // END
     setupPipelineSurface();
 }
 
@@ -507,10 +525,21 @@ nsecs_t CanvasContext::draw() {
 
     mCurrentFrameInfo->markIssueDrawCommandsStart();
 
+    // MIUI ADD: START
+    if (!mRenderPipeline->isSurfaceReady()) {
+        ALOGW("The surface had destroyed before draw");
+        return 0;
+    }
+    // END
+
     Frame frame = mRenderPipeline->getFrame();
     SkRect windowDirty = computeDirtyRect(frame, &dirty);
 
     ATRACE_FORMAT("Drawing " RECT_STRING, SK_RECT_ARGS(dirty));
+    // MIUI ADD: START
+    // Do not monitor the first frame that the hardware layer starts to update.
+    bool hardwareLayerUpdated = mLayerUpdateQueue.entries().size() > 0;
+    // END
 
     const auto drawResult = mRenderPipeline->draw(frame, windowDirty, dirty, mLightGeometry,
                                                   &mLayerUpdateQueue, mContentDrawBounds, mOpaque,
@@ -523,13 +552,17 @@ nsecs_t CanvasContext::draw() {
     if (mNativeSurface) {
         // TODO(b/165985262): measure performance impact
         const auto vsyncId = mCurrentFrameInfo->get(FrameInfoIndex::FrameTimelineVsyncId);
+#ifndef MI_FEATURE_ENABLE
         if (vsyncId != UiFrameInfoBuilder::INVALID_VSYNC_ID) {
+#endif
             const auto inputEventId =
                     static_cast<int32_t>(mCurrentFrameInfo->get(FrameInfoIndex::InputEventId));
             native_window_set_frame_timeline_info(
                     mNativeSurface->getNativeWindow(), vsyncId, inputEventId,
                     mCurrentFrameInfo->get(FrameInfoIndex::FrameStartTime));
+#ifndef MI_FEATURE_ENABLE
         }
+#endif
     }
 
     bool requireSwap = false;
@@ -640,6 +673,23 @@ nsecs_t CanvasContext::draw() {
 
     cleanupResources();
     mRenderThread.cacheManager().onFrameCompleted();
+    // MIUI ADD: START
+    if (mInspector) {
+        mInspector->addFrame(*mCurrentFrameInfo, name());
+
+        int dropFrameCount = mInspector->checkFrameDropped(*mCurrentFrameInfo,
+                DeviceInfo::getVsyncPeriod(), hardwareLayerUpdated,
+                mLastFrameHeight, mLastFrameWidth);
+        if (dropFrameCount != 0) {
+            SurfaceComposerClient::onFrameDropped(dropFrameCount,
+                    mCurrentFrameInfo->get(FrameInfoIndex::IntendedVsync), String8(name().c_str()));
+            if (mFrameDroppedCallback) {
+                std::invoke(mFrameDroppedCallback, dropFrameCount);
+                mFrameDroppedCallback = nullptr;
+            }
+        }
+    }
+    // END
     return mCurrentFrameInfo->get(FrameInfoIndex::DequeueBufferDuration);
 }
 
@@ -758,9 +808,14 @@ void CanvasContext::onSurfaceStatsAvailable(void* context, int32_t surfaceContro
                 frameInfo->get(FrameInfoIndex::SwapBuffersCompleted));
         frameInfo->set(FrameInfoIndex::GpuCompleted) = std::max(
                 gpuCompleteTime, frameInfo->get(FrameInfoIndex::CommandSubmissionCompleted));
-        std::scoped_lock lock(instance->mFrameMetricsReporterMutex);
+        // MIUI MOD:START
+        // lock_guard could be optimized out by the compiler, use manual lock/unlock
+        // std::scoped_lock lock(instance->mFrameMetricsReporterMutex);
+        instance->mFrameMetricsReporterMutex.lock();
         instance->mJankTracker.finishFrame(*frameInfo, instance->mFrameMetricsReporter, frameNumber,
                                            surfaceControlId);
+        instance->mFrameMetricsReporterMutex.unlock();
+        // END
     }
 }
 
@@ -884,6 +939,8 @@ void CanvasContext::resetFrameStats() {
 }
 
 void CanvasContext::setName(const std::string&& name) {
+    // MIUI ADD
+    mName = name;
     mJankTracker.setDescription(JankTrackerType::Window, std::move(name));
 }
 

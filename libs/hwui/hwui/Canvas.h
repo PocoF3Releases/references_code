@@ -272,7 +272,10 @@ public:
                                 const float* innerRadii, const Paint& paint);
 
     static int GetApiLevel() { return sApiLevel; }
-
+    // MIUI ADD START:
+    virtual bool getForceDark() {return mForceDark;}
+    virtual void setForceDark(bool forceDark) {mForceDark = forceDark;}
+    // END
 protected:
     void drawTextDecorations(float x, float y, float length, const Paint& paint);
 
@@ -287,6 +290,8 @@ protected:
                                   const Paint& paint, const SkPath& path, size_t start,
                                   size_t end) = 0;
     static int sApiLevel;
+    // MIUI ADD
+    bool mForceDark = false;
 
     friend class DrawTextFunctor;
     friend class DrawTextOnPathFunctor;

@@ -1446,6 +1446,46 @@ static jint android_media_AudioTrack_setStartThresholdInFrames(JNIEnv *env, jobj
 
 // ----------------------------------------------------------------------------
 // ----------------------------------------------------------------------------
+// MIUI ADD START
+static int android_media_AudioTrack_setParameters(JNIEnv *env, jobject thiz, jstring keyValuePairs)
+{
+    sp<AudioTrack> lpTrack = getAudioTrack(env, thiz);
+    if (lpTrack == NULL) {
+        jniThrowException(env, "java/lang/IllegalStateException",
+                "Unable to retrieve AudioTrack pointer for setParameters()");
+        return AUDIO_JAVA_ERROR;
+    }
+    const jchar* c_keyValuePairs = env->GetStringCritical(keyValuePairs, 0);
+    String8 c_keyValuePairs8;
+    if (keyValuePairs) {
+        c_keyValuePairs8 = String8(reinterpret_cast<const char16_t*>(c_keyValuePairs),
+                                   env->GetStringLength(keyValuePairs));
+        env->ReleaseStringCritical(keyValuePairs, c_keyValuePairs);
+    }
+    return nativeToJavaStatus(lpTrack->setParameters(c_keyValuePairs8));
+}
+
+// ----------------------------------------------------------------------------
+static jstring android_media_AudioTrack_getParameters(JNIEnv *env, jobject thiz, jstring keys)
+{
+    sp<AudioTrack> lpTrack = getAudioTrack(env, thiz);
+    if (lpTrack == NULL) {
+        jniThrowException(env, "java/lang/IllegalStateException",
+                "Unable to retrieve AudioTrack pointer for getParameters()");
+        return env->NewStringUTF("");
+    }
+    const jchar* c_keys = env->GetStringCritical(keys, 0);
+    String8 c_keys8;
+    if (keys) {
+        c_keys8 = String8(reinterpret_cast<const char16_t*>(c_keys),
+                          env->GetStringLength(keys));
+        env->ReleaseStringCritical(keys, c_keys);
+    }
+    return env->NewStringUTF(lpTrack->getParameters(c_keys8).string());
+}
+// ----------------------------------------------------------------------------
+// MIUI ADD END
+
 static const JNINativeMethod gMethods[] = {
         // name,              signature,     funcPtr
         {"native_is_direct_output_supported", "(IIIIIII)Z",
@@ -1528,6 +1568,12 @@ static const JNINativeMethod gMethods[] = {
          (void *)android_media_AudioTrack_setStartThresholdInFrames},
         {"native_getStartThresholdInFrames", "()I",
          (void *)android_media_AudioTrack_getStartThresholdInFrames},
+        // MIUI ADD START
+        {"setParameters",        "(Ljava/lang/String;)I",
+         (void *)android_media_AudioTrack_setParameters},
+        {"getParameters",        "(Ljava/lang/String;)Ljava/lang/String;",
+         (void *)android_media_AudioTrack_getParameters},
+        // MIUI ADD END
 };
 
 // field names found in android/media/AudioTrack.java

@@ -1782,6 +1782,11 @@ ResourceTable::ResourceTable(Bundle* bundle, const String16& assetsPackage, Reso
             assert(0);
             break;
     }
+    // MIUI WORKAROUND: Start
+    if (mPackageType != System && bundle->getPackageId() > 1 && bundle->getPackageId() < 0x7f) {
+        packageId = bundle->getPackageId();
+    }
+    // MIUI WORKAROUND: End
     sp<Package> package = new Package(mAssetsPackage, packageId);
     mPackages.add(assetsPackage, package);
     mOrderedPackages.add(package);

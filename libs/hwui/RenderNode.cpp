@@ -66,7 +66,10 @@ RenderNode::RenderNode()
         , mDisplayList(nullptr)
         , mStagingDisplayList(nullptr)
         , mAnimatorManager(*this)
-        , mParentCount(0) {}
+        , mParentCount(0) {
+            // MIUI ADD
+            mDepth = -1;
+        }
 
 RenderNode::~RenderNode() {
     ImmediateRemoved observer(nullptr);
@@ -130,7 +133,9 @@ void RenderNode::prepareTree(TreeInfo& info) {
     MarkAndSweepRemoved observer(&info);
 
     const int before = info.disableForceDark;
-    prepareTreeImpl(observer, info, false);
+    // MIUI MOD
+    // prepareTreeImpl(observer, info, false);
+    prepareTreeImpl(observer, info, false, 1);
     LOG_ALWAYS_FATAL_IF(before != info.disableForceDark, "Mis-matched force dark");
 }
 
@@ -214,7 +219,11 @@ void RenderNode::pushLayerUpdate(TreeInfo& info) {
  * While traversing down the tree, functorsNeedLayer flag is set to true if anything that uses the
  * stencil buffer may be needed. Views that use a functor to draw will be forced onto a layer.
  */
-void RenderNode::prepareTreeImpl(TreeObserver& observer, TreeInfo& info, bool functorsNeedLayer) {
+// MIUI MOD START:
+// void RenderNode::prepareTreeImpl(TreeObserver& observer, TreeInfo& info, bool functorsNeedLayer) {
+void RenderNode::prepareTreeImpl(TreeObserver& observer, TreeInfo& info, bool functorsNeedLayer , int depth) {
+    mDepth = depth;
+// END
     if (mDamageGenerationId == info.damageGenerationId) {
         // We hit the same node a second time in the same tree. We don't know the minimal
         // damage rect anymore, so just push the biggest we can onto our parent's transform
@@ -264,7 +273,9 @@ void RenderNode::prepareTreeImpl(TreeObserver& observer, TreeInfo& info, bool fu
                 observer, info, childFunctorsNeedLayer,
                 [this](RenderNode* child, TreeObserver& observer, TreeInfo& info,
                        bool functorsNeedLayer) {
-                    child->prepareTreeImpl(observer, info, functorsNeedLayer);
+                    // MIUI MOD
+                    //child->prepareTreeImpl(observer, info, functorsNeedLayer);
+                    child->prepareTreeImpl(observer, info, functorsNeedLayer, (mDepth + 1));
                     mHasHolePunches |= child->hasHolePunches();
                 });
         if (isDirty) {
@@ -391,14 +402,71 @@ void RenderNode::handleForceDark(android::uirenderer::TreeInfo *info) {
         return;
     }
     auto usage = usageHint();
+
+    // MIUI ADD: START
+    switch (usage) {
+        case UsageHint::ForceInvert:
+            mDisplayList.applyColorTransform(ColorTransform::ForceInvert);
+            setForceDarkUsageHint(usage);
+            break;
+        case UsageHint::DarkExcludeText:
+            mDisplayList.applyColorTransform(ColorTransform::DarkExcludeText);
+            setForceDarkUsageHint(usage);
+            break;
+        case UsageHint::ForceTransparent:
+            mDisplayList.applyColorTransform(ColorTransform::ForceTransparent);
+            setForceDarkUsageHint(usage);
+            break;
+        case UsageHint::InvertExcludeBitmap:
+            mDisplayList.applyColorTransform(ColorTransform::InvertExcludeBitmap);
+            setForceDarkUsageHint(usage);
+            break;
+        default:
+            setForceDarkUsageHint(UsageHint::Unknown);
+            break;
+    }
+    if (forceDarkUsageHint() != UsageHint::Unknown) {
+        return;
+    }
+
+    int mainRule = MiuiForceDarkConfigStub::getMainRule();
+    int secondaryRule = MiuiForceDarkConfigStub::getSecondaryRule();
+    if(mainRule & MiuiForceDarkConfigStub::RULE_DEPRECATED) {
+        handleForceDarkByMiui(info);
+        return;
+    }
+    //END
+
     FatVector<RenderNode*, 6> children;
     mDisplayList.updateChildren([&children](RenderNode* node) {
         children.push_back(node);
     });
+    // MIUI ADD: START
+    int32_t frameWidth= info->screenSize.fWidth;
+    // END
     if (mDisplayList.hasText()) {
-        usage = UsageHint::Foreground;
+        // MIUI MOD: START
+        // usage = UsageHint::Foreground;
+        if (secondaryRule & MiuiForceDarkConfigStub::RULE_ONE_CHILD_WIDTH_HALF &&
+            getWidth() > frameWidth * 0.4) {
+            usage = UsageHint::DarkExcludeText;
+        } else if (secondaryRule & MiuiForceDarkConfigStub::RULE_ONE_CHILD_WIDTH_WHOLE &&
+                   getWidth() > frameWidth * 0.8) {
+            usage = UsageHint::DarkExcludeText;
+        } else {
+            usage = UsageHint::Foreground;
+        }
+        // END
     }
     if (usage == UsageHint::Unknown) {
+        // MIUI ADD: START
+        if (children.size() == 0) {
+            if (secondaryRule & MiuiForceDarkConfigStub::RULE_ZERO_CHILD_EMPTY_VIEW
+                && getWidth() < frameWidth * 0.085f){
+                usage = UsageHint::Background;
+            }
+        }
+        // END
         if (children.size() > 1) {
             usage = UsageHint::Background;
         } else if (children.size() == 1 &&
@@ -417,14 +485,154 @@ void RenderNode::handleForceDark(android::uirenderer::TreeInfo *info) {
                     child->stagingProperties().getWidth(), child->stagingProperties().getHeight());
             if (bounds.contains(drawn)) {
                 // This contains everything drawn after it, so make it a background
+                // MIUI MOD: START
+                // child->setUsageHint(UsageHint::Background);
+                if (child->usageHint() < UsageHint::MiuiFirstUsageHint) {
+                child->setUsageHint(UsageHint::Background);
+                }
+                // END
+            }
+            drawn.join(bounds);
+        }
+    }
+    // MIUI ADD: START
+    setForceDarkUsageHint(usage);
+    if (usage == UsageHint::Unknown &&
+        MiuiForceDarkConfigStub::getSecondaryRule() & MiuiForceDarkConfigStub::RULE_SKIP_FOR_UNKNOWN) {
+        return;
+    }
+    // END
+
+    // MIUI MOD: START
+    // mDisplayList.applyColorTransform(
+    //          usage == UsageHint::Background ? ColorTransform::Dark : ColorTransform::Light);
+    if (usage == UsageHint::Background) {
+        mDisplayList.applyColorTransform(ColorTransform::Dark);
+    } else if (usage == UsageHint::DarkExcludeText) {
+        mDisplayList.applyColorTransform(ColorTransform::DarkExcludeText);
+    } else {
+        mDisplayList.applyColorTransform(ColorTransform::Light);
+    }
+    // END
+}
+
+// MIUI ADD: START
+void RenderNode::handleForceDarkByMiui(android::uirenderer::TreeInfo *info) {
+    int secondaryRule = MiuiForceDarkConfigStub::getSecondaryRule();
+    auto usage = usageHint();
+    FatVector<RenderNode*, 6> children;
+    mDisplayList.updateChildren([&children](RenderNode* node) {
+        children.push_back(node);
+    });
+    int32_t frameWidth= info->screenSize.fWidth;
+    int32_t frameHeight= info->screenSize.fHeight;
+    if (usage == UsageHint::Unknown) {
+        if (mDisplayList.hasText() && children.size() == 1) {
+            if(getWidth() == 148 && getHeight() == 110){
+               children.front()->setUsageHint(UsageHint::Background);
+            }
+            float widthScale = 1.0f;
+            if (secondaryRule & MiuiForceDarkConfigStub::RULE_ONE_CHILD_WIDTH_HALF) {
+                widthScale = 0.4f;
+            } else if (secondaryRule & MiuiForceDarkConfigStub::RULE_ONE_CHILD_WIDTH_WHOLE) {
+                widthScale = 0.8f;
+            }
+            if ((float) getWidth() / (float) frameWidth < widthScale) {
+                usage = UsageHint::Foreground;
+            } else {
+                usage = UsageHint::Background;
+            }
+        } else if (getWidth() == frameWidth && getHeight() <= 180 && getHeight() >= 130){
+            usage = UsageHint::Background;
+        }
+    }
+    ALOGV("%s, width = %d, height = %d, child.size = %d, usedSize = %d, mDepth = %d , original is %d",
+        getName(), getWidth(), getHeight(), (int)children.size(), (int)mDisplayList.getUsedSize(),  mDepth, usage);
+
+    if (usage == UsageHint::Unknown) {
+        if (children.size() > 1) {
+            usage = UsageHint::Background;
+        } else if (children.size() == 1) {
+            // NOTE: all the digits below is experience.
+            if(children.front()->usageHint() != UsageHint::Background && !isSmallView()){
+                usage = UsageHint::Background;
+            } else if(getWidth() == frameWidth){
+                usage = UsageHint::Background;
+            }
+            if(mDisplayList.getUsedSize() == 48 && isSmallView() && (int)usage != 0){
+                // a view draw nothing and is small, but has one child,  then it' only child should be foreground
+                children.front()->setUsageHint(UsageHint::Foreground);
+            } else if (usage == UsageHint::Button && !mDisplayList.hasText()
+                        && children.front()->usageHint() == UsageHint::Background) {
+                // TODO: check this
+                children.front()->setUsageHint(UsageHint::Foreground);
+            }
+        } else if(children.size() == 0  ){
+             // has no child but has many draw ops, it should be a custom view
+             // TODO: judge with op tpye?
+            if (mDisplayList.getUsedSize() > 350
+                               || getWidth() >= frameWidth * 0.8/*TODO: check this*/){
+                usage = UsageHint::Background;
+            } else if (secondaryRule & MiuiForceDarkConfigStub::RULE_ZERO_CHILD_EMPTY_VIEW
+                && (float) getWidth() / (float) frameWidth < 0.085f){
+                usage = UsageHint::Background;
+            }
+        } else if(getWidth() > frameWidth * 0.5 && getHeight() > frameHeight * 0.5 && mDepth <= 7){
+            //depth of content view is common 4-6, so if depth of a big view is <= 7 , we regard it as background
+            usage = UsageHint::Background;
+        } else if(getWidth() * getHeight() >= 800000){
+            usage = UsageHint::BigView;
+        }
+    } else if(usage == UsageHint::Button){
+        if (children.size() == 1) {
+            if (isSmallView() && !mDisplayList.hasText()
+                && children.front()->usageHint() == UsageHint::Background
+                && mDisplayList.getUsedSize() < 150) {
+                // if a small button has one child and has no text, then it's backgroud child actually
+                // is foreground
+                // TODO: check this
+                children.front()->setUsageHint(UsageHint::Foreground);
+            }
+        }
+    }
+
+    if (usage != UsageHint::Button && children.size() > 1) {
+        // Crude overlap check
+        SkRect drawn = SkRect::MakeEmpty();
+        for (auto iter = children.rbegin(); iter != children.rend(); ++iter) {
+            const auto& child = *iter;
+            if(child->usageHint() != UsageHint::Unknown){
+                continue;
+            }
+            // We use stagingProperties here because we haven't yet sync'd the children
+            SkRect bounds = SkRect::MakeXYWH(child->stagingProperties().getX(), child->stagingProperties().getY(),
+                    child->stagingProperties().getWidth(), child->stagingProperties().getHeight());
+            if (bounds.contains(drawn)) {
+                // This contains everything drawn after it, so make it a background
                 child->setUsageHint(UsageHint::Background);
             }
             drawn.join(bounds);
         }
     }
-    mDisplayList.applyColorTransform(
-            usage == UsageHint::Background ? ColorTransform::Dark : ColorTransform::Light);
+    setForceDarkUsageHint(usage);
+    if (usage == UsageHint::Unknown
+        && secondaryRule & MiuiForceDarkConfigStub::RULE_SKIP_FOR_UNKNOWN) {
+        return;
+    }
+
+    if (usage == UsageHint::Background){
+        mDisplayList.applyColorTransform(ColorTransform::Dark);
+    } else if(usage == UsageHint::BigView){
+        mDisplayList.applyColorTransform(ColorTransform::BigView);
+    } else if(usage == UsageHint::DarkColorFilter){
+        mDisplayList.applyColorTransform(ColorTransform::DarkColorFilter);
+    } else if(usage == UsageHint::ForceInvert) {
+        mDisplayList.applyColorTransform(ColorTransform::ForceInvert);
+    } else {
+        mDisplayList.applyColorTransform(ColorTransform::Light);
+    }
 }
+// END
 
 void RenderNode::pushStagingDisplayListChanges(TreeObserver& observer, TreeInfo& info) {
     if (mNeedsDisplayListSync) {

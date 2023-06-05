@@ -2618,6 +2618,20 @@ android_media_AudioSystem_setAudioHalPids(JNIEnv *env, jobject clazz, jintArray 
     return jStatus;
 }
 
+// MIUI ADD: START
+static jint
+android_media_AudioSystem_pauseAudioTracks(JNIEnv *env, jobject clazz, jint uid, jint pid)
+{
+    return AudioSystem::pauseAudioTracks(uid, pid);
+}
+
+static jint
+android_media_AudioSystem_resumeAudioTracks(JNIEnv *env, jobject clazz, jint uid, jint pid)
+{
+    return AudioSystem::resumeAudioTracks(uid, pid);
+}
+// END
+
 static jboolean
 android_media_AudioSystem_isCallScreeningModeSupported(JNIEnv *env, jobject thiz)
 {
@@ -3063,6 +3077,10 @@ static const JNINativeMethod gMethods[] =
           (void *)android_media_AudioSystem_setAllowedCapturePolicy},
          {"setRttEnabled", "(Z)I", (void *)android_media_AudioSystem_setRttEnabled},
          {"setAudioHalPids", "([I)I", (void *)android_media_AudioSystem_setAudioHalPids},
+         // MIUI ADD: START
+         {"pauseAudioTracks", "(II)I", (void *)android_media_AudioSystem_pauseAudioTracks},
+         {"resumeAudioTracks", "(II)I", (void *)android_media_AudioSystem_resumeAudioTracks},
+         // END
          {"isCallScreeningModeSupported", "()Z",
           (void *)android_media_AudioSystem_isCallScreeningModeSupported},
          {"setDevicesRoleForStrategy", "(II[I[Ljava/lang/String;)I",

@@ -164,6 +164,32 @@ nativeCreate
     return (jlong) &SensorManager::getInstanceForPackage(String16(opPackageNameUtf.c_str()));
 }
 
+// MIUI ADD START:
+static void
+nativeSetSensorDisableApp
+(JNIEnv *env, jclass clazz, jlong sensorManager, jstring name)
+{
+#if MI_SCREEN_PROJECTION
+    SensorManager* mgr = reinterpret_cast<SensorManager*>(sensorManager);
+    ScopedUtfChars nameUtf(env, name);
+    String8 clientName(nameUtf.c_str());
+    mgr->setSensorDisableApp(clientName);
+#endif
+}
+
+static void
+nativeRemoveSensorDisableApp
+(JNIEnv *env, jclass clazz, jlong sensorManager, jstring name)
+{
+#if MI_SCREEN_PROJECTION
+    SensorManager* mgr = reinterpret_cast<SensorManager*>(sensorManager);
+    ScopedUtfChars nameUtf(env, name);
+    String8 clientName(nameUtf.c_str());
+    mgr->removeSensorDisableApp(clientName);
+#endif
+}
+// END
+
 static jobject
 translateNativeSensorToJavaSensor(JNIEnv *env, jobject sensor, const Sensor& nativeSensor) {
     const SensorOffsets& sensorOffsets(gSensorOffsets);
@@ -509,6 +535,15 @@ static const JNINativeMethod gSystemSensorManagerMethods[] = {
     {"nativeCreate",
              "(Ljava/lang/String;)J",
              (void*)nativeCreate },
+
+    // MIUI ADD: START
+    {"nativeSetSensorDisableApp",
+             "(JLjava/lang/String;)V",
+             (void*)nativeSetSensorDisableApp },
+    {"nativeRemoveSensorDisableApp",
+             "(JLjava/lang/String;)V",
+             (void*)nativeRemoveSensorDisableApp },
+    // END
 
     {"nativeGetSensorAtIndex",
             "(JLandroid/hardware/Sensor;I)Z",
