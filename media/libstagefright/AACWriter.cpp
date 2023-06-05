@@ -236,8 +236,10 @@ static bool getSampleRateTableIndex(int sampleRate, uint8_t* tableIndex) {
  * 2 bits of frames count in one packet. Set to 0.
  */
 status_t AACWriter::writeAdtsHeader(uint32_t frameLength) {
+    uint8_t allData[7] = {0};
     uint8_t data = 0xFF;
-    write(mFd, &data, 1);
+    //write(mFd, &data, 1);
+    allData[0] = data;
 
     const uint8_t kFieldId = 0;
     const uint8_t kMpegLayer = 0;
@@ -246,7 +248,8 @@ status_t AACWriter::writeAdtsHeader(uint32_t frameLength) {
     data |= (kFieldId << 3);
     data |= (kMpegLayer << 1);
     data |= kProtectionAbsense;
-    write(mFd, &data, 1);
+    //write(mFd, &data, 1);
+    allData[1] = data;
 
     const uint8_t kProfileCode = mAACProfile - 1;
     uint8_t kSampleFreqIndex;
@@ -257,7 +260,8 @@ status_t AACWriter::writeAdtsHeader(uint32_t frameLength) {
     data |= (kSampleFreqIndex << 2);
     data |= (kPrivateStream << 1);
     data |= (kChannelConfigCode >> 2);
-    write(mFd, &data, 1);
+    //write(mFd, &data, 1);
+    allData[2] = data;
 
     // 4 bits from originality to copyright start
     const uint8_t kCopyright = 0;
@@ -265,20 +269,25 @@ status_t AACWriter::writeAdtsHeader(uint32_t frameLength) {
     data = ((kChannelConfigCode & 3) << 6);
     data |= (kCopyright << 2);
     data |= ((kFrameLength & 0x1800) >> 11);
-    write(mFd, &data, 1);
+    //write(mFd, &data, 1);
+    allData[3] = data;
 
     data = ((kFrameLength & 0x07F8) >> 3);
-    write(mFd, &data, 1);
+    //write(mFd, &data, 1);
+    allData[4] = data;
 
     const uint32_t kBufferFullness = 0x7FF;  // VBR
     data = ((kFrameLength & 0x07) << 5);
     data |= ((kBufferFullness & 0x07C0) >> 6);
-    write(mFd, &data, 1);
+    //write(mFd, &data, 1);
+    allData[5] = data;
 
     const uint8_t kFrameCount = 0;
     data = ((kBufferFullness & 0x03F) << 2);
     data |= kFrameCount;
-    write(mFd, &data, 1);
+    //write(mFd, &data, 1);
+    allData[6] = data;
+    write(mFd, &allData, 7);
 
     return OK;
 }

@@ -27,6 +27,10 @@
 #include "device3/Camera3OutputStream.h"
 #include "system/graphics-base-v1.1.h"
 
+#ifdef __XIAOMI_CAMERA__
+#include "xm/CameraStub.h"
+#endif
+
 using android::camera3::OutputStreamInfo;
 using android::camera3::OutputStreamInfo;
 using android::hardware::camera2::ICameraDeviceUser;
@@ -168,28 +172,36 @@ bool roundBufferDimensionNearest(int32_t width, int32_t height,
     int32_t bestWidth = -1;
     int32_t bestHeight = -1;
 
-    // Iterate through listed stream configurations and find the one with the smallest euclidean
-    // distance from the given dimensions for the given format.
-    for (size_t i = 0; i < streamConfigs.count; i += 4) {
-        int32_t fmt = streamConfigs.data.i32[i];
-        int32_t w = streamConfigs.data.i32[i + 1];
-        int32_t h = streamConfigs.data.i32[i + 2];
+#ifdef __XIAOMI_CAMERA__
+    CameraStub::getCustomBestSize(info, width, height, format, bestWidth, bestHeight);
+    if (bestWidth != width || bestHeight != height) {
+        ALOGI("%s: can't find size %dx%d in xiaomi size", __FUNCTION__,width,height);
+#endif
+        // Iterate through listed stream configurations and find the one with the smallest euclidean
+        // distance from the given dimensions for the given format.
+        for (size_t i = 0; i < streamConfigs.count; i += 4) {
+            int32_t fmt = streamConfigs.data.i32[i];
+            int32_t w = streamConfigs.data.i32[i + 1];
+            int32_t h = streamConfigs.data.i32[i + 2];
 
-        // Ignore input/output type for now
-        if (fmt == format) {
-            if (w == width && h == height) {
-                bestWidth = width;
-                bestHeight = height;
-                break;
-            } else if (w <= ROUNDING_WIDTH_CAP && (bestWidth == -1 ||
-                    SessionConfigurationUtils::euclidDistSquare(w, h, width, height) <
-                    SessionConfigurationUtils::euclidDistSquare(bestWidth, bestHeight, width,
-                            height))) {
-                bestWidth = w;
-                bestHeight = h;
+            // Ignore input/output type for now
+            if (fmt == format) {
+                if (w == width && h == height) {
+                    bestWidth = width;
+                    bestHeight = height;
+                    break;
+                } else if (w <= ROUNDING_WIDTH_CAP && (bestWidth == -1 ||
+                        SessionConfigurationUtils::euclidDistSquare(w, h, width, height) <
+                        SessionConfigurationUtils::euclidDistSquare(bestWidth, bestHeight, width,
+                                height))) {
+                    bestWidth = w;
+                    bestHeight = h;
+                }
             }
         }
+#ifdef __XIAOMI_CAMERA__
     }
+#endif
 
     if (isPriviledgedClient == true && bestWidth == -1 &&
         (format == HAL_PIXEL_FORMAT_RAW10 || format == HAL_PIXEL_FORMAT_RAW12 ||

@@ -79,8 +79,10 @@ struct MediaRecorderBase {
     virtual status_t setPreferredMicrophoneFieldDimension(float zoom) = 0;
     virtual status_t getPortId(audio_port_handle_t *portId) const = 0;
     virtual status_t getRtpDataUsage(uint64_t *bytes) = 0;
-
-
+//#ifdef MIAUDIO_OZO
+    virtual status_t setOzoAudioTuneFile(int fd) = 0;
+    virtual status_t setOzoRunTimeParameters(const String8& params) = 0;
+//#endif
 
 protected:
 

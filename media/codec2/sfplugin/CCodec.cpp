@@ -1014,7 +1014,7 @@ void CCodec::configure(const sp<AMessage> &msg) {
             C2StoreFlexiblePixelFormatDescriptorsInfo *pixelFormatInfo = nullptr;
             int vendorSdkVersion = base::GetIntProperty(
                     "ro.vendor.build.version.sdk", android_get_device_api_level());
-            if (vendorSdkVersion >= __ANDROID_API_S__ && mClient->query(
+            if (/*vendorSdkVersion >= __ANDROID_API_S__ &&*/ mClient->query(
                         {},
                         {C2StoreFlexiblePixelFormatDescriptorsInfo::PARAM_TYPE},
                         C2_MAY_BLOCK,
@@ -1075,7 +1075,7 @@ void CCodec::configure(const sp<AMessage> &msg) {
             } else {
                 if ((config->mDomain & Config::IS_ENCODER) || !surface) {
                     if (vendorSdkVersion < __ANDROID_API_S__ &&
-                            (format == COLOR_FormatYUV420Flexible ||
+                            (/*format == COLOR_FormatYUV420Flexible ||*/
                              format == COLOR_FormatYUV420Planar ||
                              format == COLOR_FormatYUV420PackedPlanar ||
                              format == COLOR_FormatYUV420SemiPlanar ||
@@ -2139,7 +2139,8 @@ void CCodec::signalResume() {
 
     std::map<size_t, sp<MediaCodecBuffer>> clientInputBuffers;
     status_t err = mChannel->prepareInitialInputBuffers(&clientInputBuffers);
-    if (err != OK) {
+    // FIXME(b/237656746)
+    if (err != OK && err != NO_MEMORY) {
         if (err == WOULD_BLOCK) {
             return;
         }

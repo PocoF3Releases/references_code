@@ -28,6 +28,10 @@
 #include <utils/Log.h>
 #include <android/content/AttributionSourceState.h>
 
+//MIUI ADD: start MIAUDIO_GLOBAL_AUDIO_EFFECT
+#include "AudioPolicyServiceStub.h"
+//MIUI ADD: end
+
 #define VALUE_OR_RETURN_BINDER_STATUS(x) \
     ({ auto _tmp = (x); \
        if (!_tmp.ok()) return aidl_utils::binderStatusFromStatusT(_tmp.error()); \
@@ -74,6 +78,26 @@ bool isSystemUsage(audio_usage_t usage) {
     return std::find(std::begin(SYSTEM_USAGES), std::end(SYSTEM_USAGES), usage)
         != std::end(SYSTEM_USAGES);
 }
+
+//MIUI ADD: start MIAUDIO_SOUND_TRANSMIT
+static String16 getPackageName(uid_t uid)
+{
+    String16 mClientName;
+    if (uid == 0)
+        uid = IPCThreadState::self()->getCallingUid();
+
+    PermissionController permissionController;
+    Vector<String16> packages;
+    permissionController.getPackagesForUid(uid, packages);
+    if (packages.isEmpty()) {
+        ALOGV("No packages for calling UID");
+    }else {
+        mClientName = packages[0];
+        ALOGV("getPackageName for %s  uid %d", String8(mClientName).string(), uid);
+    }
+    return mClientName;
+}
+//MIUI ADD: end
 
 bool AudioPolicyService::isSupportedSystemUsage(audio_usage_t usage) {
     return std::find(std::begin(mSupportedSystemUsages), std::end(mSupportedSystemUsages), usage)
@@ -258,8 +282,17 @@ Status AudioPolicyService::setForceUse(media::AudioPolicyForceUse usageAidl,
     if (mAudioPolicyManager == NULL) {
         return binderStatusFromStatusT(NO_INIT);
     }
+//MIUI ADD: start MIAUDIO_SOUND_TRANSMIT
+    uid_t uid = 0;
+    String16 clientName;
+    uid = IPCThreadState::self()->getCallingUid();
+    if (uid > 10000)
+        clientName = getPackageName(uid);
 
-    if (!modifyAudioRoutingAllowed()) {
+    ALOGD("setForceUse for %s uid %d", String8(clientName).string(), uid);
+
+    if (!modifyAudioRoutingAllowed() && String16("com.miui.misound").compare(clientName)) {
+//MIUI ADD: end
         return binderStatusFromStatusT(PERMISSION_DENIED);
     }
 
@@ -310,6 +343,14 @@ Status AudioPolicyService::getOutput(AudioStreamType streamAidl, int32_t* _aidl_
     if (mAudioPolicyManager == NULL) {
         return binderStatusFromStatusT(NO_INIT);
     }
+
+//MIUI ADD: start  MIAUDIO_GLOBAL_AUDIO_EFFECT
+    mLock.lock();
+    sp<AudioPolicyEffects> audioPolicyEffects = mAudioPolicyEffects;
+    mLock.unlock();
+    AudioPolicyServiceStub::createGlobalEffects(audioPolicyEffects);
+//MIUI ADD: end
+
     ALOGV("getOutput()");
     Mutex::Autolock _l(mLock);
     AutoCallerClear acc;
@@ -351,8 +392,13 @@ Status AudioPolicyService::getOutputForAttr(const media::AudioAttributesInternal
     RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(validateUsage(attr, attributionSource)));
 
     ALOGV("%s()", __func__);
-    Mutex::Autolock _l(mLock);
-
+//MIUI ADD: start MIAUDIO_GLOBAL_AUDIO_EFFECT
+    mLock.lock();
+    sp<AudioPolicyEffects> audioPolicyEffects = mAudioPolicyEffects;
+    mLock.unlock();
+    AudioPolicyServiceStub::createGlobalEffects(audioPolicyEffects);
+//MIUI ADD: end
+    mLock.lock();
     // TODO b/182392553: refactor or remove
     AttributionSourceState adjAttributionSource = attributionSource;
     const uid_t callingUid = IPCThreadState::self()->getCallingUid();
@@ -444,6 +490,16 @@ Status AudioPolicyService::getOutputForAttr(const media::AudioAttributesInternal
                 convertContainer<std::vector<int32_t>>(secondaryOutputs,
                                                        legacy2aidl_audio_io_handle_t_int32_t));
         _aidl_return->isSpatialized = isSpatialized;
+    }
+    mLock.unlock();
+    if(isSpatialized) {
+        #define SPATIALIZER_PARAM_INPUT_CHANNEL_MASK 0x110
+        #define DOLBY_SPATIALIZER_PARAM_UNMUTED_IN_CHANNEL_MASK 0x110 // DOLBY
+        ALOGD("Set spatializer input channel mask %x", config.channel_mask);
+        std::vector<unsigned char> data(sizeof(config.channel_mask)/sizeof(unsigned char));
+        uint32_t* pData = (uint32_t*)(data.data());
+        *pData = config.channel_mask;
+        mSpatializer->setParameter(SPATIALIZER_PARAM_INPUT_CHANNEL_MASK, data);
     }
     return binderStatusFromStatusT(result);
 }
@@ -619,7 +675,10 @@ Status AudioPolicyService::getInputForAttr(const media::AudioAttributesInternal&
                 && inputSource != AUDIO_SOURCE_HOTWORD
                 && inputSource != AUDIO_SOURCE_FM_TUNER
                 && inputSource != AUDIO_SOURCE_ECHO_REFERENCE
-                && inputSource != AUDIO_SOURCE_ULTRASOUND)) {
+                && inputSource != AUDIO_SOURCE_ULTRASOUND
+                && inputSource != AUDIO_SOURCE_VOIP_DOWNLINK
+                && inputSource != AUDIO_SOURCE_VOIP_UPLINK
+                && inputSource != AUDIO_SOURCE_VOIP_CALL)) {
         return binderStatusFromStatusT(BAD_VALUE);
     }
 
@@ -667,6 +726,13 @@ Status AudioPolicyService::getInputForAttr(const media::AudioAttributesInternal&
         ALOGE("%s permission denied: recording not allowed for %s",
                 __func__, adjAttributionSource.toString().c_str());
         return binderStatusFromStatusT(PERMISSION_DENIED);
+    }
+
+    if (inputSource == AUDIO_SOURCE_VOIP_UPLINK ||
+        inputSource == AUDIO_SOURCE_VOIP_DOWNLINK ||
+        inputSource == AUDIO_SOURCE_VOIP_CALL) {
+        if(!isServiceUid(callingUid) && (!AudioPolicyServiceStub::isAllowedAPP(getPackageName(callingUid))))
+            return binderStatusFromStatusT(PERMISSION_DENIED);
     }
 
     bool canCaptureOutput = captureAudioOutputAllowed(adjAttributionSource);
@@ -784,6 +850,16 @@ Status AudioPolicyService::getInputForAttr(const media::AudioAttributesInternal&
                                                              canCaptureOutput, canCaptureHotword,
                                                              mOutputCommandThread);
         mAudioRecordClients.add(portId, client);
+
+       String16 clientName;
+       //store app type here
+        if(adjAttributionSource.packageName.has_value() &&
+            adjAttributionSource.packageName.value().size() != 0){
+            clientName = String16(adjAttributionSource.packageName.value().c_str());
+        } else {
+            clientName = getPackageName(currentUid);
+	}
+        client->setAppMask(mAudioPolicyManager->getAppMaskByName(clientName));
     }
 
     if (audioPolicyEffects != 0) {
@@ -849,6 +925,16 @@ Status AudioPolicyService::startInput(int32_t portIdAidl)
     Mutex::Autolock _l(mLock);
 
     client->active = true;
+//MIUI ADD: start MIAUDIO_INPUT_REUSE
+    ALOGI("%s client->uid  %d client->session %d",
+                __func__, client->attributionSource.uid, client->session);
+    if (mAudioPolicyManager &&
+        mAudioPolicyManager->isReuseInput(VALUE_OR_RETURN_BINDER_STATUS(
+        aidl2legacy_int32_t_uid_t(client->attributionSource.uid)), client->session)) {
+        ALOGI("%s: is reuse input client, so start time 500 milliseconds earlier ", __func__);
+        client->startTimeNs = systemTime() - 500000000;
+    } else
+//MIUI ADD: end
     client->startTimeNs = systemTime();
     updateUidStates_l();
 
@@ -2076,6 +2162,29 @@ Status AudioPolicyService::isUltrasoundSupported(bool* _aidl_return)
     return Status::ok();
 }
 
+Status AudioPolicyService::setIsCERegion(bool isCERegion, bool* _aidl_return)
+{
+    if (mAudioPolicyManager == NULL) {
+        return binderStatusFromStatusT(NO_INIT);
+    }
+    Mutex::Autolock _l(mLock);
+    AutoCallerClear acc;
+    *_aidl_return = mAudioPolicyManager->setIsCERegion(isCERegion);
+    return Status::ok();
+}
+
+//MIUI ADD: start MIAUDIO_MULTI_ROUTE
+Status AudioPolicyService::setProParameters(const std::string& keyValuePairs)
+{
+    if (mAudioPolicyManager == NULL) {
+        return binderStatusFromStatusT(NO_INIT);
+    }
+    Mutex::Autolock _l(mLock);
+    AutoCallerClear acc;
+    return binderStatusFromStatusT(mAudioPolicyManager->setProParameters(String8(keyValuePairs.c_str())));
+}
+//MIUI ADD: end
+
 Status AudioPolicyService::listAudioProductStrategies(
         std::vector<media::AudioProductStrategy>* _aidl_return) {
     AudioProductStrategyVector strategies;
@@ -2161,6 +2270,22 @@ Status AudioPolicyService::isCallScreenModeSupported(bool* _aidl_return)
     *_aidl_return = mAudioPolicyManager->isCallScreenModeSupported();
     return Status::ok();
 }
+
+//MIUI ADD: start MIAUDIO_INPUT_REUSE
+Status AudioPolicyService::isReuseInput(int32_t uidAidl, int32_t sessionAidl, bool* _aidl_return)
+{
+    uid_t uid = VALUE_OR_RETURN_BINDER_STATUS(aidl2legacy_int32_t_uid_t(uidAidl));
+    audio_session_t session = VALUE_OR_RETURN_BINDER_STATUS(
+        aidl2legacy_int32_t_audio_session_t(sessionAidl));
+    if (mAudioPolicyManager == NULL) {
+        return binderStatusFromStatusT(NO_INIT);
+    }
+    Mutex::Autolock _l(mLock);
+    AutoCallerClear acc;
+    *_aidl_return = mAudioPolicyManager->isReuseInput(uid, session);
+    return Status::ok();
+}
+//MIUI ADD: end
 
 Status AudioPolicyService::setDevicesRoleForStrategy(
         int32_t strategyAidl,

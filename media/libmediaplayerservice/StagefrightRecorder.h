@@ -45,6 +45,10 @@ struct AudioSource;
 class MediaProfiles;
 struct ALooper;
 struct AMessage;
+//#ifdef MIAUDIO_OZO
+class IMediaSource;
+class IMediaCodecEventListener;
+//#endif
 
 struct StagefrightRecorder : public MediaRecorderBase {
     explicit StagefrightRecorder(const AttributionSourceState& attributionSource);
@@ -130,7 +134,7 @@ protected:
     int32_t mAudioChannels;
     int32_t mSampleRate;
     int32_t mInterleaveDurationUs;
-    int32_t mIFramesIntervalSec;
+    float   mIFramesIntervalSec;
     int32_t mCameraId;
     int32_t mVideoEncoderProfile;
     int32_t mVideoEncoderLevel;
@@ -157,6 +161,7 @@ protected:
     int32_t mRTPSockDscp;
     int64_t mRTPSockNetwork;
     uint32_t mLastSeqNo;
+    int32_t mEntropyMode; // Add by xiaomi
 
     int64_t mDurationRecordedUs;
     int64_t mStartedRecordingUs;
@@ -228,7 +233,7 @@ protected:
     status_t setParamCaptureFps(double fps);
     status_t setParamVideoEncodingBitRate(int32_t bitRate);
     status_t setParamVideoBitRateMode(int32_t bitRateMode);
-    status_t setParamVideoIFramesInterval(int32_t seconds);
+    status_t setParamVideoIFramesInterval(float seconds);
     status_t setParamVideoEncoderProfile(int32_t profile);
     status_t setParamVideoEncoderLevel(int32_t level);
     status_t setParamVideoCameraId(int32_t cameraId);
@@ -254,6 +259,7 @@ protected:
     status_t setParamRtpDscp(int32_t dscp);
     status_t setSocketNetwork(int64_t networkHandle);
     status_t requestIDRFrame();
+    status_t setParamEntropyMode(int32_t mode);   // Add by xiaomi
     void clipVideoBitRate();
     void clipVideoFrameRate();
     void clipVideoFrameWidth();
@@ -273,6 +279,18 @@ protected:
 
     StagefrightRecorder(const StagefrightRecorder &);
     StagefrightRecorder &operator=(const StagefrightRecorder &);
+//#ifdef MIAUDIO_OZO
+public:
+    virtual status_t setOzoRunTimeParameters(const String8 &params);
+    virtual status_t setOzoAudioTuneFile(int fd);
+
+private:
+    void* mOzoAudioParams = NULL;
+    bool mOzoFileSourceEnable;
+    bool mOzoBrandEnabled;
+    IMediaCodecEventListener *mCodecEventListener;
+    IMediaCodecEventListener *mOzoTuneWriter;
+//#endif
 };
 
 }  // namespace android

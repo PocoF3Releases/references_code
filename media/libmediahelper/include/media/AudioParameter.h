@@ -49,6 +49,9 @@ public:
     static const char * const keyInputSource;
     static const char * const keyScreenState;
 
+    //MIUI ADD: MIAUDIO_MULTI_ROUTE
+    static const char * const keyAudioRouteCast;
+
     //  keyBtNrec: BT SCO Noise Reduction + Echo Cancellation parameters
     //  keyHwAvSync: get HW synchronization source identifier from a device
     //  keyMonoOutput: Enable mono audio playback

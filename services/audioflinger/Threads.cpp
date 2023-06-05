@@ -1,5 +1,5 @@
 /*
-**
+*
 ** Copyright 2012, The Android Open Source Project
 **
 ** Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,7 +17,8 @@
 
 
 #define LOG_TAG "AudioFlinger"
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
+#define LOG_NDEBUG_ASSERT 0
 #define ATRACE_TAG ATRACE_TAG_AUDIO
 
 #include "Configuration.h"
@@ -26,6 +27,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <sched.h>
 #include <linux/futex.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -93,6 +95,14 @@
 
 #include <pthread.h>
 #include "TypedLogger.h"
+#include "AudioFlingerStub.h"
+
+// AUDIO ADD
+#include <mediautils/FeatureManager.h>
+// MIUI ADD: DOLBY_ENABLE && DOLBY_ATMOS_GAME
+#include "ds_config.h"
+// MIUI ADD: DOLBY_ENABLE && DOLBY_VQE
+#include "DlbVqeCallback.h"
 
 // ----------------------------------------------------------------------------
 
@@ -237,6 +247,8 @@ static int sFastTrackMultiplier = kFastTrackMultiplier;
 // and that all "fast" AudioRecord clients read from.  In either case, the size can be small.
 static const size_t kRecordThreadReadOnlyHeapSize = 0xD000;
 
+// AudioCpuSched
+static std::vector<pid_t> allPlayerTids;
 // ----------------------------------------------------------------------------
 
 // TODO: move all toString helpers to audio.h
@@ -812,7 +824,9 @@ void AudioFlinger::ThreadBase::processConfigEvents_l()
         } break;
 
         default:
+#if LOG_NDEBUG_ASSERT
             ALOG_ASSERT(false, "processConfigEvents_l() unknown event type %d", event->mType);
+#endif
             break;
         }
         {
@@ -1059,7 +1073,9 @@ String16 AudioFlinger::ThreadBase::getWakeLockTag()
     case SPATIALIZER:
         return String16("AudioSpatial");
     default:
+#if LOG_NDEBUG_ASSERT
         ALOG_ASSERT(false);
+#endif
         return String16("AudioUnknown");
     }
 }
@@ -1212,6 +1228,26 @@ void AudioFlinger::ThreadBase::checkSuspendOnAddEffectChain_l(const sp<EffectCha
     }
 }
 
+// MIUI ADD: START
+void AudioFlinger::PlaybackThread::pauseAudioTracks(uid_t uid, pid_t pid) {
+    for (const sp<Track> &track : mActiveTracks) {
+        if (track->uid() == uid && track->creatorPid() == pid) {
+            track->pause();
+            return;
+        }
+    }
+}
+
+void AudioFlinger::PlaybackThread::resumeAudioTracks(uid_t uid, pid_t pid) {
+    for (const sp<Track> &track : mTracks) {
+        if (track->uid() == uid && track->creatorPid() == pid) {
+            track->start();
+            return;
+        }
+    }
+}
+// END
+
 void AudioFlinger::ThreadBase::updateSuspendedSessions_l(const effect_uuid_t *type,
                                                          bool suspend,
                                                          audio_session_t sessionId)
@@ -1279,7 +1315,12 @@ void AudioFlinger::ThreadBase::checkSuspendOnEffectEnabled(bool enabled,
     if (!threadLocked) {
         mLock.lock();
     }
-
+    ALOGV("%s(): enable=%d, sessionId=%d", __func__, enabled, sessionId);
+    /* Not suspend global effects, DiracSound is created as a global effect */
+//MIUI ADD: start  MIAUDIO_GLOBAL_AUDIO_EFFECT
+//Due to miaudio_ GLOBAL_ AUDIO_ Effect is used for all products. 
+//The following code does not participate in compilation, so it is commented out.
+/*
     if (mType != RECORD) {
         // suspend all effects in AUDIO_SESSION_OUTPUT_MIX when enabling any effect on
         // another session. This gives the priority to well behaved effect control panels
@@ -1290,6 +1331,8 @@ void AudioFlinger::ThreadBase::checkSuspendOnEffectEnabled(bool enabled,
             setEffectSuspended_l(NULL, enabled, AUDIO_SESSION_OUTPUT_MIX);
         }
     }
+*/
+//MIUI ADD: end
 
     if (!threadLocked) {
         mLock.unlock();
@@ -1556,6 +1599,12 @@ sp<AudioFlinger::EffectHandle> AudioFlinger::ThreadBase::createEffect_l(
             effect->setInputDevice(inDeviceTypeAddr());
             effect->setMode(mAudioFlinger->getMode());
             effect->setAudioSource(mAudioSource);
+
+            // MIUI ADD: DOLBY_ENABLE
+            if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE)) {
+                EffectDapController::instance()->effectCreated(effect, this);
+            }
+            // MIUI END
         }
         if (effect->isHapticGenerator()) {
             // TODO(b/184194057): Use the vibrator information from the vibrator that will be used
@@ -1573,6 +1622,9 @@ sp<AudioFlinger::EffectHandle> AudioFlinger::ThreadBase::createEffect_l(
         if (lStatus == OK) {
             lStatus = effect->addHandle(handle.get());
             sendCheckOutputStageEffectsEvent_l();
+        }
+        if (lStatus != NO_ERROR) {
+            goto Exit;
         }
         if (enabled != NULL) {
             *enabled = (int)effect->isEnabled();
@@ -1718,6 +1770,12 @@ status_t AudioFlinger::ThreadBase::addEffect_l(const sp<EffectModule>& effect)
     effect->setMode(mAudioFlinger->getMode());
     effect->setAudioSource(mAudioSource);
 
+    // MIUI ADD: DOLBY_ENABLE
+    if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE)) {
+        EffectDapController::instance()->updateOffload(this);
+    }
+    // MIUI END
+
     return NO_ERROR;
 }
 
@@ -1816,10 +1874,26 @@ ssize_t AudioFlinger::ThreadBase::ActiveTracks<T>::add(const sp<T> &track) {
         ALOGW("ActiveTracks<T>::add track %p already there", track.get());
         return index;
     }
+
+    // MIUI ADD: DOLBY_ENABLE && DOLBY_VQE
+    if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) && FeatureManager::isFeatureEnable(AUDIO_DOLBY_VQE)) {
+        onAddActiveTrack(!track->isOut(), track->isFastTrack(), track->sessionId(), track->uid(),
+                     track->sampleRate(), track->format(), track->channelMask());
+    }
+    // MIUI END
+
     logTrack("add", track);
     mActiveTracksGeneration++;
     mLatestActiveTrack = track;
     ++mBatteryCounter[track->uid()].second;
+    //MIUI ADD START
+    if(track->uid() == 1000){
+        pid_t ve = track->clientPid();
+        if(ve != -1){
+            ++mUID1000BatteryCounter[track->clientPid()].second;
+        }
+    }
+    // END
     mHasChanged = true;
     return mActiveTracks.add(track);
 }
@@ -1831,9 +1905,26 @@ ssize_t AudioFlinger::ThreadBase::ActiveTracks<T>::remove(const sp<T> &track) {
         ALOGW("ActiveTracks<T>::remove nonexistent track %p", track.get());
         return index;
     }
+
+    // MIUI ADD: DOLBY_ENABLE && DOLBY_VQE
+    if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) && FeatureManager::isFeatureEnable(AUDIO_DOLBY_VQE)) {
+        onRemoveActiveTrack(!track->isOut(), track->isFastTrack(), track->sessionId(), track->uid(),
+                     track->sampleRate(), track->format(), track->channelMask());
+    }
+    // MIUI END
+
     logTrack("remove", track);
     mActiveTracksGeneration++;
     --mBatteryCounter[track->uid()].second;
+
+    //MIUI ADD START
+    if(track->uid() == 1000){
+        pid_t ve = track->clientPid();
+        if(ve != -1){
+            --mUID1000BatteryCounter[track->clientPid()].second;
+        }
+    }
+    // END
     // mLatestActiveTrack is not cleared even if is the same as track.
     mHasChanged = true;
 #ifdef TEE_SINK
@@ -1854,6 +1945,8 @@ void AudioFlinger::ThreadBase::ActiveTracks<T>::clear() {
     mActiveTracks.clear();
     mLatestActiveTrack.clear();
     mBatteryCounter.clear();
+    //MIUI ADD
+    mUID1000BatteryCounter.clear();
 }
 
 template <typename T>
@@ -1864,6 +1957,30 @@ void AudioFlinger::ThreadBase::ActiveTracks<T>::updatePowerState(
         thread->updateWakeLockUids_l(getWakeLockUids());
         mLastActiveTracksGeneration = mActiveTracksGeneration;
     }
+
+    //MIUI ADD START
+    for (auto it = mUID1000BatteryCounter.begin(); it != mUID1000BatteryCounter.end();) {
+        const pid_t pid = it->first;
+        ssize_t &previousx = it->second.first;
+        ssize_t &currentx = it->second.second;
+        if (currentx > 0) {
+            if (previousx == 0) {
+                int format = 1<<30;
+                format = format|pid;
+                BatteryNotifier::getInstance().noteStartAudio(format);
+            }
+            previousx = currentx;
+            ++it;
+        } else if (currentx == 0) {
+            if (previousx > 0) {
+                int format = 1<<30;
+                format = format|pid;
+                BatteryNotifier::getInstance().noteStopAudio(format);
+            }
+            it = mUID1000BatteryCounter.erase(it); // std::map<> is stable on iterator erase.
+        }
+    }
+    //END
 
     // Updates BatteryNotifier uids
     for (auto it = mBatteryCounter.begin(); it != mBatteryCounter.end();) {
@@ -2231,6 +2348,29 @@ void AudioFlinger::PlaybackThread::dumpInternals_l(int fd, const Vector<String16
     }
 }
 
+String16 AudioFlinger::getPackageName(uid_t uid)
+{
+    String16 mClientName;
+    if (uid == 0)
+        uid = IPCThreadState::self()->getCallingUid();
+    sp<IServiceManager> sm = defaultServiceManager();
+    sp<IBinder> binder = sm->getService(String16("permission"));
+    if (binder == 0) {
+        ALOGE("Cannot get permission service");
+        return mClientName;
+    }
+    sp<IPermissionController> permCtrl = interface_cast<IPermissionController>(binder);
+    Vector<String16> packages;
+    permCtrl->getPackagesForUid(uid, packages);
+    if (packages.isEmpty()) {
+        ALOGV("No packages for calling UID");
+    }else {
+        mClientName = packages[0];
+        ALOGI("create audiotrack for %s  uid %d", String8(mClientName).string(), uid);
+    }
+    return mClientName;
+}
+
 // PlaybackThread::createTrack_l() must be called with AudioFlinger::mLock held
 sp<AudioFlinger::PlaybackThread::Track> AudioFlinger::PlaybackThread::createTrack_l(
         const sp<AudioFlinger::Client>& client,
@@ -2418,6 +2558,23 @@ sp<AudioFlinger::PlaybackThread::Track> AudioFlinger::PlaybackThread::createTrac
         }
         if (frameCount < minFrameCount) {
             frameCount = minFrameCount;
+        }
+        // this is to work around issues caused by wechat VOIP app, which allocates too large
+        // frames while the voice message is too short, so track::isReady() won't be true and
+        // thus not played out, also the large cached buffer(around 2s) can be discarded
+        // due to track destoried by APP before completely rendered out
+        /* alsa work around for com.youku.phone:
+           pop noise will raise when playback video on screen_off state
+        */
+        String16 currClientName = getPackageName(0);
+        if (streamType == AUDIO_STREAM_VOICE_CALL && frameCount > 4 * minFrameCount &&
+            (!String16("com.tencent.mm").compare(currClientName))) {
+            frameCount = 4 * minFrameCount;
+        } else if (*flags == 0x104 && streamType == AUDIO_STREAM_MUSIC &&
+            (!String16("com.android.cts.verifier").compare(currClientName))) {
+            frameCount = 144;
+        } else if(streamType == AUDIO_STREAM_MUSIC && frameCount <= minFrameCount){
+            frameCount = 2 * minFrameCount;
         }
     }
 
@@ -2655,6 +2812,9 @@ void AudioFlinger::PlaybackThread::setStreamVolume(audio_stream_type_t stream, f
 {
     Mutex::Autolock _l(mLock);
     mStreamTypes[stream].volume = value;
+//MIUI ADD: start MIAUDIO_GLOBAL_AUDIO_EFFECT
+    AudioFlingerStub::audioEffectSetStreamVolume(mEffectChains, stream, value);
+//MIUI ADD:end
     broadcast_l();
 }
 
@@ -2813,8 +2973,10 @@ void AudioFlinger::PlaybackThread::removeTrack_l(const sp<Track>& track)
     }
     if (track->isFastTrack()) {
         int index = track->mFastIndex;
+#if LOG_NDEBUG_ASSERT
         ALOG_ASSERT(0 < index && index < (int)FastMixerState::sMaxFastTracks);
         ALOG_ASSERT(!(mFastTrackAvailMask & (1 << index)));
+#endif
         mFastTrackAvailMask |= 1 << index;
         // redundant as track is about to be destroyed, for dumpsys only
         track->mFastIndex = -1;
@@ -2843,22 +3005,41 @@ status_t AudioFlinger::DirectOutputThread::selectPresentation(int presentationId
     return mOutput->stream->selectPresentation(presentationId, programId);
 }
 
+//MIUI MODIFICATION
+audio_patch AudioFlinger::PlaybackThread::fetchPatch_l(struct audio_patch patch) {
+    if (mType == DUPLICATING) {
+        DuplicatingThread *thread = static_cast<DuplicatingThread *>(this);
+        if (thread && thread->getOutputTracks().size() > 1) {
+            ThreadBase *thread1 = thread->getOutputTracks()[0]->thread().unsafe_get();
+            ThreadBase *thread2 = thread->getOutputTracks()[1]->thread().unsafe_get();
+            if (thread1 && thread2) {
+                audio_patch dupPatch  = (thread1->mPatch.sinks[0].ext.device.type < thread2->mPatch.sinks[0].ext.device.type) ?
+                                         thread1->mPatch : thread2->mPatch;
+                ALOGD("%s: duplicating thread, use config, output %d, DeviceId %d",
+                      __func__, mId, dupPatch.num_sinks);
+                return dupPatch;
+            } 
+        }
+    }
+    return patch;  
+}
+
 void AudioFlinger::PlaybackThread::ioConfigChanged(audio_io_config_event_t event, pid_t pid,
                                                    audio_port_handle_t portId) {
-    ALOGV("PlaybackThread::ioConfigChanged, thread %p, event %d", this, event);
+    ALOGD("PlaybackThread::ioConfigChanged, thread %p, event %d", this, event);
     sp<AudioIoDescriptor> desc;
     const struct audio_patch patch = isMsdDevice() ? mDownStreamPatch : mPatch;
     switch (event) {
     case AUDIO_OUTPUT_OPENED:
     case AUDIO_OUTPUT_REGISTERED:
     case AUDIO_OUTPUT_CONFIG_CHANGED:
-        desc = sp<AudioIoDescriptor>::make(mId, patch, false /*isInput*/,
+        desc = sp<AudioIoDescriptor>::make(mId, fetchPatch_l(patch), false /*isInput*/,
                 mSampleRate, mFormat, mChannelMask,
                 // FIXME AudioFlinger::frameCount(audio_io_handle_t) instead of mNormalFrameCount?
                 mNormalFrameCount, mFrameCount, latency_l());
         break;
     case AUDIO_CLIENT_STARTED:
-        desc = sp<AudioIoDescriptor>::make(mId, patch, portId);
+        desc = sp<AudioIoDescriptor>::make(mId, fetchPatch_l(patch), portId);
         break;
     case AUDIO_OUTPUT_CLOSED:
     default:
@@ -3162,9 +3343,10 @@ void AudioFlinger::PlaybackThread::updateMetadata_l()
     for (const sp<Track> &track : mActiveTracks) {
         // No track is invalid as this is called after prepareTrack_l in the same critical section
         // Do not forward metadata for PatchTrack with unspecified stream type
-        if (track->streamType() != AUDIO_STREAM_PATCH) {
-            track->copyMetadataTo(backInserter);
-        }
+        // if (track->streamType() != AUDIO_STREAM_PATCH) {
+            // track->copyMetadataTo(backInserter);
+        // }
+        track->copyMetadataTo(backInserter);
     }
     sendMetadataToBackend_l(metadata);
 }
@@ -3360,7 +3542,9 @@ ssize_t AudioFlinger::PlaybackThread::threadLoop_write()
             ALOGW_IF(mWriteAckSequence & 1, "threadLoop_write(): out of sequence write request");
             mWriteAckSequence += 2;
             mWriteAckSequence |= 1;
+#if LOG_NDEBUG_ASSERT
             ALOG_ASSERT(mCallbackThread != 0);
+#endif
             mCallbackThread->setWriteBlocked(mWriteAckSequence);
         }
         ATRACE_BEGIN("write");
@@ -3369,11 +3553,19 @@ ssize_t AudioFlinger::PlaybackThread::threadLoop_write()
         bytesWritten = mOutput->write((char *)mSinkBuffer + offset, mBytesRemaining);
         ATRACE_END();
 
+//MIUI ADD: start MIAUDIO_DUMP_PCM
+        if (bytesWritten > 0)
+            AudioFlingerStub::dumpAudioFlingerDataToFile((uint8_t *)mSinkBuffer + offset,
+                bytesWritten, mFormat, mSampleRate, mChannelCount, "offload");
+//MIUI ADD: end
+
         if (mUseAsyncWrite &&
                 ((bytesWritten < 0) || (bytesWritten == (ssize_t)mBytesRemaining))) {
             // do not wait for async callback in case of error of full write
             mWriteAckSequence &= ~1;
+#if LOG_NDEBUG_ASSERT
             ALOG_ASSERT(mCallbackThread != 0);
+#endif
             mCallbackThread->setWriteBlocked(mWriteAckSequence);
         }
     }
@@ -3396,7 +3588,9 @@ void AudioFlinger::PlaybackThread::threadLoop_drain()
         if (mUseAsyncWrite) {
             ALOGW_IF(mDrainSequence & 1, "threadLoop_drain(): out of sequence drain request");
             mDrainSequence |= 1;
+#if LOG_NDEBUG_ASSERT
             ALOG_ASSERT(mCallbackThread != 0);
+#endif
             mCallbackThread->setDraining(mDrainSequence);
         }
         status_t result = mOutput->stream->drain(mMixerStatus == MIXER_DRAIN_TRACK);
@@ -3418,6 +3612,13 @@ void AudioFlinger::PlaybackThread::threadLoop_exit()
         // TODO: should we decActiveTrackCnt() of the cleared track effect chain?
         mActiveTracks.clear();
     }
+
+    // MIUI ADD: DOLBY_ENABLE, DOLBY_DAP_PREGAIN
+    // When a thread is closed set associated volume to 0
+    if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) && mOutput != NULL) {
+        EffectDapController::instance()->updatePregain(mType, mId, mOutput->flags, 0, false);
+    }
+    // MIUI END
 }
 
 /*
@@ -3702,8 +3903,48 @@ void AudioFlinger::PlaybackThread::detachAuxEffect_l(int effectId)
     }
 }
 
+// AudioCpuSched start
+status_t AudioFlinger::PlaybackThread::reScheduleCpu(uint32_t cpuSet, uint32_t cpus)
+{
+    cpu_set_t set;
+
+
+    for (auto& tid : allPlayerTids) {
+        CPU_ZERO(&set);
+
+        for (int i = 0; i < cpus; i++) {
+            if ((cpuSet >> i) & (0x1)) {
+                CPU_SET(i, &set);
+            }
+        }
+        ALOGD("[APM-AF-Sched]%s()  audioCpuSet = 0x%x tid %d", __func__, cpuSet, tid);
+        sched_setaffinity(tid, sizeof(cpu_set_t), &set);
+    }
+    return NO_ERROR;
+}
+// AudioCpuSched end
+
 bool AudioFlinger::PlaybackThread::threadLoop()
 {
+    // AudioCpuSched start
+    bool onlyFast = property_get_bool("vendor.audio.rt.mode.onlyfast", true /* default_value */);
+    int64_t rtMode = property_get_int64("vendor.audio.rt.mode", 0 /* default_value */);
+    allPlayerTids.push_back(gettid());
+    // AudioCpuSched end
+
+    // Threads of audio hal and mixer use RT priority
+    if (rtMode) {
+        if (!onlyFast || (onlyFast &&
+            (mOutput->flags & (AUDIO_OUTPUT_FLAG_FAST | (AUDIO_OUTPUT_FLAG_RAW | AUDIO_OUTPUT_FLAG_PRIMARY))))) {
+            if (rtMode & AUDIO_SCHED_AF)
+                sendPrioConfigEvent(getpid(), getTid(), kPriorityFastMixer, false /*forApp*/);
+            if (rtMode & AUDIO_SCHED_HSO)
+                stream()->setHalThreadPriority(kPriorityFastMixer);
+            ALOGD("[APM]mixer & HAL thread use RT thread, pid %d, tid %d hal buffer ms %d flag %d, rtMode 0x%x, fast %d",
+                    getpid(), gettid(), mHalfBufferMs, mOutput->flags, (int)rtMode, onlyFast);
+        }
+    }
+
     tlNBLogWriter = mNBLogWriter.get();
 
     Vector< sp<Track> > tracksToRemove;
@@ -3911,6 +4152,11 @@ bool AudioFlinger::PlaybackThread::threadLoop()
 
             mActiveTracks.updatePowerState(this);
             if (mMixerStatus == MIXER_IDLE && !mActiveTracks.size()) {
+                // MIUI ADD: DOLBY_ENABLE
+                if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) && mOutput != NULL){
+                    EffectDapController::instance()->updatePregain(mType, mId, mOutput->flags, 0, false);
+                }
+                // MIUI END
                 onIdleMixer();
             }
 
@@ -4328,6 +4574,15 @@ bool AudioFlinger::PlaybackThread::threadLoop()
     releaseWakeLock();
 
     ALOGV("Thread %p type %d exiting", this, mType);
+
+    // AudioCpuSched start
+    for (auto it = allPlayerTids.begin(); it != allPlayerTids.end();) {
+        if (*it == gettid()) {
+            it = allPlayerTids.erase(it);
+        } else ++it;
+    }
+    // AudioCpuSched end
+
     return false;
 }
 
@@ -4470,6 +4725,9 @@ void AudioFlinger::PlaybackThread::collectTimestamps_l()
 void AudioFlinger::PlaybackThread::removeTracks_l(const Vector< sp<Track> >& tracksToRemove)
 {
     for (const auto& track : tracksToRemove) {
+        if (track->mCallingUid > 10000 && track->mSharedBuffer == 0) {
+            LOG_EVENT_STRING(30200, String8::format("%d&%d&%d&%d", track->mCallingPid, track->mCallingUid, 2, track->mSessionId).string());
+        }
         mActiveTracks.remove(track);
         ALOGV("%s(%d): removing track on session %d", __func__, track->id(), track->sessionId());
         sp<EffectChain> chain = getEffectChain_l(track->sessionId());
@@ -4750,13 +5008,15 @@ AudioFlinger::MixerThread::MixerThread(const sp<AudioFlinger>& audioFlinger, Aud
     size_t numCounterOffers = 0;
     const NBAIO_Format offers[1] = {Format_from_SR_C(
             mSampleRate, mChannelCount + mHapticChannelCount, mFormat)};
-#if !LOG_NDEBUG
+#if !LOG_NDEBUG && LOG_NDEBUG_ASSERT
     ssize_t index =
 #else
     (void)
 #endif
             mOutputSink->negotiate(offers, 1, NULL, numCounterOffers);
+#if LOG_NDEBUG_ASSERT
     ALOG_ASSERT(index == 0);
+#endif
 
     // initialize fast mixer depending on configuration
     bool initFastMixer;
@@ -4809,13 +5069,15 @@ AudioFlinger::MixerThread::MixerThread(const sp<AudioFlinger>& audioFlinger, Aud
         MonoPipe *monoPipe = new MonoPipe(mNormalFrameCount * 4, format, true /*writeCanBlock*/);
         const NBAIO_Format offers[1] = {format};
         size_t numCounterOffers = 0;
-#if !LOG_NDEBUG
+#if !LOG_NDEBUG && LOG_NDEBUG_ASSERT
         ssize_t index =
 #else
         (void)
 #endif
                 monoPipe->negotiate(offers, 1, NULL, numCounterOffers);
+#if LOG_NDEBUG_ASSERT
         ALOG_ASSERT(index == 0);
+#endif
         monoPipe->setAvgFrames((mScreenState & 1) ?
                 (monoPipe->maxFrames() * 7) / 8 : mNormalFrameCount * 2);
         mPipeSink = monoPipe;
@@ -4872,6 +5134,9 @@ AudioFlinger::MixerThread::MixerThread(const sp<AudioFlinger>& audioFlinger, Aud
         pid_t tid = mFastMixer->getTid();
         sendPrioConfigEvent(getpid(), tid, kPriorityFastMixer, false /*forApp*/);
         stream()->setHalThreadPriority(kPriorityFastMixer);
+        // AudioCpuSched start
+        allPlayerTids.push_back(tid);
+        // AudioCpuSched end
 
 #ifdef AUDIO_WATCHDOG
         // create and start the watchdog
@@ -4908,6 +5173,14 @@ AudioFlinger::MixerThread::MixerThread(const sp<AudioFlinger>& audioFlinger, Aud
 AudioFlinger::MixerThread::~MixerThread()
 {
     if (mFastMixer != 0) {
+        // AudioCpuSched start
+        for (auto it = allPlayerTids.begin(); it != allPlayerTids.end();) {
+            if (*it == mFastMixer->getTid()) {
+                it = allPlayerTids.erase(it);
+            } else ++it;
+        }
+        // AudioCpuSched end
+
         FastMixerStateQueue *sq = mFastMixer->sq();
         FastMixerState *state = sq->begin();
         if (state->mCommand == FastMixerState::COLD_IDLE) {
@@ -4924,9 +5197,13 @@ AudioFlinger::MixerThread::~MixerThread()
         // We'll use that extract the final state which contains one remaining fast track
         // corresponding to our sub-mix.
         state = sq->begin();
+#if LOG_NDEBUG_ASSERT
         ALOG_ASSERT(state->mTrackMask == 1);
+#endif
         FastTrack *fastTrack = &state->mFastTracks[0];
+#if LOG_NDEBUG_ASSERT
         ALOG_ASSERT(fastTrack->mBufferProvider != NULL);
+#endif
         delete fastTrack->mBufferProvider;
         sq->end(false /*didModify*/);
         mFastMixer.clear();
@@ -5058,11 +5335,16 @@ void AudioFlinger::PlaybackThread::threadLoop_standby()
         // discard any pending drain or write ack by incrementing sequence
         mWriteAckSequence = (mWriteAckSequence + 2) & ~1;
         mDrainSequence = (mDrainSequence + 2) & ~1;
+#if LOG_NDEBUG_ASSERT
         ALOG_ASSERT(mCallbackThread != 0);
+#endif
         mCallbackThread->setWriteBlocked(mWriteAckSequence);
         mCallbackThread->setDraining(mDrainSequence);
     }
     mHwPaused = false;
+//MIUI ADD:start  MIAUDIO_GLOBAL_AUDIO_EFFECT
+    AudioFlingerStub::audioEffectSetStandby(mEffectChains);
+//MIUI ADD: end
 }
 
 void AudioFlinger::PlaybackThread::onAddNewTrack_l()
@@ -5174,6 +5456,7 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
 
     float masterVolume = mMasterVolume;
     bool masterMute = mMasterMute;
+    uint32_t max_vol = 0; /* DOLBY_ENABLE */
 
     if (masterMute) {
         masterVolume = 0;
@@ -5263,8 +5546,10 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
             // at the identical fast mixer slot within the same normal mix cycle,
             // is impossible because the slot isn't marked available until the end of each cycle.
             int j = track->mFastIndex;
+#if LOG_NDEBUG_ASSERT
             ALOG_ASSERT(0 < j && j < (int)FastMixerState::sMaxFastTracks);
             ALOG_ASSERT(!(mFastTrackAvailMask & (1 << j)));
+#endif
             FastTrack *fastTrack = &state->mFastTracks[j];
 
             // Determine whether the track is currently in underrun condition,
@@ -5405,6 +5690,12 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                 volume *= vh;
                 track->mCachedVolume = volume;
                 gain_minifloat_packed_t vlr = proxy->getVolumeLR();
+                //MIUI ADD: start MIPERF_PRELOAD_MUTE
+                if (AudioFlingerStub::shouldMutedProcess(track->uid())) {
+                    track->mCachedVolume = 0;
+                    vlr=0;
+                }
+                //MIUI ADD: end
                 float vlf = volume * float_from_gain(gain_minifloat_unpack_left(vlr));
                 float vrf = volume * float_from_gain(gain_minifloat_unpack_right(vlr));
 
@@ -5454,11 +5745,19 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
         // if an active track doesn't exist in the AudioMixer, create it.
         // use the trackId as the AudioMixer name.
         if (!mAudioMixer->exists(trackId)) {
+            audio_devices_t outDevice = AUDIO_DEVICE_NONE;
+            if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) &&
+                FeatureManager::isFeatureEnable(AUDIO_DOLBY_ATMOS_GAME)) {
+                    outDevice = deviceTypesToBitMask(getAudioDeviceTypes(outDeviceTypeAddrs()));
+                }
+
             status_t status = mAudioMixer->create(
                     trackId,
                     track->mChannelMask,
                     track->mFormat,
-                    track->mSessionId);
+                    track->mSessionId,
+                    outDevice /* DOLBY_ENABLE && DOLBY_ATMOS_GAME */);
+
             if (status != OK) {
                 ALOGW("%s(): AudioMixer cannot create track(%d)"
                         " mask %#x, format %#x, sessionId %d",
@@ -5562,12 +5861,20 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
 
             handleVoipVolume_l(&v);
 
+            float FadeRatio = track->getFadeRatio();
+
             if (track->isPausing()) {
                 vl = vr = 0;
                 vlf = vrf = vaf = 0.;
                 track->setPaused();
             } else {
                 gain_minifloat_packed_t vlr = proxy->getVolumeLR();
+                //MIUI ADD: start MIPERF_PRELOAD_MUTE
+                if (AudioFlingerStub::shouldMutedProcess(track->uid())) {
+                    track->mCachedVolume = 0;
+                    vlr=0;
+                }
+                //MIUI ADD: end
                 vlf = float_from_gain(gain_minifloat_unpack_left(vlr));
                 vrf = float_from_gain(gain_minifloat_unpack_right(vlr));
                 // track volumes come from shared memory, so can't be trusted and must be clamped
@@ -5580,8 +5887,8 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                     vrf = GAIN_FLOAT_UNITY;
                 }
                 // now apply the master volume and stream type volume and shaper volume
-                vlf *= v * vh;
-                vrf *= v * vh;
+                vlf *= v * vh * FadeRatio;
+                vrf *= v * vh * FadeRatio;
                 // assuming master volume and stream type volume each go up to 1.0,
                 // then derive vl and vr as U8.24 versions for the effect chain
                 const float scaleto8_24 = MAX_GAIN_INT * MAX_GAIN_INT;
@@ -5597,8 +5904,17 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                 // vaf is represented as [0.0, 1.0] float by rescaling sendLevel
                 vaf = v * sendLevel * (1. / MAX_GAIN_INT);
             }
+            ALOGV("getVolumeLR final: vlf = %.3g vrf = %.3g vaf = %.3g", vlf,vrf,vaf);
 
             track->setFinalVolume((vrf + vlf) / 2.f);
+
+            // MIUI ADD: DOLBY_ENABLE
+            if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) &&
+                track->isExternalTrack() &&
+                !EffectDapController::instance()->bypassTrack(track)) {
+                max_vol = max(max_vol, max(vl, vr));
+            }
+            // MIUI END
 
             // Delegate volume control to effect in track effect chain if needed
             if (chain != 0 && chain->setVolume_l(&vl, &vr)) {
@@ -5620,7 +5936,6 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
             // XXX: these things DON'T need to be done each time
             mAudioMixer->setBufferProvider(trackId, track);
             mAudioMixer->enable(trackId);
-
             mAudioMixer->setParameter(trackId, param, AudioMixer::VOLUME0, &vlf);
             mAudioMixer->setParameter(trackId, param, AudioMixer::VOLUME1, &vrf);
             mAudioMixer->setParameter(trackId, param, AudioMixer::AUXLEVEL, &vaf);
@@ -5667,6 +5982,25 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                 AudioMixer::TIMESTRETCH,
                 AudioMixer::PLAYBACK_RATE,
                 &playbackRate);
+
+            // MIUI ADD: DOLBY_ENABLE && DOLBY_ATMOS_GAME
+            if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) && FeatureManager::isFeatureEnable(AUDIO_DOLBY_ATMOS_GAME)) {
+                ALOGV("channel mask:0x%x", track->channelMask());
+                int processedType = (track->channelMask() == AUDIO_CHANNEL_OUT_5POINT1POINT2) ?
+                                ATMOS_GAME_512_ACTIVE : ATMOS_GAME_INACTIVE;
+                mAudioMixer->setParameter(
+                    trackId,
+                    AudioMixer::DAP,
+                    AudioMixer::PROCESSED_TYPE,
+                    (void *)(uintptr_t)processedType);
+                audio_devices_t outDevice = deviceTypesToBitMask(getAudioDeviceTypes(outDeviceTypeAddrs()));
+                mAudioMixer->setParameter(
+                    trackId,
+                    AudioMixer::DAP,
+                    AudioMixer::OUT_DEVICE,
+                    &outDevice);
+            }
+            // MIUI END
 
             /*
              * Select the appropriate output buffer for the track.
@@ -5779,6 +6113,18 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                     if (track->isStopped()) {
                         track->reset();
                     }
+
+                    // MIUI ADD: DOLBY_ENABLE && DOLBY_ATMOS_GAME
+                    if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) && FeatureManager::isFeatureEnable(AUDIO_DOLBY_ATMOS_GAME)){
+                        int processedType = ATMOS_GAME_INACTIVE;
+                        mAudioMixer->setParameter(
+                            trackId,
+                            AudioMixer::DAP,
+                            AudioMixer::PROCESSED_TYPE,
+                            (void *)(uintptr_t)processedType);
+                    }
+                    // MIUI END
+
                     tracksToRemove->add(track);
                 }
             } else {
@@ -5791,6 +6137,18 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                     // indicate to client process that the track was disabled because of underrun;
                     // it will then automatically call start() when data is available
                     track->disable();
+
+                    // MIUI ADD: DOLBY_ENABLE && DOLBY_ATMOS_GAME
+                    if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) && FeatureManager::isFeatureEnable(AUDIO_DOLBY_ATMOS_GAME)){
+                        int processedType = ATMOS_GAME_INACTIVE;
+                        mAudioMixer->setParameter(
+                            trackId,
+                            AudioMixer::DAP,
+                            AudioMixer::PROCESSED_TYPE,
+                            (void *)(uintptr_t)processedType);
+                    }
+                    // MIUI END
+
                 // If one track is not ready, mark the mixer also not ready if:
                 //  - the mixer was ready during previous round OR
                 //  - no other track is ready
@@ -5858,10 +6216,14 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
     // Now perform the deferred reset on fast tracks that have stopped
     while (resetMask != 0) {
         size_t i = __builtin_ctz(resetMask);
+#if LOG_NDEBUG_ASSERT
         ALOG_ASSERT(i < count);
+#endif
         resetMask &= ~(1 << i);
         sp<Track> track = mActiveTracks[i];
+#if LOG_NDEBUG_ASSERT
         ALOG_ASSERT(track->isFastTrack() && track->isStopped());
+#endif
         track->reset();
     }
 
@@ -5922,6 +6284,33 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
     if (fastTracks > 0) {
         mixerStatus = MIXER_TRACKS_READY;
     }
+
+    // MIUI ADD: DOLBY_ENABLE
+    if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE)) {
+        std::string dolbyVersion = EffectDapController::instance()->getVersion();
+        if (EffectDapController::versionCompare(dolbyVersion, DAX3_3POINT6) <= 0) {
+            EffectDapController::instance()->checkForBypass(mActiveTracks, mId);
+        } else if (mType == MIXER) {
+            EffectDapController::instance()->checkAudioTracks(mActiveTracks, mId);
+        }
+
+        // Skip the DS pregain setting if there're no active tracks, or all the active tracks are pausing ones,
+        // so that the last pregain will be adopted and zero volume level will not be sent in the 2 cases above.
+        if (mMixerStatusIgnoringFastTracks == MIXER_TRACKS_READY) {
+            bool hasActiveTrack = false;
+            for (const sp<Track> &track : mActiveTracks) {
+                if (track->mState == TrackBase::ACTIVE) {
+                    hasActiveTrack = true;
+                    break;
+                }
+            }
+            if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) && mOutput != NULL){
+                EffectDapController::instance()->updatePregain(mType, mId, mOutput->flags, max_vol, hasActiveTrack);
+            }
+        }
+    }
+    // MIUI END
+
     return mixerStatus;
 }
 
@@ -6164,6 +6553,10 @@ void AudioFlinger::DirectOutputThread::processVolume_l(Track *track, bool lastTr
         const float v = mMasterVolume * typeVolume * shaperVolume;
 
         gain_minifloat_packed_t vlr = proxy->getVolumeLR();
+        //MIUI ADD: start MIPERF_PRELOAD_MUTE
+        if (AudioFlingerStub::shouldMutedProcess(track->uid()))
+            vlr = 0;
+        //MIUI ADD: end
         left = float_from_gain(gain_minifloat_unpack_left(vlr));
         if (left > GAIN_FLOAT_UNITY) {
             left = GAIN_FLOAT_UNITY;
@@ -6192,6 +6585,14 @@ void AudioFlinger::DirectOutputThread::processVolume_l(Track *track, bool lastTr
                 uint32_t vr = (uint32_t)(right * (1 << 24));
                 // Direct/Offload effect chains set output volume in setVolume_l().
                 (void)mEffectChains[0]->setVolume_l(&vl, &vr);
+                // MIUI ADD: DOLBY_ENABLE
+                if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) &&
+                    mOutput != NULL &&
+                    !EffectDapController::instance()->bypassTrack(track)) {
+                    // Update the volume set for the current thread
+                    EffectDapController::instance()->updatePregain(mType, mId, mOutput->flags, max(vl, vr), true);
+                }
+                // MIUI END
             } else {
                 // otherwise we directly set the volume.
                 setVolumeForOutput_l(left, right);
@@ -6818,7 +7219,9 @@ void AudioFlinger::OffloadThread::threadLoop_exit()
         threadLoop_drain();
     }
     if (mUseAsyncWrite) {
+#if LOG_NDEBUG_ASSERT
         ALOG_ASSERT(mCallbackThread != 0);
+#endif
         mCallbackThread->exit();
     }
     PlaybackThread::threadLoop_exit();
@@ -7273,7 +7676,7 @@ void AudioFlinger::DuplicatingThread::addOutputTrack(MixerThread *thread)
     // Adjust for thread->sampleRate() to determine minimum buffer frame count.
     // Then triple buffer because Threads do not run synchronously and may not be clock locked.
     const size_t frameCount =
-            3 * sourceFramesNeeded(mSampleRate, thread->frameCount(), thread->sampleRate());
+            6 * sourceFramesNeeded(mSampleRate, thread->frameCount(), thread->sampleRate());
     // TODO: Consider asynchronous sample rate conversion to handle clock disparity
     // from different OutputTracks and their associated MixerThreads (e.g. one may
     // nearly empty and the other may be dropping data).
@@ -7497,13 +7900,15 @@ AudioFlinger::RecordThread::RecordThread(const sp<AudioFlinger>& audioFlinger,
     mInputSource = new AudioStreamInSource(input->stream);
     size_t numCounterOffers = 0;
     const NBAIO_Format offers[1] = {Format_from_SR_C(mSampleRate, mChannelCount, mFormat)};
-#if !LOG_NDEBUG
+#if !LOG_NDEBUG && LOG_NDEBUG_ASSERT
     ssize_t index =
 #else
     (void)
 #endif
             mInputSource->negotiate(offers, 1, NULL, numCounterOffers);
+#if LOG_NDEBUG_ASSERT
     ALOG_ASSERT(index == 0);
+#endif
 
     // initialize fast capture depending on configuration
     bool initFastCapture;
@@ -7549,12 +7954,16 @@ AudioFlinger::RecordThread::RecordThread(const sp<AudioFlinger>& audioFlinger,
         const NBAIO_Format offers[1] = {format};
         size_t numCounterOffers = 0;
         ssize_t index = pipe->negotiate(offers, 1, NULL, numCounterOffers);
+#if LOG_NDEBUG_ASSERT
         ALOG_ASSERT(index == 0);
+#endif
         mPipeSink = pipe;
         PipeReader *pipeReader = new PipeReader(*pipe);
         numCounterOffers = 0;
         index = pipeReader->negotiate(offers, 1, NULL, numCounterOffers);
+#if LOG_NDEBUG_ASSERT
         ALOG_ASSERT(index == 0);
+#endif
         mPipeSource = pipeReader;
         mPipeFramesP2 = pipeFramesP2;
         mPipeMemory = pipeMemory;
@@ -7626,6 +8035,9 @@ AudioFlinger::RecordThread::~RecordThread()
     mAudioFlinger->unregisterWriter(mFastCaptureNBLogWriter);
     mAudioFlinger->unregisterWriter(mNBLogWriter);
     free(mRsmpInBuffer);
+    //MIUI ADD: start MIAUDIO_MAGICVOICE
+    AudioFlingerStub::YouMeMagicVoice(mYouMeMagicVoiceChanger);
+    //MIUI ADD: end
 }
 
 void AudioFlinger::RecordThread::onFirstRef()
@@ -7704,6 +8116,9 @@ reacquire_wakelock:
                 standbyIfNotAlreadyInStandby();
                 // exitPending() can't become true here
                 releaseWakeLock_l();
+                //MIUI ADD: start MIAUDIO_MAGICVOICE
+                AudioFlingerStub::stopYouMeMagicVoice(mYouMeMagicVoiceChanger);
+                //MIUI ADD: end
                 ALOGV("RecordThread: loop stopping");
                 // go to sleep
                 mWaitWorkCV.wait(mLock);
@@ -7718,7 +8133,9 @@ reacquire_wakelock:
                 activeTrack = mActiveTracks[i];
                 if (activeTrack->isTerminated()) {
                     if (activeTrack->isFastTrack()) {
+#if LOG_NDEBUG_ASSERT
                         ALOG_ASSERT(fastTrackToRemove == 0);
+#endif
                         fastTrackToRemove = activeTrack;
                     }
                     removeTrack_l(activeTrack);
@@ -7767,8 +8184,10 @@ reacquire_wakelock:
                 }
 
                 if (activeTrack->isFastTrack()) {
+#if LOG_NDEBUG_ASSERT
                     ALOG_ASSERT(!mFastTrackAvail);
                     ALOG_ASSERT(fastTrack == 0);
+#endif
                     // if the active fast track is silenced either:
                     // 1) silence the whole capture from fast capture buffer if this is
                     //    the only active track
@@ -7790,7 +8209,9 @@ reacquire_wakelock:
                     }
                     if (invalidate) {
                         activeTrack->invalidate();
+#if LOG_NDEBUG_ASSERT
                         ALOG_ASSERT(fastTrackToRemove == 0);
+#endif
                         fastTrackToRemove = activeTrack;
                         removeTrack_l(activeTrack);
                         mActiveTracks.remove(activeTrack);
@@ -7915,6 +8336,11 @@ reacquire_wakelock:
                 ALOGW_IF(retries > 0, "overrun on read from pipe, retry #%d", retries);
                 framesRead = mPipeSource->read((uint8_t*)mRsmpInBuffer + rear * mFrameSize,
                         framesToRead);
+              //MIUI ADD; start MIAUDIO_DUMP_PCM
+                AudioFlingerStub::dumpAudioFlingerDataToFile((uint8_t *)mRsmpInBuffer + rear * mFrameSize,
+                    framesToRead * mFrameSize, mFormat, mSampleRate, mChannelCount, "record_pipesource");
+              //MIUI ADD: end
+
                 if (framesRead != OVERRUN) break;
             }
 
@@ -7949,6 +8375,11 @@ reacquire_wakelock:
             }
         // otherwise use the HAL / AudioStreamIn directly
         } else {
+          //MIUI ADD: start MIAUDIO_DUMP_PCM
+            AudioFlingerStub::dumpAudioFlingerDataToFile((uint8_t *)mRsmpInBuffer + rear * mFrameSize,
+                mBufferSize, mFormat, mSampleRate, mChannelCount, "record");
+          //MIUI ADD: end
+
             ATRACE_BEGIN("read");
             size_t bytesRead;
             status_t result = mSource->read(
@@ -8025,7 +8456,9 @@ reacquire_wakelock:
         if (framesRead <= 0) {
             goto unlock;
         }
+#if LOG_NDEBUG_ASSERT
         ALOG_ASSERT(framesRead > 0);
+#endif
         mFramesRead += framesRead;
 
 #ifdef TEE_SINK
@@ -8115,6 +8548,13 @@ reacquire_wakelock:
                             activeTrack->mResamplerBufferProvider,
                             framesOut);
                 }
+
+                //MIUI ADD: start MIAUDIO_VOICE_CHANGE
+                bool ret = AudioFlingerStub::voiceProcess(activeTrack, framesOut, mFrameSize,
+                                    mSampleRate, mChannelCount, mYouMeMagicVoiceChanger, VocoderStereo);
+                if (!ret)
+                   ALOGE("voiceProcess() failed");
+                //MIUI ADD: end
 
                 if (framesOut > 0 && (overrun == OVERRUN_UNKNOWN)) {
                     overrun = OVERRUN_FALSE;
@@ -8219,6 +8659,13 @@ unlock:
     }
 
     releaseWakeLock();
+
+    //MIUI ADD: start MIAUDIO_VOICE_CHANGE
+    AudioFlingerStub::deleteVocoderStereo(VocoderStereo);
+    //MIUI ADD: end
+    //MIUI ADD: start MIAUDIO_MAGICVOICE
+    AudioFlingerStub::YouMeMagicVoice(mYouMeMagicVoiceChanger);
+    //MIUI ADD: end
 
     ALOGV("RecordThread %p exiting", this);
     return false;
@@ -8785,7 +9232,9 @@ void AudioFlinger::RecordThread::removeTrack_l(const sp<RecordTrack>& track)
     mTracks.remove(track);
     // need anything related to effects here?
     if (track->isFastTrack()) {
+#if LOG_NDEBUG_ASSERT
         ALOG_ASSERT(!mFastTrackAvail);
+#endif
         mFastTrackAvail = true;
     }
 }
@@ -8862,12 +9311,22 @@ void AudioFlinger::RecordThread::dumpTracks_l(int fd, const Vector<String16>& ar
     write(fd, result.string(), result.size());
 }
 
-void AudioFlinger::RecordThread::setRecordSilenced(audio_port_handle_t portId, bool silenced)
+void AudioFlinger::RecordThread::setRecordSilenced(audio_port_handle_t portId, audio_app_type_f appType, bool silenced)
 {
+    if ((appType & (APP_TYPE_RECORD_UNSILENCE |
+             APP_TYPE_XIAOMI_SCREENRECORDER | APP_TYPE_KARAOKE | APP_TYPE_CAR)) && silenced) {
+        ALOGD("audio record silence: ignore for appType = %d", appType);
+        silenced = false;
+    }
+
     Mutex::Autolock _l(mLock);
     for (size_t i = 0; i < mTracks.size() ; i++) {
         sp<RecordTrack> track = mTracks[i];
         if (track != 0 && track->portId() == portId) {
+            if (silenced) {
+                ALOGD("setRecordSilenced(general), portId:%d, appType:%d, silenced %d", portId, appType, silenced);
+                mLocalLog.log("setRecordSilenced(general), portId:%d, appType:%d, silenced %d", portId, appType, silenced);
+            }
             track->setSilenced(silenced);
         }
     }
@@ -8954,7 +9413,9 @@ status_t AudioFlinger::RecordThread::ResamplerBufferProvider::getNextBuffer(
         part1 = filled;
     }
     size_t ask = buffer->frameCount;
+#if LOG_NDEBUG_ASSERT
     ALOG_ASSERT(ask > 0);
+#endif
     if (part1 > ask) {
         part1 = ask;
     }
@@ -8980,7 +9441,9 @@ void AudioFlinger::RecordThread::ResamplerBufferProvider::releaseBuffer(
     if (stepCount == 0) {
         return;
     }
+#if LOG_NDEBUG_ASSERT
     ALOG_ASSERT(stepCount <= mRsmpInUnrel);
+#endif
     mRsmpInUnrel -= stepCount;
     mRsmpInFront = audio_utils::safe_add_overflow(mRsmpInFront, stepCount);
     buffer->raw = NULL;
@@ -9029,6 +9492,13 @@ bool AudioFlinger::RecordThread::checkForNewParameter_l(const String8& keyValueP
     // TODO Investigate when this code runs. Check with audio policy when a sample rate and
     //      channel count change can be requested. Do we mandate the first client defines the
     //      HAL sampling rate and channel count or do we allow changes on the fly?
+
+    //MIUI ADD: start MIAUDIO_VOICE_CHANGE
+    if (keyValuePair.length() > 0)
+        AudioFlingerStub::checkForGameParameter_l(keyValuePair, mTracks,
+            mSampleRate, mChannelCount,mYouMeMagicVoiceChanger, VocoderStereo);
+    //MIUI ADD: end
+
     if (param.getInt(String8(AudioParameter::keySamplingRate), value) == NO_ERROR) {
         samplingRate = value;
         reconfig = true;
@@ -10592,11 +11062,20 @@ void AudioFlinger::MmapCaptureThread::updateMetadata_l()
     mInput->stream->updateSinkMetadata(metadata);
 }
 
-void AudioFlinger::MmapCaptureThread::setRecordSilenced(audio_port_handle_t portId, bool silenced)
+void AudioFlinger::MmapCaptureThread::setRecordSilenced(audio_port_handle_t portId, audio_app_type_f appType, bool silenced)
 {
     Mutex::Autolock _l(mLock);
+    if ((appType & APP_TYPE_RECORD_UNSILENCE) && silenced) {
+        ALOGD("audio record silence: ignore for appType = %d", appType);
+        silenced = false;
+    }
+
     for (size_t i = 0; i < mActiveTracks.size() ; i++) {
         if (mActiveTracks[i]->portId() == portId) {
+            if (silenced) {
+                ALOGD("setRecordSilenced(mmap), portId:%d, appType:%d silenced %d", portId, appType, silenced);
+                mLocalLog.log("setRecordSilenced(mmap), portId:%d, appType:%d silenced %d", portId, appType, silenced);
+            }
             mActiveTracks[i]->setSilenced_l(silenced);
             broadcast_l();
         }

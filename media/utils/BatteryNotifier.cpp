@@ -41,6 +41,12 @@ BatteryNotifier::~BatteryNotifier() {
 void BatteryNotifier::noteStartVideo(uid_t uid) {
     Mutex::Autolock _l(mLock);
     sp<IBatteryStats> batteryService = getBatteryService_l();
+    //MIUI ADD START
+    if (uid>>30 == 1 && batteryService != nullptr) {
+        batteryService->noteStartVideo(uid);
+        return;
+    }
+    //END
     if (mVideoRefCounts[uid] == 0 && batteryService != nullptr) {
         batteryService->noteStartVideo(uid);
     }
@@ -55,7 +61,12 @@ void BatteryNotifier::noteStopVideo(uid_t uid) {
     }
 
     sp<IBatteryStats> batteryService = getBatteryService_l();
-
+    //MIUI ADD START
+    if (uid>>30 == 1 && batteryService != nullptr) {
+        batteryService->noteStartVideo(uid);
+        return;
+    }
+    //END
     mVideoRefCounts[uid]--;
     if (mVideoRefCounts[uid] == 0) {
         if (batteryService != nullptr) {

@@ -35,6 +35,8 @@ using namespace android::audio_utils;
 #define ICM_LOG_DRIFT   0
 #endif // ICM_LOG_DRIFT
 
+int32_t kSuddenDriftNanos = 5000000; //5msec
+
 // To enable the timestamp histogram, enter this before opening the stream:
 //    adb root
 //    adb shell setprop aaudio.log_mask 1
@@ -141,6 +143,11 @@ void IsochronousClockModel::processTimestamp(int64_t framePosition, int64_t nano
             ALOGD("%s() - STATE_RUNNING - #%d, %4d micros EARLY",
                 __func__, mTimestampCount, earlyDeltaMicros);
 #endif
+        } else if (latenessNanos > kSuddenDriftNanos) {
+            // if drift is >5msecs, then correct drift by giving the dsp position instead of1usecs correction below
+            // so that next write will be delayed avoiding overwrite of read/write buffers
+            ALOGD("lateness > 5msecs, value in micros is=%d",(int) (latenessNanos / 1000));
+            setPositionAndTime(framePosition, nanoTime);
         } else if (latenessNanos > mLatenessForDriftNanos) {
             // When we are on the late side, it may be because of preemption in the kernel,
             // or timing jitter caused by resampling in the DSP,

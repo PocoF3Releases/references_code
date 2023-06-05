@@ -434,6 +434,10 @@ status_t SoftAACEncoder2::setAudioParams() {
         ALOGE("Failed to set AAC encoder parameters");
         return UNKNOWN_ERROR;
     }
+    if (AACENC_OK != aacEncoder_SetParam(mAACEncoder, AACENC_BANDWIDTH, 20000)) {
+        ALOGE("Failed to set AAC encoder parameters");
+        return UNKNOWN_ERROR;
+    }
     if (AACENC_OK != aacEncoder_SetParam(mAACEncoder, AACENC_BITRATE, mBitRate)) {
         ALOGE("Failed to set AAC encoder parameters");
         return UNKNOWN_ERROR;

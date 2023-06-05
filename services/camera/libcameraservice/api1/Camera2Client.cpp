@@ -44,7 +44,9 @@
 #ifndef FALLTHROUGH_INTENDED
 #define FALLTHROUGH_INTENDED [[fallthrough]]
 #endif
-
+#ifdef __XIAOMI_CAMERA__
+#include "xm/CameraStub.h"
+#endif
 namespace android {
 using namespace camera2;
 
@@ -76,6 +78,9 @@ Camera2Client::Camera2Client(const sp<CameraService>& cameraService,
 
     SharedParameters::Lock l(mParameters);
     l.mParameters.state = Parameters::DISCONNECTED;
+#ifdef __XIAOMI_CAMERA__
+    CameraStub::setClientPackageName(mClientPackageName, 1 /*api1*/);
+#endif
 }
 
 status_t Camera2Client::initialize(sp<CameraProviderManager> manager, const String8& monitorTags) {

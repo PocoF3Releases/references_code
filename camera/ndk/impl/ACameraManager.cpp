@@ -645,6 +645,11 @@ ACameraManager::getCameraIdList(ACameraIdList** cameraIdList) {
         ALOGE("Allocate memory for ACameraIdList failed!");
         return ACAMERA_ERROR_NOT_ENOUGH_MEMORY;
     }
+#ifdef __XIAOMI_CAMERA__
+    //do not exposure aux camea to third party app.
+    numCameras = numCameras > 2 ? 2 : numCameras;
+    ALOGI("%d@%s available number of camera is %d. ", __LINE__, __func__, numCameras);
+#endif
     out->numCameras = numCameras;
     out->cameraIds = new const char*[numCameras];
     if (!out->cameraIds) {

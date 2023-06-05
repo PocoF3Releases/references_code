@@ -35,6 +35,10 @@
 #include "device3/Camera3OutputStreamInterface.h"
 #include "utils/SessionStatsBuilder.h"
 #include "utils/TagMonitor.h"
+#ifdef __XIAOMI_CAMERA__
+#include "xm/IPrivacyCamera.h"
+#endif
+
 
 namespace android {
 
@@ -58,7 +62,11 @@ namespace camera3 {
             // Used to send buffer error callback when failing to return buffer
             const CaptureResultExtras &resultExtras = CaptureResultExtras{},
             ERROR_BUF_STRATEGY errorBufStrategy = ERROR_BUF_RETURN,
-            int32_t transform = -1);
+            int32_t transform = -1
+#ifdef __XIAOMI_CAMERA__
+            , IPrivacyCamera *privacyCamera = nullptr
+#endif
+            );
 
     // helper function to return the output buffers to output streams, and
     // remove the returned buffers from the inflight request's pending buffers
@@ -66,7 +74,12 @@ namespace camera3 {
     void returnAndRemovePendingOutputBuffers(
             bool useHalBufManager,
             sp<NotificationListener> listener, // Only needed when outputSurfaces is not empty
-            InFlightRequest& request, SessionStatsBuilder& sessionStatsBuilder);
+            InFlightRequest& request, SessionStatsBuilder& sessionStatsBuilder
+#ifdef __XIAOMI_CAMERA__
+            , IPrivacyCamera *privacyCamera = nullptr
+#endif
+            );
+
 
     // Camera3Device/Camera3OfflineSession internal states used in notify/processCaptureResult
     // callbacks
@@ -106,6 +119,10 @@ namespace camera3 {
         BufferRecordsInterface& bufferRecordsIntf;
         bool legacyClient;
         nsecs_t& minFrameDuration;
+#ifdef __XIAOMI_CAMERA__
+        IPrivacyCamera *privacyCamera = nullptr;
+        const bool enableJank = false;
+#endif
     };
 
     void processCaptureResult(CaptureOutputStates& states, const camera_capture_result *result);
@@ -143,6 +160,9 @@ namespace camera3 {
     };
 
     void flushInflightRequests(FlushInflightReqStates& states);
+#ifdef __XIAOMI_CAMERA__
+    void removeInFlightRequestIfReadyLocked(CaptureOutputStates& states, int idx);
+#endif
 } // namespace camera3
 
 } // namespace android

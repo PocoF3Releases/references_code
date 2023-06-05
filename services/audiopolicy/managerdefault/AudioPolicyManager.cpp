@@ -29,6 +29,7 @@
 #define ALOGVV(a...) do { } while(0)
 #endif
 
+#define AUDIO_FORMAT_FORCE_AOSP ((audio_format_t)0x7F000000u)
 #include <algorithm>
 #include <inttypes.h>
 #include <map>
@@ -51,6 +52,15 @@
 
 #include "AudioPolicyManager.h"
 #include "TypeConverter.h"
+
+#include <binder/PermissionController.h>
+#include <binder/IPCThreadState.h>
+
+//MIUI ADD: start MIAUDIO_NOTIFICATION_FILTER
+#include "AudioPolicyManagerStub.h"
+//MIUI ADD: end
+
+#include "CloudCtrlFwk.h"
 
 namespace android {
 
@@ -80,6 +90,8 @@ static const std::vector<audio_channel_mask_t> msdSurroundChannelMasksOrder = {{
         AUDIO_CHANNEL_OUT_3POINT1POINT2, AUDIO_CHANNEL_OUT_3POINT0POINT2,
         AUDIO_CHANNEL_OUT_2POINT1POINT2, AUDIO_CHANNEL_OUT_2POINT0POINT2,
         AUDIO_CHANNEL_OUT_5POINT1, AUDIO_CHANNEL_OUT_STEREO }};
+
+static const bool mAudioInputNotReuse = property_get_bool("ro.audio.input_not_reuse", false);
 
 static constexpr unsigned int kWmaStandardFrequencies = 7;
 static constexpr unsigned int kWmaStandardChannels = 2;
@@ -285,9 +297,6 @@ status_t AudioPolicyManager::setDeviceConnectionStateInt(const sp<DeviceDescript
 
             checkOutputsForDevice(device, state, outputs);
 
-            // Reset active device codec
-            device->setEncodedFormat(AUDIO_FORMAT_DEFAULT);
-
             // remove device from mReportedFormatsMap cache
             mReportedFormatsMap.erase(device);
 
@@ -392,6 +401,8 @@ status_t AudioPolicyManager::setDeviceConnectionStateInt(const sp<DeviceDescript
         }
 
         if (state == AUDIO_POLICY_DEVICE_STATE_UNAVAILABLE) {
+            // Reset active device codec
+            device->setEncodedFormat(AUDIO_FORMAT_DEFAULT);
             cleanUpForDevice(device);
         }
 
@@ -926,10 +937,12 @@ void AudioPolicyManager::setPhoneState(audio_mode_t state)
             setStrategyMute(musicStrategy, false, desc, MUTE_TIME_MS,
                 mEngine->getOutputDevicesForAttributes(attributes_initializer(AUDIO_USAGE_MEDIA),
                                                        nullptr, true /*fromCache*/).types());
-            setStrategyMute(sonificationStrategy, true, desc);
-            setStrategyMute(sonificationStrategy, false, desc, MUTE_TIME_MS,
-                mEngine->getOutputDevicesForAttributes(attributes_initializer(AUDIO_USAGE_ALARM),
+            if(!AudioPolicyManagerStub::get_special_region()) {
+                setStrategyMute(sonificationStrategy, true, desc);
+                setStrategyMute(sonificationStrategy, false, desc, MUTE_TIME_MS,
+                    mEngine->getOutputDevicesForAttributes(attributes_initializer(AUDIO_USAGE_ALARM),
                                                        nullptr, true /*fromCache*/).types());
+            }
         }
     }
 
@@ -991,8 +1004,15 @@ void AudioPolicyManager::setForceUse(audio_policy_force_use_t usage,
         ALOGW("setForceUse() could not set force cfg %d for usage %d", config, usage);
         return;
     }
+
+    if(usage == AUDIO_POLICY_FORCE_FOR_LOOPBACK)
+        mEnableAudioLoopback = (config == AUDIO_POLICY_FORCE_SPEAKER);
+
     bool forceVolumeReeval = (usage == AUDIO_POLICY_FORCE_FOR_COMMUNICATION) ||
             (usage == AUDIO_POLICY_FORCE_FOR_DOCK) ||
+//MIUI ADD: start MIAUDIO_FORCE_EARPIECE
+            (usage == AUDIO_POLICY_FORCE_FOR_LB_TEST) ||
+//MIUI ADD: end
             (usage == AUDIO_POLICY_FORCE_FOR_SYSTEM);
 
     // check for device and output changes triggered by new force usage
@@ -1001,7 +1021,8 @@ void AudioPolicyManager::setForceUse(audio_policy_force_use_t usage,
     // force client reconnection to reevaluate flag AUDIO_FLAG_AUDIBILITY_ENFORCED
     if (usage == AUDIO_POLICY_FORCE_FOR_SYSTEM) {
         mpClientInterface->invalidateStream(AUDIO_STREAM_SYSTEM);
-        mpClientInterface->invalidateStream(AUDIO_STREAM_ENFORCED_AUDIBLE);
+        if (0 != property_get_int32("service.bootanim.exit", 0))
+            mpClientInterface->invalidateStream(AUDIO_STREAM_ENFORCED_AUDIBLE);
     }
 
     //FIXME: workaround for truncated touch sounds
@@ -1069,7 +1090,10 @@ audio_output_flags_t AudioPolicyManager::getRelevantFlags (
          // if explicitly requested
          static const uint32_t kRelevantFlags =
                 (AUDIO_OUTPUT_FLAG_HW_AV_SYNC | AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD |
-                AUDIO_OUTPUT_FLAG_VOIP_RX | AUDIO_OUTPUT_FLAG_MMAP_NOIRQ);
+                AUDIO_OUTPUT_FLAG_VOIP_RX | AUDIO_OUTPUT_FLAG_MMAP_NOIRQ
+//MIUI ADD: start MIAUDIO_VEHICLE_VOIP_RX
+                 | AUDIO_OUTPUT_FLAG_CAR_VOIP_RX);
+//MIUI ADD: end
          flags = (audio_output_flags_t)((flags & kRelevantFlags) | AUDIO_OUTPUT_FLAG_DIRECT);
     }
     return flags;
@@ -1086,6 +1110,13 @@ sp<IOProfile> AudioPolicyManager::searchCompatibleProfileHwModules (
     sp<IOProfile> profile;
     for (const auto& hwModule : hwModules) {
         for (const auto& curProfile : hwModule->getOutputProfiles()) {
+            //MIUI ADD: start MIAUDIO_VEHICLE_VOIP_RX
+             if ((flags & AUDIO_OUTPUT_FLAG_CAR_VOIP_RX) !=0 && (curProfile->getFlags() & AUDIO_OUTPUT_FLAG_CAR_VOIP_RX) != 0) {
+                ALOGD("%s: pick profile %s", __func__, curProfile->getTagName().c_str());
+                profile = curProfile;
+                break;
+             }
+             //MIUI ADD:end
              if (!curProfile->isCompatibleProfile(devices,
                      samplingRate, NULL /*updatedSamplingRate*/,
                      format, NULL /*updatedFormat*/,
@@ -1107,7 +1138,7 @@ sp<IOProfile> AudioPolicyManager::searchCompatibleProfileHwModules (
 
              // when searching for direct outputs, if several profiles are compatible, give priority
              // to one with offload capability
-             if (profile != 0 && 
+             if (profile != 0 &&
                  ((curProfile->getFlags() & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) == 0)) {
                 continue;
              }
@@ -1194,6 +1225,12 @@ status_t AudioPolicyManager::getAudioAttributes(audio_attributes_t *dstAttr,
         *dstAttr = mEngine->getAttributesForStreamType(srcStream);
     }
 
+    //MIUI add start
+    //when bootanimation is not completed, we don't check the AUDIO_POLICY_FORCE_SYSTEM_ENFORCED forceuse.
+    if(0 == property_get_int32("service.bootanim.exit", 0))
+        return NO_ERROR;
+    //MIUI add end
+
     // Only honor audibility enforced when required. The client will be
     // forced to reconnect if the forced usage changes.
     if (mEngine->getForceUse(AUDIO_POLICY_FORCE_FOR_SYSTEM) != AUDIO_POLICY_FORCE_SYSTEM_ENFORCED) {
@@ -1237,8 +1274,24 @@ status_t AudioPolicyManager::getOutputForAttrInt(
     }
     *stream = mEngine->getStreamTypeForAttributes(*resultAttr);
 
-    ALOGV("%s() attributes=%s stream=%s session %d selectedDeviceId %d", __func__,
-          toString(*resultAttr).c_str(), toString(*stream).c_str(), session, requestedPortId);
+    ALOGD("%s()+ attributes=%s stream=%s session %d output %d selectedDeviceId %d device %s sampling rate %d format %#x"
+        "channel mask %#x flags %#x stream %s uid %d",
+             __func__, toString(*resultAttr).c_str(), toString(*stream).c_str(), session, *output,
+                    requestedPortId, outputDevices.toString().c_str(), config->sample_rate, config->format,
+                            config->channel_mask, *flags, toString(*stream).c_str(), uid);
+    playLocalLog->log("%s()+ attributes=%s stream=%s session %d output %d selectedDeviceId %d device %s sampling rate %d"
+            "format %#x channel mask %#x flags %#x stream %s uid %d",
+             __func__, toString(*resultAttr).c_str(), toString(*stream).c_str(), session, *output,
+                    requestedPortId, outputDevices.toString().c_str(), config->sample_rate, config->format,
+                            config->channel_mask, *flags, toString(*stream).c_str(), uid);
+
+    if(AudioPolicyManagerStub::get_special_region()) {
+        if (mEngine->getPhoneState() == AUDIO_MODE_IN_CALL &&
+            (attr->usage == AUDIO_USAGE_VOICE_COMMUNICATION) &&
+            (attr->content_type == AUDIO_CONTENT_TYPE_SONIFICATION)) {
+                *stream = AUDIO_STREAM_NOTIFICATION;
+        }
+    }
 
     // The primary output is the explicit routing (eg. setPreferredDevice) if specified,
     //       otherwise, fallback to the dynamic policies, if none match, query the engine.
@@ -1298,6 +1351,17 @@ status_t AudioPolicyManager::getOutputForAttrInt(
         ALOGW("getOutputForAttr() no policy mix found for usage AUDIO_USAGE_VIRTUAL_SOURCE");
         return BAD_VALUE;
     }
+//MIUI ADD: start MIAUDIO_MULTI_ROUTE
+    int multiRoutesState = 0;
+    multiRoutesState = AudioPolicyManagerStub::multiRouteGetOutputForAttrInt(
+        resultAttr, output, mAvailableOutputDevices, flags, selectedDeviceId,
+        session, stream, config, uid, outputType, outputDevices, this, mEngine,
+        mMultiRoutes);
+    if (multiRoutesState != NOT_MULTI_ROUTES_UID &&
+        multiRoutesState != HW_NOT_SUPPORT) {
+        return multiRoutesState;
+    }
+//MIUI ADD: end
     // explicit routing managed by getDeviceForStrategy in APM is now handled by engine
     // in order to let the choice of the order to future vendor engine
     outputDevices = mEngine->getOutputDevicesForAttributes(*resultAttr, requestedDevice, false);
@@ -1305,6 +1369,13 @@ status_t AudioPolicyManager::getOutputForAttrInt(
     if ((resultAttr->flags & AUDIO_FLAG_HW_AV_SYNC) != 0) {
         *flags = (audio_output_flags_t)(*flags | AUDIO_OUTPUT_FLAG_HW_AV_SYNC);
     }
+
+    //MIUI ADD: start MIAUDIO_VEHICLE_VOIP_RX
+    if ((resultAttr->flags & AUDIO_OUTPUT_FLAG_CAR_VOIP_RX) != 0) {
+        ALOGD("getOutputForAttr() set car display flag");
+        *flags = (audio_output_flags_t)(AUDIO_OUTPUT_FLAG_CAR_VOIP_RX | AUDIO_OUTPUT_FLAG_DIRECT);
+    }
+   //MIUI ADD: end
 
     // Set incall music only if device was explicitly set, and fallback to the device which is
     // chosen by the engine if not.
@@ -1321,13 +1392,13 @@ status_t AudioPolicyManager::getOutputForAttrInt(
         }
     }
 
-    ALOGV("%s() device %s, sampling rate %d, format %#x, channel mask %#x, flags %#x stream %s",
+    ALOGD("%s() device %s, sampling rate %d, format %#x, channel mask %#x, flags %#x stream %s",
           __func__, outputDevices.toString().c_str(), config->sample_rate, config->format,
           config->channel_mask, *flags, toString(*stream).c_str());
 
     *output = AUDIO_IO_HANDLE_NONE;
     if (!msdDevices.isEmpty()) {
-        *output = getOutputForDevices(msdDevices, session, resultAttr, config, flags, isSpatialized);
+        *output = getOutputForDevices(msdDevices, session, attr, config, flags, isSpatialized);
         if (*output != AUDIO_IO_HANDLE_NONE && setMsdOutputPatches(&outputDevices) == NO_ERROR) {
             ALOGV("%s() Using MSD devices %s instead of devices %s",
                   __func__, msdDevices.toString().c_str(), outputDevices.toString().c_str());
@@ -1357,7 +1428,16 @@ status_t AudioPolicyManager::getOutputForAttrInt(
         *outputType = API_OUTPUT_LEGACY;
     }
 
-    ALOGV("%s returns output %d selectedDeviceId %d", __func__, *output, *selectedDeviceId);
+    ALOGD("%s()- attributes=%s stream=%s session %d output %d selectedDeviceId %d device %s sampling rate %d format %#x"
+        "channel mask %#x flags %#x stream %s uid %d",
+             __func__, toString(*resultAttr).c_str(), toString(*stream).c_str(), session, *output,
+                    requestedPortId, outputDevices.toString().c_str(), config->sample_rate, config->format,
+                            config->channel_mask, *flags, toString(*stream).c_str(), uid);
+    playLocalLog->log("%s()- attributes=%s stream=%s session %d output %d selectedDeviceId %d device %s sampling rate %d"
+            "format %#x channel mask %#x flags %#x stream %s uid %d",
+             __func__, toString(*resultAttr).c_str(), toString(*stream).c_str(), session, *output,
+                    requestedPortId, outputDevices.toString().c_str(), config->sample_rate, config->format,
+                            config->channel_mask, *flags, toString(*stream).c_str(), uid);
 
     return NO_ERROR;
 }
@@ -1417,6 +1497,9 @@ status_t AudioPolicyManager::getOutputForAttr(const audio_attributes_t *attr,
       requestedDevice != nullptr ? requestedPortId : AUDIO_PORT_HANDLE_NONE;
     *selectedDeviceId = sanitizedRequestedPortId;
 
+    callingAppName = getPackageName(uid);
+    audio_app_type_f appType = getAppMaskByName(callingAppName);
+
     audio_config_t directConfig = *config;
     checkAndUpdateOffloadInfoForDirectTracks(attr, stream, &directConfig, flags);
 
@@ -1455,7 +1538,17 @@ status_t AudioPolicyManager::getOutputForAttr(const audio_attributes_t *attr,
                                   outputDesc->mPolicyMix);
     outputDesc->addClient(clientDesc);
 
-    ALOGV("%s() returns output %d requestedPortId %d selectedDeviceId %d for port ID %d", __func__,
+    clientDesc->setAppName(String8(callingAppName));
+    outputDesc->setAppMask(appType); //output
+    clientDesc->setAppMask(appType); //output
+
+    if ((attr->content_type == AUDIO_CONTENT_TYPE_SONIFICATION) &&
+        (attr->usage == AUDIO_USAGE_NOTIFICATION_TELEPHONY_RINGTONE) &&
+        (*stream == AUDIO_STREAM_RING)) {
+        mpClientInterface->setParameters(outputDesc->mIoHandle, String8("output_for_sing"));
+    }
+
+    ALOGD("%s() returns output %d requestedPortId %d selectedDeviceId %d for port ID %d", __func__,
           *output, requestedPortId, *selectedDeviceId, *portId);
 
     return NO_ERROR;
@@ -1486,8 +1579,9 @@ status_t AudioPolicyManager::openDirectOutput(audio_stream_type_t stream,
     // This may prevent offloading in rare situations where effects are left active by apps
     // in the background.
     sp<IOProfile> profile;
-    if (((flags & (AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD | AUDIO_OUTPUT_FLAG_DIRECT)) == 0) ||
+    if (((flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) == 0) ||
             !(mEffects.isNonOffloadableEffectEnabled() || mMasterMono)) {
+        ALOGV("%s get profile for (stream:%d, flags:%x)", __func__, stream, flags);
         profile = getProfileForOutput(
                 devices, config->sample_rate, config->format, config->channel_mask,
                 flags, true /* directOnly */);
@@ -1496,13 +1590,13 @@ status_t AudioPolicyManager::openDirectOutput(audio_stream_type_t stream,
     if (profile == nullptr) {
         return NAME_NOT_FOUND;
     }
-    if (!(flags & AUDIO_OUTPUT_FLAG_DIRECT) &&
-         (profile->getFlags() & AUDIO_OUTPUT_FLAG_DIRECT)) {
-        ALOGI("%s rejecting direct profile as was not requested ", __func__);
-        profile = nullptr;
-        return NAME_NOT_FOUND;
-    }
 
+    if (!(flags & AUDIO_OUTPUT_FLAG_DIRECT) &&
+             (profile->getFlags() & AUDIO_OUTPUT_FLAG_DIRECT)) {
+            ALOGI("got Direct without requesting ... reject ");
+            profile = NULL;
+            return NAME_NOT_FOUND;
+    }
     sp<SwAudioOutputDescriptor> outputDesc = nullptr;
     // check if direct output for pcm/track offload or compress offload already exist
     bool directSessionInUse = false;
@@ -1594,6 +1688,11 @@ status_t AudioPolicyManager::openDirectOutput(audio_stream_type_t stream,
     return NO_ERROR;
 }
 
+static int isCTSMedia(String16 ClientName)
+{
+    return !String16("android.media.player.cts").compare(ClientName);
+}
+
 audio_io_handle_t AudioPolicyManager::getOutputForDevices(
         const DeviceVector &devices,
         audio_session_t session,
@@ -1661,17 +1760,19 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
             property_get_bool("vendor.audio.offload.track.enable", true /* default_value */);
     const bool offloadDisable =
             property_get_bool("audio.offload.disable", false /* default_value */);
-    if (trackDirectPCM && !offloadDisable && stream == AUDIO_STREAM_MUSIC) {
-       if ((*flags == AUDIO_OUTPUT_FLAG_NONE) &&
+    if (trackDirectPCM && !offloadDisable && stream == AUDIO_STREAM_MUSIC && !(isCTSMedia(callingAppName))) {
+        if ((*flags == AUDIO_OUTPUT_FLAG_NONE) &&
             (config->offload_info.usage == AUDIO_USAGE_MEDIA ||
-             config->offload_info.usage == AUDIO_USAGE_GAME)) {
+            config->offload_info.usage == AUDIO_USAGE_GAME)) {
             ALOGV("Force direct flags to use pcm offload, original flags(0x%x)", *flags);
             *flags = AUDIO_OUTPUT_FLAG_DIRECT;
         }
+    } else if (( audio_channel_count_from_out_mask(config->channel_mask) > 2) && stream == AUDIO_STREAM_MUSIC) {
+           ALOGD("Continue to use Direct Flag");
     } else if (audio_is_linear_pcm(config->format) &&
-            *flags == AUDIO_OUTPUT_FLAG_DIRECT) {
-        ALOGV("%s Remove direct flags stream %d,orginal flags %0x", __func__, stream, *flags);
-        *flags = AUDIO_OUTPUT_FLAG_NONE;
+          *flags == AUDIO_OUTPUT_FLAG_DIRECT) {
+          ALOGV("%s Remove direct flags stream %d,orginal flags %0x", __func__, stream, *flags);
+          *flags = AUDIO_OUTPUT_FLAG_NONE;
     }
 
     bool forceDeepBuffer = false;
@@ -1701,7 +1802,7 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
     }
 
     *isSpatialized = false;
-    if (mSpatializerOutput != nullptr
+    if (!mSpatializerReleased && mSpatializerOutput != nullptr
             && canBeSpatializedInt(attr, config, devices.toTypeAddrVector())) {
         *isSpatialized = true;
         return mSpatializerOutput->mIoHandle;
@@ -1980,6 +2081,11 @@ status_t AudioPolicyManager::setMsdOutputPatches(const DeviceVector *outputDevic
     return status;
 }
 
+static int isCTSAudioPro(String16 ClientName)
+{
+    return !String16("org.drrickorang.loopback").compare(ClientName) || !String16("com.android.cts.verifier").compare(ClientName);
+}
+
 void AudioPolicyManager::releaseMsdOutputPatches(const DeviceVector& devices) {
     AudioPatchCollection msdPatches = getMsdOutputPatches();
     for (size_t i = 0; i < msdPatches.size(); i++) {
@@ -1994,6 +2100,38 @@ void AudioPolicyManager::releaseMsdOutputPatches(const DeviceVector& devices) {
         }
     }
 }
+
+//MIUI ADD: start MIAUDIO_INPUT_REUSE
+bool AudioPolicyManager::isReuseInput(uid_t uid, audio_session_t session)
+{
+    struct audio_reuse_input reuseInputInfo;
+    ALOGI("%s() uid %d, session %d", __func__, uid, session);
+    if (mAudioInputNotReuse) {
+        return false;
+    }
+    for (size_t i = 0; i < mInputs.size(); i++) {
+        sp<AudioInputDescriptor> desc = mInputs.valueAt(i);
+        desc->getReuseInputInfo(reuseInputInfo);
+
+        if (uid != 1000){
+            for (size_t i = 0; i < reuseInputInfo.uid_reuse.size(); i++) {
+                ALOGI("%s() uid %d, reuseInputInfo.uid_reuse[%zu] %d",
+                    __func__, uid, i, reuseInputInfo.uid_reuse[i]);
+                if (uid == reuseInputInfo.uid_reuse[i])
+                    return true;
+            }
+        } else {
+            for (size_t i = 0; i < reuseInputInfo.session_reuse.size(); i++) {
+                ALOGI("%s() session %d, reuseInputInfo.session_reuse[%zu] %d",
+                    __func__, session, i, reuseInputInfo.session_reuse[i]);
+                if (session== reuseInputInfo.session_reuse[i])
+                    return true;
+            }
+        }
+    }
+    return false;
+}
+//MIUI ADD: end
 
 bool AudioPolicyManager::msdHasPatchesToAllDevices(const AudioDeviceTypeAddrVector& devices) {
     DeviceVector devicesToCheck = mOutputDevicesAll.getDevicesFromDeviceTypeAddrVec(devices);
@@ -2024,6 +2162,12 @@ audio_io_handle_t AudioPolicyManager::selectOutput(const SortedVector<audio_io_h
                                                    uint32_t samplingRate,
                                                    audio_session_t sessionId)
 {
+    audio_io_handle_t primary_output = 0;
+    bool isKaraoke = getAppMaskByName(callingAppName) & APP_TYPE_KARAOKE ? true : false;
+    bool isCts = getAppMaskByName(callingAppName) & APP_TYPE_CTS_AUDIOPRO ? true : false;
+
+    sp<SwAudioOutputDescriptor> changba;
+
     LOG_ALWAYS_FATAL_IF(!(format == AUDIO_FORMAT_INVALID || audio_is_linear_pcm(format)),
         "%s called with format %#x", __func__, format);
 
@@ -2047,7 +2191,14 @@ audio_io_handle_t AudioPolicyManager::selectOutput(const SortedVector<audio_io_h
     static const audio_output_flags_t kFunctionalFlags = (audio_output_flags_t)
         (AUDIO_OUTPUT_FLAG_VOIP_RX | AUDIO_OUTPUT_FLAG_INCALL_MUSIC |
             AUDIO_OUTPUT_FLAG_TTS | AUDIO_OUTPUT_FLAG_DIRECT_PCM | AUDIO_OUTPUT_FLAG_ULTRASOUND |
-            AUDIO_OUTPUT_FLAG_SPATIALIZER);
+            AUDIO_OUTPUT_FLAG_SPATIALIZER
+//MIUI ADD: start MIAUDIO_MULTI_ROUTE
+            | AUDIO_OUTPUT_FLAG_VIRTUAL_DEEP_BUFFER
+//MIUI ADD: end
+//MIUI ADD: start MIAUDIO_VEHICLE_VOIP_RX
+            | AUDIO_OUTPUT_FLAG_CAR_VOIP_RX
+//MIUI ADD: end
+            );
     // Flags expressing a performance request: have lower priority than serving
     // requested sampling rate or channel mask
     static const audio_output_flags_t kPerformanceFlags = (audio_output_flags_t)
@@ -2162,7 +2313,43 @@ audio_io_handle_t AudioPolicyManager::selectOutput(const SortedVector<audio_io_h
         }
     }
 
+    {
+        sp<SwAudioOutputDescriptor> outputDescPrimary = mOutputs.valueFor(bestOutput);
+        if (outputDescPrimary != nullptr && (outputDescPrimary->mFlags == (AUDIO_OUTPUT_FLAG_FAST|AUDIO_OUTPUT_FLAG_RAW))
+                     && !isCts && primary_output != 0) {
+            bestOutput = primary_output;
+        }
+        for (size_t i = 0; i < mOutputs.size(); i++){
+            sp<SwAudioOutputDescriptor> desc = mOutputs.valueAt(i);
+            if(isKaraoke &&(desc->mFlags & AUDIO_OUTPUT_FLAG_DEEP_BUFFER)){
+               changba=desc;
+            }
+        }
+        if(isKaraoke&&outputDescPrimary->isDuplicated()&&changba){
+           audio_io_handle_t new_output = changba->mIoHandle;
+           ALOGD("mi replace subout from dup %d",outputDescPrimary->mIoHandle);
+           AudioParameter param1;
+           AudioParameter param2;
+           param1.addInt(String8("remove_track"), outputDescPrimary->subOutput1()->mIoHandle);
+           param2.addInt(String8("add_track"), new_output);
+           mpClientInterface->setParameters(outputDescPrimary->mIoHandle, param1.toString()+ ";" +
+                                          param2.toString());
+           outputDescPrimary->mOutput1 = changba;
+           auto clients = outputDescPrimary->getActiveClients();
+           for(auto client:clients){
+              changba->setClientActive(client, true);
+              ALOGD("mi set karaoke desc client active");
+           }
+           setOutputDevices(changba,getNewOutputDevices(changba, false /*fromCache*/),
+                            true,0,NULL);
+        }
+    }
     return bestOutput;
+}
+
+int isVoiceAssist(String8 ClientName)
+{
+    return !String8("com.miui.voiceassist").compare(ClientName);
 }
 
 status_t AudioPolicyManager::startOutput(audio_port_handle_t portId)
@@ -2175,13 +2362,33 @@ status_t AudioPolicyManager::startOutput(audio_port_handle_t portId)
         return BAD_VALUE;
     }
     sp<TrackClientDescriptor> client = outputDesc->getClient(portId);
-
-    ALOGV("startOutput() output %d, stream %d, session %d",
-          outputDesc->mIoHandle, client->stream(), client->session());
+//MIUI ADD: start MIAUDIO_NOTIFICATION_FILTER
+    AudioPolicyManagerStub::setNotificationFilter(client->stream());
+//MIUI ADD: end
+    android::String8 strAppName = client->getClientAppName();
+    bool isVoiceAssistApp = isVoiceAssist(strAppName);
+    if ((((client->flags() & AUDIO_OUTPUT_FLAG_FAST) == 0) ||
+           (client->stream() == AUDIO_STREAM_VOICE_CALL)) &&
+            client && client->uid() != 1000 &&
+            !AudioPolicyManagerStub::isSmallGame(strAppName) &&
+            !isVoiceAssistApp) {
+        String8 strParameter;
+        strParameter += String8("appname=+") +  strAppName;
+        mpClientInterface->setParameters(outputDesc->mIoHandle, strParameter);
+    }
+    ALOGD("startOutput() output %d, stream %d, session %d, appname %s, uid %d",
+          outputDesc->mIoHandle, client->stream(), client->session(), client->getClientAppName().string(), client->uid());
+    playLocalLog->log("startOutput() output %d, stream %d, session %d appname %s uid %d",
+          outputDesc->mIoHandle, client->stream(), client->session(),
+          client->getClientAppName().string(), client->uid());
 
     status_t status = outputDesc->start();
     if (status != NO_ERROR) {
-        return status;
+        if ((((client->flags() & AUDIO_OUTPUT_FLAG_FAST) == 0) ||
+                (client->stream() == AUDIO_STREAM_VOICE_CALL)) &&
+                client && client->uid() != 1000) {
+            goto exit;
+        }
     }
 
     uint32_t delayMs;
@@ -2189,12 +2396,25 @@ status_t AudioPolicyManager::startOutput(audio_port_handle_t portId)
 
     if (status != NO_ERROR) {
         outputDesc->stop();
-        return status;
+        if ((((client->flags() & AUDIO_OUTPUT_FLAG_FAST) == 0) ||
+                (client->stream() == AUDIO_STREAM_VOICE_CALL)) &&
+                client && client->uid() != 1000) {
+            goto exit;
+        }
     }
     if (delayMs != 0) {
         usleep(delayMs * 1000);
     }
 
+    return status;
+
+exit:
+    if (!AudioPolicyManagerStub::isSmallGame(strAppName) || !isVoiceAssistApp)
+    {
+        String8 strParameter;
+        strParameter += String8("appname=-") +  strAppName.c_str();
+        mpClientInterface->setParameters(outputDesc->mIoHandle, strParameter);
+    }
     return status;
 }
 
@@ -2342,10 +2562,21 @@ status_t AudioPolicyManager::startSource(const sp<SwAudioOutputDescriptor>& outp
         const uint32_t muteWaitMs =
                 setOutputDevices(outputDesc, devices, force, 0, NULL, requiresMuteCheck);
 
+        // MIUI ADD: start
+        /* Filter REMOTE_SUBMIX out of results, otherwise the volume of
+           * audioloopback would be default(10).
+           */
+        DeviceVector dev = outputDesc->devices();
+        DeviceVector remoteSubmixDevices = dev.getDevicesFromType(AUDIO_DEVICE_OUT_REMOTE_SUBMIX);
+        if (mEnableAudioLoopback && !remoteSubmixDevices.isEmpty()) {
+            dev.remove(remoteSubmixDevices);
+        }
+        // END
+
         // apply volume rules for current stream and device if necessary
         auto &curves = getVolumeCurves(client->attributes());
         if (NO_ERROR != checkAndSetVolume(curves, client->volumeSource(),
-                          curves.getVolumeIndex(outputDesc->devices().types()),
+                          curves.getVolumeIndex(dev.types()),
                           outputDesc,
                           outputDesc->devices().types(), 0 /*delay*/,
                           outputDesc->useHwGain() /*force*/)) {
@@ -2427,7 +2658,7 @@ void AudioPolicyManager::checkLeBroadcastRoutes(bool wasUnicastActive,
 
 status_t AudioPolicyManager::stopOutput(audio_port_handle_t portId)
 {
-    ALOGV("%s portId %d", __FUNCTION__, portId);
+    ALOGD("%s portId %d", __FUNCTION__, portId);
 
     sp<SwAudioOutputDescriptor> outputDesc = mOutputs.getOutputForClient(portId);
     if (outputDesc == 0) {
@@ -2436,14 +2667,29 @@ status_t AudioPolicyManager::stopOutput(audio_port_handle_t portId)
     }
     sp<TrackClientDescriptor> client = outputDesc->getClient(portId);
 
-    ALOGV("stopOutput() output %d, stream %d, session %d",
+    ALOGD("stopOutput() output %d, stream %d, session %d",
           outputDesc->mIoHandle, client->stream(), client->session());
+    playLocalLog->log("stopOutput() output %d, stream %d, session %d [uid=%d]",
+          outputDesc->mIoHandle, client->stream(), client->session(), client->uid());
 
     status_t status = stopSource(outputDesc, client);
 
     if (status == NO_ERROR ) {
         outputDesc->stop();
     }
+
+    String8 strAppName = client->getClientAppName();
+    bool isVoiceAssistApp = isVoiceAssist(strAppName);
+    if ((((client->flags() & AUDIO_OUTPUT_FLAG_FAST) == 0) ||
+            (client->stream() == AUDIO_STREAM_VOICE_CALL)) &&
+            client && client->uid() != 1000 &&
+            !AudioPolicyManagerStub::isSmallGame(strAppName) &&
+            !isVoiceAssistApp) {
+        String8 strParameter;
+        strParameter += String8("appname=-") +  strAppName;
+        mpClientInterface->setParameters(outputDesc->mIoHandle, strParameter);
+    }
+
     return status;
 }
 
@@ -2544,7 +2790,7 @@ status_t AudioPolicyManager::stopSource(const sp<SwAudioOutputDescriptor>& outpu
 
 bool AudioPolicyManager::releaseOutput(audio_port_handle_t portId)
 {
-    ALOGV("%s portId %d", __FUNCTION__, portId);
+    ALOGD("%s portId %d", __FUNCTION__, portId);
 
     sp<SwAudioOutputDescriptor> outputDesc = mOutputs.getOutputForClient(portId);
     if (outputDesc == 0) {
@@ -2558,13 +2804,15 @@ bool AudioPolicyManager::releaseOutput(audio_port_handle_t portId)
         return false;
     }
 
-    ALOGV("releaseOutput() %d", outputDesc->mIoHandle);
-
     sp<TrackClientDescriptor> client = outputDesc->getClient(portId);
+    ALOGD("releaseOutput() output %d, stream %d, session %d [uid=%d]",
+          outputDesc->mIoHandle, client->stream(), client->session(), client->uid());
     if (outputDesc->isClientActive(client)) {
         ALOGW("releaseOutput() inactivates portId %d in good faith", portId);
         stopOutput(portId);
     }
+    playLocalLog->log("releaseOutput() output %d, stream %d, session %d [uid=%d]",
+          outputDesc->mIoHandle, client->stream(), client->session(), client->uid());
 
     if (outputDesc->mFlags & AUDIO_OUTPUT_FLAG_DIRECT) {
         if (outputDesc->mDirectOpenCount <= 0) {
@@ -2593,6 +2841,138 @@ bool AudioPolicyManager::releaseOutput(audio_port_handle_t portId)
     return false;
 }
 
+String16 AudioPolicyManager::getPackageName(uid_t uid)
+{
+    String16 mClientName;
+    if (uid == 0)
+        uid = IPCThreadState::self()->getCallingUid();
+    else if (uid == 1000)
+        return String16("systemApp");
+
+    PermissionController permissionController;
+    Vector<String16> packages;
+    permissionController.getPackagesForUid(uid, packages);
+    if (packages.isEmpty()) {
+        ALOGV("No packages for calling UID");
+    }else {
+        mClientName = packages[0];
+        ALOGV("getPackageName for %s  uid %d", String8(mClientName).string(), uid);
+    }
+    return mClientName;
+}
+
+int isNeedChangeInputSource(String16 ClientName)
+{
+    return !String16("com.tencent.karaoke").compare(ClientName) ||
+                    !String16("com.changba").compare(ClientName);
+}
+
+static int isSkypeApp(String16 ClientName)
+{
+    return !String16("com.skype.raider").compare(ClientName);
+}
+
+int isNavigate(String16 ClientName)
+{
+    return !String16("com.baidu.BaiduMap").compare(ClientName) || !String16("com.autonavi.minimap").compare(ClientName);
+}
+
+//source 1
+int isVoiceAssist(String16 ClientName)
+{
+    return !String16("com.miui.voiceassist").compare(ClientName);
+}
+
+static int isShootTypeGame(String16 ClientName)
+{
+    return !String16("com.tencent.tmgp.pubgmhd").compare(ClientName) ||
+                    !String16("com.tencent.tmgp.pubgm").compare(ClientName) ||
+                        !String16("com.tencent.tmgp.sgame").compare(ClientName);
+}
+
+static int isOkGoogle(String16 ClientName)
+{
+    return !String16("com.google.android.googlequicksearchbox").compare(ClientName);
+}
+
+static int isScreenRecorder(String16 ClientName)
+{
+    return !String16("com.miui.screenrecorder").compare(ClientName) ||
+           !String16("com.android.soundrecorder").compare(ClientName);
+}
+
+static bool isRecordUnsilence(String16 ClientName)
+{
+    return !String16("com.android.camera").compare(ClientName) ||
+           !String16("com.miui.voiceassist").compare(ClientName) ||
+           !String16("com.miui.voicetrigger").compare(ClientName) ||
+           !String16("com.miui.audiomonitor").compare(ClientName) ||
+           !String16("com.xiaomi.aiasst.service").compare(ClientName) ||
+           !String16("com.xiaomi.mibrain.speech").compare(ClientName) ||
+           !String16("com.tencent.mm").compare(ClientName) ||
+           !String16("com.tencent.mobileqq").compare(ClientName) ||
+           !String16("com.quicinc.voice.activation").compare(ClientName);
+}
+
+//MIUI ADD:start MIAUDIO_VEHICLE_VOIP_TX
+static int isCarApp(String16 ClientName)
+{
+    return !String16("com.miui.carlink").compare(ClientName);
+}
+//MIUI ADD: end
+
+//MIUI ADD: check is camera
+static int isCameraApp(String16 ClientName)
+{
+    return !String16("com.android.camera").compare(ClientName);
+}
+
+audio_input_flags_t AudioPolicyManager::changeFlag(audio_source_t source, audio_input_flags_t flags, audio_app_type_f appType)
+{
+    if (source == AUDIO_SOURCE_MIC && appType & APP_TYPE_CAMERA){
+        flags = (audio_input_flags_t)(flags & ~AUDIO_INPUT_FLAG_FAST);
+}
+    return flags;
+}
+//MIUI ADD:end
+
+audio_app_type_f AudioPolicyManager::getAppMaskByName(String16 clientName)
+{
+     int32_t result = (int32_t)APP_TYPE_NULL;
+    if (AudioCloudCtrl::CloudCtrlFwk::isSupportCloudCtrl && !AudioCloudCtrl::CloudCtrlFwk::data_fwk_map.empty()) {
+        if (AudioCloudCtrl::CloudCtrlFwk::isKvPairsExist("record_unsilence_app_name_list", String8(clientName).c_str()))
+            result |= APP_TYPE_RECORD_UNSILENCE;
+    }else {
+        if (isRecordUnsilence(clientName))
+            result |=  APP_TYPE_RECORD_UNSILENCE;
+    }
+
+    if (isNavigate(clientName))
+        result |=  APP_TYPE_MAP;
+    else if (isVoiceAssist(clientName))
+        result |=  APP_TYPE_ASSIST;
+    else if (isNeedChangeInputSource(clientName))
+        result |=  APP_TYPE_KARAOKE;
+    else if (isSkypeApp(clientName))
+        result |=  APP_TYPE_VOIP_SKYPE;
+    else if (isShootTypeGame(clientName))
+        result |=  APP_TYPE_GAME_SHOOT;
+    else if (isCTSAudioPro(clientName))
+        result |=  APP_TYPE_CTS_AUDIOPRO;
+    else if (isOkGoogle(clientName))
+        result |=  APP_TYPE_GOOGLE_OKGOOGLE;
+    else if (isScreenRecorder(clientName))
+        result |=  APP_TYPE_XIAOMI_SCREENRECORDER;
+//MIUI ADD:start MIAUDIO_VEHICLE_VOIP_TX
+    else if (isCarApp(clientName))
+        result |=  APP_TYPE_CAR;
+//MIUI ADD: end
+    else if (isCameraApp(clientName))
+        result |=  APP_TYPE_CAMERA;
+
+    return (audio_app_type_f)result;
+}
+
 status_t AudioPolicyManager::getInputForAttr(const audio_attributes_t *attr,
                                              audio_io_handle_t *input,
                                              audio_unique_id_t riid,
@@ -2604,7 +2984,7 @@ status_t AudioPolicyManager::getInputForAttr(const audio_attributes_t *attr,
                                              input_type_t *inputType,
                                              audio_port_handle_t *portId)
 {
-    ALOGV("%s() source %d, sampling rate %d, format %#x, channel mask %#x, session %d, "
+    ALOGD("%s() source %d, sampling rate %d, format %#x, channel mask %#x, session %d, "
           "flags %#x attributes=%s requested device ID %d",
           __func__, attr->source, config->sample_rate, config->format, config->channel_mask,
           session, flags, toString(*attr).c_str(), *selectedDeviceId);
@@ -2617,6 +2997,8 @@ status_t AudioPolicyManager::getInputForAttr(const audio_attributes_t *attr,
     sp<RecordClientDescriptor> clientDesc;
     audio_port_handle_t requestedDeviceId = *selectedDeviceId;
     uid_t uid = VALUE_OR_RETURN_STATUS(aidl2legacy_int32_t_uid_t(attributionSource.uid));
+    String16 clientName = getPackageName(uid); //get once
+    audio_app_type_f appType = getAppMaskByName(clientName);
     bool isSoundTrigger = attributes.source == AUDIO_SOURCE_HOTWORD &&
                                 mSoundTriggerSessions.indexOfKey(session) >= 0;
     DeviceVector usbDevices;
@@ -2745,7 +3127,7 @@ status_t AudioPolicyManager::getInputForAttr(const audio_attributes_t *attr,
 
     }
 
-    *input = getInputForDevice(device, session, attributes, config, flags, policyMix);
+    *input = getInputForDevice(device, session, uid, attributes, config, flags, policyMix, appType);
     if (*input == AUDIO_IO_HANDLE_NONE) {
         status = INVALID_OPERATION;
         goto error;
@@ -2764,8 +3146,16 @@ exit:
     inputDesc = mInputs.valueFor(*input);
     inputDesc->addClient(clientDesc);
 
-    ALOGV("getInputForAttr() returns input %d type %d selectedDeviceId %d for port ID %d",
+    clientDesc->setAppName(String8(clientName));
+    inputDesc->setAppMask(appType);
+    clientDesc->setAppMask(appType);
+
+    ALOGD("getInputForAttr() returns input %d type %d selectedDeviceId %d for port ID %d",
             *input, *inputType, *selectedDeviceId, *portId);
+    recordLocalLog->log("%s() input %d type %d selectedDeviceId %d for port ID %dsource %d sampling rate %d"
+        "format %#x, channel mask %#x, session %d flags %#x uid %d attributes=%s",
+             __func__, *input, *inputType, *selectedDeviceId, *portId, attr->source, config->sample_rate,
+                config->format, config->channel_mask, session, flags, uid, toString(*attr).c_str());
 
     status = NO_ERROR;
 
@@ -2781,14 +3171,19 @@ error:
 
 audio_io_handle_t AudioPolicyManager::getInputForDevice(const sp<DeviceDescriptor> &device,
                                                         audio_session_t session,
+                                                        uid_t uid,
                                                         const audio_attributes_t &attributes,
                                                         const audio_config_base_t *config,
                                                         audio_input_flags_t flags,
-                                                        const sp<AudioPolicyMix> &policyMix)
+                                                        const sp<AudioPolicyMix> &policyMix,
+                                                        audio_app_type_f appType)
 {
     audio_io_handle_t input = AUDIO_IO_HANDLE_NONE;
     audio_source_t halInputSource = attributes.source;
     bool isSoundTrigger = false;
+//MIUI ADD: start MIAUDIO_INPUT_REUSE
+    struct audio_reuse_input reuseInputInfo;
+//MIUI ADD: end
 
     if (attributes.source == AUDIO_SOURCE_HOTWORD) {
         ssize_t index = mSoundTriggerSessions.indexOfKey(session);
@@ -2802,11 +3197,48 @@ audio_io_handle_t AudioPolicyManager::getInputForDevice(const sp<DeviceDescripto
         }
     } else if (attributes.source == AUDIO_SOURCE_VOICE_COMMUNICATION &&
                audio_is_linear_pcm(config->format)) {
-        flags = (audio_input_flags_t)(flags | AUDIO_INPUT_FLAG_VOIP_TX);
+        if(appType & APP_TYPE_VOIP_SKYPE)
+            flags = (audio_input_flags_t)(AUDIO_INPUT_FLAG_VOIP_TX);
+//MIUI ADD:start MIAUDIO_VEHICLE_VOIP_TX
+        else if(isCarVoipTx)
+        {
+            ALOGD("%s CarVoipTx enable, set flag AUDIO_INPUT_FLAG_CAR", __func__);
+            flags = (audio_input_flags_t)(flags | AUDIO_INPUT_FLAG_CAR_VOIP_TX);
+        }
+//MIUI ADD: end
+        else
+            flags = (audio_input_flags_t)(flags | AUDIO_INPUT_FLAG_VOIP_TX);
+//MIUI ADD: start MIAUDIO_INCALL_RECORDING
+    } else if ((attributes.source == AUDIO_SOURCE_VOICE_CALL ||
+                attributes.source == AUDIO_SOURCE_VOICE_UPLINK ||
+                attributes.source == AUDIO_SOURCE_VOICE_DOWNLINK) &&
+               audio_is_linear_pcm(config->format)) {
+            flags = (audio_input_flags_t)(flags | AUDIO_INPUT_FLAG_INCALL_UPLINK_DOWNLINK);
+//MIUI ADD: end
+    } else if ((attributes.source == AUDIO_SOURCE_VOIP_CALL ||
+                attributes.source == AUDIO_SOURCE_VOIP_UPLINK ||
+                attributes.source == AUDIO_SOURCE_VOIP_DOWNLINK) &&
+               audio_is_linear_pcm(config->format)) {
+            flags = (audio_input_flags_t)(flags | AUDIO_INPUT_FLAG_VOIP_RECORD);
     }
 
     if (attributes.source == AUDIO_SOURCE_ULTRASOUND) {
         flags = (audio_input_flags_t)(flags | AUDIO_INPUT_FLAG_ULTRASOUND);
+    }
+
+    if (property_get_bool("vendor.audio.camera.unsupport_low_latency", false /* default_value */)) {
+        flags = changeFlag(attributes.source,flags,appType);
+    }
+
+    if (!String16("com.netease.cloudmusic").compare(getPackageName(uid)) &&
+        (flags & AUDIO_INPUT_FLAG_FAST)) {
+        flags = (audio_input_flags_t)(flags & (~AUDIO_INPUT_FLAG_FAST));
+        ALOGD("com.netease.cloudmusic clear flag fast");
+    }
+
+    if (AUDIO_SOURCE_VOICE_RECOGNITION == halInputSource && appType & APP_TYPE_KARAOKE) {
+        halInputSource = AUDIO_SOURCE_MIC;
+        ALOGD("isNeedChangeInputSource uid = %d", uid);
     }
 
     // find a compatible input profile (not necessarily identical in parameters)
@@ -2840,6 +3272,12 @@ audio_io_handle_t AudioPolicyManager::getInputForDevice(const sp<DeviceDescripto
         samplingRate = profileSamplingRate;
     }
 
+    //camera recorder should follow app's format parameter
+    if(attributes.source == AUDIO_SOURCE_CAMCORDER && profileFormat != config->format) {
+        ALOGW("getInputForAttr(): camera src format :%#x,des:format:%#x",config->format,profileFormat);
+        profileFormat = config->format;
+    }
+
     if (profile->getModuleHandle() == 0) {
         ALOGE("getInputForAttr(): HW module %s not opened", profile->getModuleName());
         return input;
@@ -2860,12 +3298,18 @@ audio_io_handle_t AudioPolicyManager::getInputForDevice(const sp<DeviceDescripto
         }
     }
 
+    ALOGD("profile selected with name: %s, client UID %d ", profile->getTagName().c_str(), uid);
+
     if (!profile->canOpenNewIo()) {
         for (size_t i = 0; i < mInputs.size(); ) {
             sp<AudioInputDescriptor> desc = mInputs.valueAt(i);
             if (desc->mProfile != profile) {
                 i++;
                 continue;
+            }
+            if(desc->mProfile == profile && appType & APP_TYPE_KARAOKE){
+               ALOGD("mi return input %s ioHandle %d ",profile->getTagName().c_str(),desc->mIoHandle);
+               return desc->mIoHandle;
             }
             // if sound trigger, reuse input if used by other sound trigger on same session
             // else
@@ -2883,9 +3327,41 @@ audio_io_handle_t AudioPolicyManager::getInputForDevice(const sp<DeviceDescripto
                     }
                     continue;
                 }
-                if (client->active() && client->appState() != APP_STATE_IDLE) {
-                    return desc->mIoHandle;
+
+//MIUI ADD: start MIAUDIO_INPUT_REUSE
+                if (mAudioInputNotReuse) {
+                    if (client->active() && client->appState() != APP_STATE_IDLE) {
+                        ALOGD("%s() resue_input: %d", __func__, desc->mIoHandle);
+                        return desc->mIoHandle;
+                    }
+                    if (client->active() && appType & APP_TYPE_ASSIST) {
+                        ALOGD("%s() VoiceAssist resue desc", __func__);
+                        return desc->mIoHandle;
+                    }
+                } else {
+                    if (client->active() || client->uid() == uid) {
+                        ALOGD("%s: client->getAppMask() %x ", __func__, client->getAppMask());
+                        if ((config->sample_rate >  client->config().sample_rate &&
+                                config->channel_mask == client->config().channel_mask &&
+                                client->source() != AUDIO_SOURCE_VOICE_CALL) ||
+                            (config->channel_mask == AUDIO_CHANNEL_IN_STEREO &&
+                                client->config().channel_mask == AUDIO_CHANNEL_IN_MONO &&
+                                /*XIAOAI soundtrigger reuse other input as much as possible*/
+                                !(appType & APP_TYPE_ASSIST && config->sample_rate <  client->config().sample_rate) &&
+                                client->source() != AUDIO_SOURCE_VOICE_CALL &&
+                                client->source() != AUDIO_SOURCE_REMOTE_SUBMIX) ||
+                                attributes.source == AUDIO_SOURCE_VOICE_CALL ||
+                                (strcmp(profile->getTagName().c_str(),"compress-input") == 0)) {
+                            ALOGD("%s() do not resue input, it may degrade the sound quality.", __func__);
+                        } else {
+                            ALOGD("%s() resue input: %d", __func__, desc->mIoHandle);
+                            return desc->mIoHandle;
+                        }
+                    }
+                    reuseInputInfo.uid_reuse.push_back(client->uid());
+                    reuseInputInfo.session_reuse.push_back(client->session());
                 }
+//MIUI ADD: end
                 doClose = true;
             }
             if (doClose) {
@@ -2902,6 +3378,11 @@ audio_io_handle_t AudioPolicyManager::getInputForDevice(const sp<DeviceDescripto
     lConfig.sample_rate = profileSamplingRate;
     lConfig.channel_mask = profileChannelMask;
     lConfig.format = profileFormat;
+//MIUI ADD: start MIAUDIO_INPUT_REUSE
+    reuseInputInfo.uid_base = uid;
+    reuseInputInfo.session_base = session;
+    inputDesc->setReuseInputInfo(reuseInputInfo);
+//MIUI ADD: end
 
     status_t status = inputDesc->open(&lConfig, device, halInputSource, profileFlags, &input);
 
@@ -2929,7 +3410,7 @@ audio_io_handle_t AudioPolicyManager::getInputForDevice(const sp<DeviceDescripto
 
 status_t AudioPolicyManager::startInput(audio_port_handle_t portId)
 {
-    ALOGV("%s portId %d", __FUNCTION__, portId);
+    ALOGD("%s portId %d", __FUNCTION__, portId);
 
     sp<AudioInputDescriptor> inputDesc = mInputs.getInputForClient(portId);
     if (inputDesc == 0) {
@@ -2945,7 +3426,7 @@ status_t AudioPolicyManager::startInput(audio_port_handle_t portId)
 
     audio_session_t session = client->session();
 
-    ALOGV("%s input:%d, session:%d)", __FUNCTION__, input, session);
+    ALOGD("%s input:%d, session:%d)", __FUNCTION__, input, session);
 
     Vector<sp<AudioInputDescriptor>> activeInputs = mInputs.getActiveInputs();
 
@@ -3006,7 +3487,13 @@ status_t AudioPolicyManager::startInput(audio_port_handle_t portId)
         inputDesc->stop();
     }
 
-    ALOGV("%s input %d source = %d status = %d exit",
+    if(client && client->uid() == 1000) {
+        String8 strParameter;
+        strParameter += "appname=+system.app";
+        mpClientInterface->setParameters(input, strParameter);
+    }
+
+    ALOGD("%s input %d source = %d status = %d exit",
             __FUNCTION__, input, client->source(), status);
 
     return status;
@@ -3014,7 +3501,7 @@ status_t AudioPolicyManager::startInput(audio_port_handle_t portId)
 
 status_t AudioPolicyManager::stopInput(audio_port_handle_t portId)
 {
-    ALOGV("%s portId %d", __FUNCTION__, portId);
+    ALOGD("%s portId %d", __FUNCTION__, portId);
 
     sp<AudioInputDescriptor> inputDesc = mInputs.getInputForClient(portId);
     if (inputDesc == 0) {
@@ -3027,6 +3514,26 @@ status_t AudioPolicyManager::stopInput(audio_port_handle_t portId)
         ALOGW("%s input %d client %d already stopped", __FUNCTION__, input, client->portId());
         return INVALID_OPERATION;
     }
+    //for map and assist
+    //Wake up Xiaoai on the map, set setcapture to change the status
+    //received by the app when Xiaoai is closed
+    //START
+    {
+        bool hasMapAppActive = false;
+        for (const auto& activeDesc : mInputs.getActiveInputs()) {
+            if (activeDesc->getAppMask() & APP_TYPE_MAP) { //activeDesc->getAppMask() maybe have more masks
+                hasMapAppActive = true;
+                break;
+            }
+        }
+
+        if (hasMapAppActive && client->getAppMask() &  APP_TYPE_ASSIST) {
+            ALOGD("%s() map & assist setCaptureState", __func__);
+            mpClientInterface->setSoundTriggerCaptureState(true);
+            mpClientInterface->setSoundTriggerCaptureState(false);
+        }
+    }
+    //END
     auto old_source = inputDesc->source();
     inputDesc->setClientActive(client, false);
 
@@ -3066,16 +3573,26 @@ status_t AudioPolicyManager::stopInput(audio_port_handle_t portId)
         DeviceVector primaryInputDevices = availablePrimaryModuleInputDevices();
         if (primaryInputDevices.contains(inputDesc->getDevice()) &&
                 mInputs.activeInputsCountOnDevices(primaryInputDevices) == 0) {
-            mpClientInterface->setSoundTriggerCaptureState(false);
+            if (!(client->getAppMask()  &  (int32_t)APP_TYPE_MAP)) {
+                mpClientInterface->setSoundTriggerCaptureState(false);
+                ALOGD("%s: setCaptureState false for sva", __func__);
+            }
         }
         inputDesc->clearPreemptedSessions();
     }
+
+    if(client && client->uid() == 1000) {
+        String8 strParameter;
+        strParameter += "appname=-system.app";
+        mpClientInterface->setParameters(input, strParameter);
+    }
+
     return NO_ERROR;
 }
 
 void AudioPolicyManager::releaseInput(audio_port_handle_t portId)
 {
-    ALOGV("%s portId %d", __FUNCTION__, portId);
+    ALOGD("%s portId %d", __FUNCTION__, portId);
 
     sp<AudioInputDescriptor> inputDesc = mInputs.getInputForClient(portId);
     if (inputDesc == 0) {
@@ -3083,6 +3600,8 @@ void AudioPolicyManager::releaseInput(audio_port_handle_t portId)
         return;
     }
     sp<RecordClientDescriptor> client = inputDesc->getClient(portId);
+    recordLocalLog->log("%s input %d session %d [uid=%d]", __FUNCTION__,
+            inputDesc->mIoHandle, client->session(), client->uid());
     audio_io_handle_t input = inputDesc->mIoHandle;
 
     ALOGV("%s %d", __FUNCTION__, input);
@@ -3172,11 +3691,25 @@ status_t AudioPolicyManager::setStreamVolumeIndex(audio_stream_type_t stream,
                                                   int index,
                                                   audio_devices_t device)
 {
+    if (stream == AUDIO_STREAM_MUSIC && device == AUDIO_DEVICE_OUT_SPEAKER) {
+        AudioPolicyManagerStub::setCurrSpeakerMusicStreamVolumeIndex(index);
+    }
     auto attributes = mEngine->getAttributesForStreamType(stream);
     if (attributes == AUDIO_ATTRIBUTES_INITIALIZER) {
         ALOGW("%s: no group for stream %s, bailing out", __func__, toString(stream).c_str());
         return NO_ERROR;
     }
+//MIUI ADD: start MIAUDIO_MULTI_ROUTE
+    if (mMultiRoutes.size() && (device & (AUDIO_DEVICE_OUT_PROXY |
+            AUDIO_DEVICE_OUT_REMOTE_SUBMIX | AUDIO_DEVICE_OUT_DEFAULT))) {
+        audio_devices_t dev = (audio_devices_t) mMultiRoutes.valueAt(0);
+        if (dev == AUDIO_DEVICE_OUT_PROXY)
+            mEngine->setForceSkipDevice(AUDIO_SKIP_DEVIVE_PROXY);
+        else if(dev == AUDIO_DEVICE_OUT_REMOTE_SUBMIX)
+            mEngine->setForceSkipDevice(AUDIO_SKIP_DEVIVE_REMOTE_SUBMIX);
+        return NO_ERROR;
+    }
+//MIUI ADD: end
     ALOGV("%s: stream %s attributes=%s", __func__,
           toString(stream).c_str(), toString(attributes).c_str());
     return setVolumeIndexForAttributes(attributes, index, device);
@@ -3196,10 +3729,18 @@ status_t AudioPolicyManager::getStreamVolumeIndex(audio_stream_type_t stream,
     return getVolumeIndex(getVolumeCurves(stream), *index, deviceTypes);
 }
 
+void AudioPolicyManager::set_volume_change_to_adsp(int index, audio_output_flags_t flag)
+{
+    if (!isInCall()) {
+        mpClientInterface->setParameters(0, String8::format("volume_change=%d;flags=%d",index,flag));
+    }
+}
+
 status_t AudioPolicyManager::setVolumeIndexForAttributes(const audio_attributes_t &attributes,
                                                          int index,
                                                          audio_devices_t device)
 {
+    ALOGV("%s begine: attributes %s device %#x index %d", __func__, toString(attributes).c_str(), device, index);
     // Get Volume group matching the Audio Attributes
     auto group = mEngine->getVolumeGroupForAttributes(attributes);
     if (group == VOLUME_GROUP_NONE) {
@@ -3251,6 +3792,30 @@ status_t AudioPolicyManager::setVolumeIndexForAttributes(const audio_attributes_
         if (!(desc->isActive(vs) || isInCall())) {
             continue;
         }
+        if ((curDevices.size() > 1) && (curDevices.count(AUDIO_DEVICE_OUT_REMOTE_SUBMIX) != 0) &&
+                (device == AUDIO_DEVICE_OUT_REMOTE_SUBMIX)) {
+            continue;
+        }
+        if(isInCall() && (curSrcDevice == AUDIO_DEVICE_OUT_EARPIECE) && (device == AUDIO_DEVICE_OUT_SPEAKER)) {
+            continue;
+        }
+        if (((curDevices.count(AUDIO_DEVICE_OUT_BLUETOOTH_A2DP) != 0 ) ||
+                (curDevices.count(AUDIO_DEVICE_OUT_WIRED_HEADSET) != 0) ||
+                    (curDevices.count(AUDIO_DEVICE_OUT_WIRED_HEADPHONE) != 0) ||
+                        (curDevices.count(AUDIO_DEVICE_OUT_USB_HEADSET) != 0)) &&
+                (curDevices.count(AUDIO_DEVICE_OUT_SPEAKER) != 0 ) &&
+                    ((device == AUDIO_DEVICE_OUT_BLUETOOTH_A2DP) ||
+                        (device == AUDIO_DEVICE_OUT_WIRED_HEADSET) ||
+                            (device == AUDIO_DEVICE_OUT_WIRED_HEADPHONE) ||
+                                (device == AUDIO_DEVICE_OUT_USB_HEADSET))) {
+            continue;
+        }
+        //pass setVolume of active desc before finishing bootanimation
+        int32_t isBootAudioFinished = property_get_int32("service.bootanim.exit", 0);
+        if(isBootAudioFinished == 0){
+            continue;
+        }
+
         if (device != AUDIO_DEVICE_OUT_DEFAULT_FOR_VOLUME &&
                 curDevices.find(device) == curDevices.end()) {
             continue;
@@ -3262,6 +3827,13 @@ status_t AudioPolicyManager::setVolumeIndexForAttributes(const audio_attributes_
                     Volume::getDeviceForVolume(curDevices)) != curSrcDevices.end());
         } else {
             applyVolume = !curves.hasVolumeIndexForDevice(curSrcDevice);
+            ALOGV("%s: curDevices[%s], curSrcDevice[0x%x], applyVolume %d",
+                __func__, dumpDeviceTypes(curDevices).c_str(),
+                curSrcDevice, applyVolume);
+            if (curDevices.find(AUDIO_DEVICE_OUT_REMOTE_SUBMIX) != curDevices.end() &&
+                    curDevices.size() == 1){
+                applyVolume = true;
+            }
         }
         if (!applyVolume) {
             continue; // next output
@@ -3317,6 +3889,14 @@ status_t AudioPolicyManager::setVolumeIndexForAttributes(const audio_attributes_
         if (volStatus != NO_ERROR) {
             status = volStatus;
         }
+
+//MIUI ADD: start MIAUDIO_BUGFIX_FOR_QCOM
+        int index_last = index;
+        if (vs == toVolumeSource(AUDIO_STREAM_MUSIC) && index < 10 && index > 0)
+            index_last = index + 10;
+        set_volume_change_to_adsp(vs == toVolumeSource(AUDIO_STREAM_MUSIC) ?
+                                index_last / 10 : index_last, desc->mFlags);
+//MIUI ADD: end
     }
     mpClientInterface->onAudioVolumeGroupChanged(group, 0 /*flags*/);
     return status;
@@ -3342,7 +3922,7 @@ status_t AudioPolicyManager::setVolumeCurveIndex(int index,
     // Force max volume if stream cannot be muted
     if (!volumeCurves.canBeMuted()) index = volumeCurves.getVolumeIndexMax();
 
-    ALOGV("%s device %08x, index %d", __FUNCTION__ , device, index);
+    ALOGV("%s: device %08x, index %d", __FUNCTION__ , device, index);
     volumeCurves.addCurrentVolumeIndex(device, index);
     return NO_ERROR;
 }
@@ -3365,7 +3945,7 @@ status_t AudioPolicyManager::getVolumeIndex(const IVolumeCurves &curves,
                                             int &index,
                                             const DeviceTypeSet& deviceTypes) const
 {
-    if (isSingleDeviceType(deviceTypes, audio_is_output_device)) {
+    if (!isSingleDeviceType(deviceTypes, audio_is_output_device)) {
         return BAD_VALUE;
     }
     index = curves.getVolumeIndex(deviceTypes);
@@ -3451,9 +4031,16 @@ audio_io_handle_t AudioPolicyManager::selectOutputForMusicEffects()
     }
 
     if (output != mMusicEffectOutput) {
-        mEffects.moveEffects(AUDIO_SESSION_OUTPUT_MIX, mMusicEffectOutput, output);
-        mpClientInterface->moveEffects(AUDIO_SESSION_OUTPUT_MIX, mMusicEffectOutput, output);
-        mMusicEffectOutput = output;
+        if (mpClientInterface->moveEffects(
+                                      AUDIO_SESSION_OUTPUT_MIX,
+                                      mMusicEffectOutput, output) != NO_ERROR
+            && mOutputs.valueFor(output)->isDuplicated()) {
+            ALOGW("gloabl effect do not support duplicating thread");
+            output = AUDIO_IO_HANDLE_NONE;
+        } else {
+            mEffects.moveEffects(AUDIO_SESSION_OUTPUT_MIX, mMusicEffectOutput, output);
+            mMusicEffectOutput = output;
+        }
     }
 
     ALOGV("selectOutputForMusicEffects selected output %d", output);
@@ -3859,6 +4446,18 @@ status_t AudioPolicyManager::setDevicesRoleForStrategy(product_strategy_t strate
 
 void AudioPolicyManager::updateCallAndOutputRouting(bool forceVolumeReeval, uint32_t delayMs)
 {
+    // MIUI ADD
+    // because of voice volume cannot be muted, so we set the voice volume to the lowest to
+    // avoid volume bursts due to different per device volumes when in a call.
+    auto &curves = getVolumeCurves(toVolumeSource(AUDIO_STREAM_VOICE_CALL));
+    // voice volume cannot be muted so 1.0 is suitable.
+    float voiceVolume = 1.0f/(float)curves.getVolumeIndexMax();
+    if (voiceVolume != mLastVoiceVolume) {
+        mpClientInterface->setVoiceVolume(voiceVolume, delayMs);
+        mLastVoiceVolume = voiceVolume;
+    }
+    // MIUI END
+
     uint32_t waitMs = 0;
     bool wasLeUnicastActive = isLeUnicastActive();
     if (updateCallRouting(true /*fromCache*/, delayMs, &waitMs) == NO_ERROR) {
@@ -3892,6 +4491,9 @@ void AudioPolicyManager::updateInputRouting() {
         // Skip for hotword recording as the input device switch
         // is handled within sound trigger HAL
         if (activeDesc->isSoundTrigger() && activeDesc->source() == AUDIO_SOURCE_HOTWORD) {
+            continue;
+        }
+        if (activeDesc->source() == AUDIO_SOURCE_REMOTE_SUBMIX) {
             continue;
         }
         auto newDevice = getNewInputDevice(activeDesc);
@@ -4090,6 +4692,8 @@ void AudioPolicyManager::dump(String8 *dst) const
 
     dst->appendFormat("\nPolicy Engine dump:\n");
     mEngine->dump(dst);
+    //for xiaomi audio dump
+    dst->appendFormat("\nXiaomi Audio dump:\n");
 }
 
 status_t AudioPolicyManager::dump(int fd)
@@ -4097,6 +4701,12 @@ status_t AudioPolicyManager::dump(int fd)
     String8 result;
     dump(&result);
     write(fd, result.string(), result.size());
+    //for xiaomi audio dump
+    connectLocalLog->dump(fd, "audioConnectionDump: " /* prefix */, 200 /* lines */);
+    playLocalLog->dump(fd, "audioPlayDump: " /* prefix */, 200 /* lines */);
+    recordLocalLog->dump(fd, "audioRecordDump: " /* prefix */, 200 /* lines */);
+    errLocalLog->dump(fd, "audioErrDump: " /* prefix */, 200 /* lines */);
+    AudioPolicyManagerStub::dumpAudioMixer(fd);
     return NO_ERROR;
 }
 
@@ -5574,6 +6184,35 @@ bool AudioPolicyManager::isCallScreenModeSupported()
     return getConfig().isCallScreenModeSupported();
 }
 
+bool AudioPolicyManager::setIsCERegion(bool isCERegion)
+{
+    ALOGE("set isCERegion to %d.", isCERegion);
+    mIsCERegion = isCERegion;
+
+    return true;
+}
+
+//MIUI ADD: start MIAUDIO_MULTI_ROUTE
+status_t AudioPolicyManager::setProParameters(const String8& keyValuePairs)
+{
+//MIUI ADD:start MIAUDIO_VEHICLE_VOIP_TX
+    String8 carVoipState = String8("");
+    ALOGV("%s: filtered keyvalue %s", __func__, keyValuePairs.string());
+    AudioParameter param = AudioParameter(keyValuePairs);
+    if (param.get(String8("car_voip_tx"), carVoipState) >= 0) {
+        if (carVoipState == String8("true")) {
+            isCarVoipTx = true;
+            property_set("persist.audio.car.voip.tx", "true");
+        } else {
+            isCarVoipTx = false;
+            property_set("persist.audio.car.voip.tx", "false");
+        }
+        return NO_ERROR;
+    }
+//MIUI ADD: end
+    return AudioPolicyManagerStub::multiRouteSetProParameters(keyValuePairs, this, mEngine, mMultiRoutes);
+}
+//MIUI ADD: end
 
 status_t AudioPolicyManager::disconnectAudioSource(const sp<SourceClientDescriptor>& sourceDesc)
 {
@@ -5645,6 +6284,14 @@ bool AudioPolicyManager::canBeSpatializedInt(const audio_attributes_t *attr,
         return false;
     }
 
+    // MIUI ADD
+    // add support for virtual spatialization such as stereo source
+    if (config != nullptr && *config != AUDIO_CONFIG_INITIALIZER) {
+        if (audio_channel_out_mask_from_count(config->channel_mask) >= 2) {
+            return true;
+        }
+    }
+
     // The caller can have the audio config criteria ignored by either passing a null ptr or
     // the AUDIO_CONFIG_INITIALIZER value.
     // If an audio config is specified, current policy is to only allow spatialization for
@@ -5668,8 +6315,9 @@ void AudioPolicyManager::checkVirtualizerClientRoutes() {
             AudioDeviceTypeAddrVector devicesTypeAddress = devices.toTypeAddrVector();
             audio_config_base_t clientConfig = client->config();
             audio_config_t config = audio_config_initializer(&clientConfig);
-            if (desc != mSpatializerOutput
-                    && canBeSpatializedInt(&attr, &config, devicesTypeAddress)) {
+            if (canBeSpatializedInt(&attr, &config, devicesTypeAddress) &&
+                    ((!mSpatializerReleased && desc != mSpatializerOutput) ||
+                     (mSpatializerReleased && desc == mSpatializerOutput))) {
                 streamsToInvalidate.insert(client->stream());
             }
         }
@@ -5763,7 +6411,8 @@ status_t AudioPolicyManager::getSpatializerOutput(const audio_config_base_t *mix
             outputsChanged = true;
         }
     }
-
+    
+    mSpatializerReleased = false;
     checkVirtualizerClientRoutes();
 
     if (outputsChanged) {
@@ -5789,9 +6438,9 @@ status_t AudioPolicyManager::releaseSpatializerOutput(audio_io_handle_t output) 
     }
 
     if (!isOutputOnlyAvailableRouteToSomeDevice(mSpatializerOutput)) {
-        ALOGV("%s closing spatializer output %d", __func__, mSpatializerOutput->mIoHandle);
-        closeOutput(mSpatializerOutput->mIoHandle);
-        //from now on mSpatializerOutput is null
+        ALOGV("%s standby spatializer output %d", __func__, mSpatializerOutput->mIoHandle);
+        //closeOutput(mSpatializerOutput->mIoHandle);
+        mSpatializerReleased = true;
         checkVirtualizerClientRoutes();
     }
 
@@ -5835,6 +6484,8 @@ AudioPolicyManager::AudioPolicyManager(AudioPolicyClientInterface *clientInterfa
     mA2dpSuspended(false),
     mConfig(mHwModulesAll, mOutputDevicesAll, mInputDevicesAll, mDefaultOutputDevice),
     mAudioPortGeneration(1),
+    mEnableAudioLoopback(false),
+    mIsCERegion(false),
     mBeaconMuteRefCount(0),
     mBeaconPlayingRefCount(0),
     mBeaconMuted(false),
@@ -5856,6 +6507,31 @@ void AudioPolicyManager::loadConfig() {
         getConfig().setDefault();
     }
 }
+
+/* MIUI ADD: CE start
+ *  * When the volume obtained by index 4(Every volume curve has index 4) is 0,
+ *   * CE is not supported.
+ *   */
+void AudioPolicyManager::is_support_ce(void)
+{
+    auto &musicCurves = getVolumeCurves(AUDIO_STREAM_MUSIC);
+    auto &systemCurves = getVolumeCurves(AUDIO_STREAM_SYSTEM);
+
+    headset_ce = !(musicCurves.volIndexToDb(DEVICE_CATEGORY_HEADSET_CE, 4) == 0) &&
+        !(systemCurves.volIndexToDb(DEVICE_CATEGORY_HEADSET_CE, 4) == 0);
+
+    usb_ce = !(musicCurves.volIndexToDb(DEVICE_CATEGORY_USB_CE, 4) == 0) &&
+        !(systemCurves.volIndexToDb(DEVICE_CATEGORY_USB_CE, 4) == 0);
+
+    a2dp_ce = !(musicCurves.volIndexToDb(DEVICE_CATEGORY_A2DP_CE, 4) == 0) &&
+        !(systemCurves.volIndexToDb(DEVICE_CATEGORY_A2DP_CE, 4) == 0);
+
+    usb = !(musicCurves.volIndexToDb(DEVICE_CATEGORY_USB, 4) == 0) &&
+        !(systemCurves.volIndexToDb(DEVICE_CATEGORY_USB, 4) == 0);
+
+    ALOGD("%s(), headset_ce=%d, usb_ce=%d usb=%d", __func__, headset_ce, usb_ce, usb);
+}
+//MIUI ADD: CE end
 
 status_t AudioPolicyManager::initialize() {
     {
@@ -5908,7 +6584,16 @@ status_t AudioPolicyManager::initialize() {
     // Silence ALOGV statements
     property_set("log.tag." LOG_TAG, "D");
 
+//MIUI ADD: start MIAUDIO_DYNAMIC_LOGV
+    AudioPolicyManagerStub::audioDynamicLogInit();
+//MIUI ADD: end
+
     updateDevicesAndOutputs();
+
+    AudioPolicyManagerStub::setDumpMixerEnable();
+    AudioPolicyManagerStub::initOldVolumeCurveSupport();
+    is_support_ce();
+    AudioPolicyManagerStub::set_special_region();
     return status;
 }
 
@@ -6127,8 +6812,11 @@ status_t AudioPolicyManager::checkOutputsForDevice(const sp<DeviceDescriptor>& d
                                                    SortedVector<audio_io_handle_t>& outputs)
 {
     audio_devices_t deviceType = device->type();
+    static audio_devices_t r_submix_curDevices;
     const String8 &address = String8(device->address().c_str());
     sp<SwAudioOutputDescriptor> desc;
+    bool isKaraoke = getAppMaskByName(callingAppName) & APP_TYPE_KARAOKE ? true : false;
+    sp<SwAudioOutputDescriptor> changba;
 
     if (audio_device_is_digital(deviceType)) {
         // erase all current sample rates, formats and channel masks
@@ -6151,6 +6839,21 @@ status_t AudioPolicyManager::checkOutputsForDevice(const sp<DeviceDescriptor>& d
                     && desc->devicesSupportEncodedFormats({deviceType})) {
                 ALOGV("checkOutputsForDevice(): adding opened output %d on device %s",
                       mOutputs.keyAt(i), device->toString().c_str());
+                outputs.add(mOutputs.keyAt(i));
+            } else if (desc->isDuplicated() && mEngine->getForceUse(AUDIO_POLICY_FORCE_FOR_LOOPBACK)
+                       == AUDIO_POLICY_FORCE_SPEAKER && (deviceType & AUDIO_DEVICE_OUT_REMOTE_SUBMIX) == 0
+                       && (deviceType & AUDIO_DEVICE_OUT_BLUETOOTH_SCO_HEADSET) == 0
+                       && (deviceType & AUDIO_DEVICE_OUT_BLUETOOTH_SCO) == 0&&
+                       (mEngine->getPhoneState()!=AUDIO_MODE_RINGTONE)) {
+                preDevices = desc->devices().types();
+                curDevices = {deviceType};
+                r_submix_curDevices = deviceType;
+                applyStreamVolumes(desc, curDevices, 0 /* delayMs */, true /* force */);
+            }
+            if((desc->getAppMask() & APP_TYPE_KARAOKE)&&(mOutputs[i]->isActive())){
+                isKaraoke = true;
+            }
+            if(isKaraoke &&(desc->mFlags & AUDIO_OUTPUT_FLAG_DEEP_BUFFER)){
                 outputs.add(mOutputs.keyAt(i));
             }
         }
@@ -6246,6 +6949,16 @@ status_t AudioPolicyManager::checkOutputsForDevice(const sp<DeviceDescriptor>& d
                     ALOGV("checkOutputsForDevice(): disconnecting adding output %d",
                             mOutputs.keyAt(i));
                     outputs.add(mOutputs.keyAt(i));
+                }
+            } else if (desc->isDuplicated() && mEngine->getForceUse(AUDIO_POLICY_FORCE_FOR_LOOPBACK)
+                       == AUDIO_POLICY_FORCE_SPEAKER && (deviceType & AUDIO_DEVICE_OUT_REMOTE_SUBMIX) == 0
+                       && (deviceType & AUDIO_DEVICE_OUT_BLUETOOTH_SCO_HEADSET) == 0
+                       && (deviceType & AUDIO_DEVICE_OUT_BLUETOOTH_SCO) == 0
+                       && desc->devices().containsDeviceAmongTypes({deviceType})) {
+                if ((r_submix_curDevices & deviceType) != 0){
+                    applyStreamVolumes(desc, preDevices, 0 /* delayMs */, true /* force */);
+                } else {
+                    applyStreamVolumes(desc, curDevices, 0 /* delayMs */, true /* force */);
                 }
             }
         }
@@ -6411,7 +7124,7 @@ status_t AudioPolicyManager::checkInputsForDevice(const sp<DeviceDescriptor>& de
 
 void AudioPolicyManager::closeOutput(audio_io_handle_t output)
 {
-    ALOGV("closeOutput(%d)", output);
+    ALOGD("closeOutput(%d)", output);
 
     sp<SwAudioOutputDescriptor> closingOutput = mOutputs.valueFor(output);
     if (closingOutput == NULL) {
@@ -6419,6 +7132,7 @@ void AudioPolicyManager::closeOutput(audio_io_handle_t output)
         return;
     }
     const bool closingOutputWasActive = closingOutput->isActive();
+    playLocalLog->log("%s() (%d) closingOutputWasActive=%d", __func__, output, closingOutputWasActive);
     mPolicyMixes.closeOutput(closingOutput);
 
     // look for duplicated outputs connected to the output being removed.
@@ -6441,10 +7155,12 @@ void AudioPolicyManager::closeOutput(audio_io_handle_t output)
                 remainingOutput->stop();
             }
             audio_io_handle_t duplicatedOutput = mOutputs.keyAt(i);
-            ALOGV("closeOutput() closing also duplicated output %d", duplicatedOutput);
+            ALOGD("closeOutput() closing also duplicated output %d", duplicatedOutput);
 
             mpClientInterface->closeOutput(duplicatedOutput);
             removeOutput(duplicatedOutput);
+            //since we removeOutput, mOutputs.size() is changed, the last duplicate thread is not close correctly
+            i--;
         }
     }
 
@@ -6494,7 +7210,8 @@ void AudioPolicyManager::closeOutput(audio_io_handle_t output)
 
 void AudioPolicyManager::closeInput(audio_io_handle_t input)
 {
-    ALOGV("closeInput(%d)", input);
+    ALOGD("closeInput(%d)", input);
+    recordLocalLog->log("closeInput(%d)", input);
 
     sp<AudioInputDescriptor> inputDesc = mInputs.valueFor(input);
     if (inputDesc == NULL) {
@@ -6620,7 +7337,18 @@ void AudioPolicyManager::checkOutputForAttributes(const audio_attributes_t &attr
     auto psId = mEngine->getProductStrategyForAttributes(attr);
 
     DeviceVector oldDevices = mEngine->getOutputDevicesForAttributes(attr, 0, true /*fromCache*/);
-    DeviceVector newDevices = mEngine->getOutputDevicesForAttributes(attr, 0, false /*fromCache*/);
+    DeviceVector newDevices;
+//MIUI ADD: start MIAUDIO_MULTI_ROUTE
+    if (mMultiRoutes.size()) {
+        sp<DeviceDescriptor> MultiDevice =
+                mHwModules.getDeviceDescriptor(AUDIO_DEVICE_OUT_MULTIROUTE, "", "multi-route", AUDIO_FORMAT_DEFAULT,
+                        AUDIO_POLICY_DEVICE_STATE_AVAILABLE);
+        newDevices.add(MultiDevice);
+        oldDevices.remove(mAvailableOutputDevices.getDevicesFromType(AUDIO_DEVICE_OUT_SPEAKER));
+    }
+    else
+//MIUI ADD: end
+        newDevices = mEngine->getOutputDevicesForAttributes(attr, 0, false /*fromCache*/);
 
     SortedVector<audio_io_handle_t> srcOutputs = getOutputsForDevices(oldDevices, mPreviousOutputs);
     SortedVector<audio_io_handle_t> dstOutputs = getOutputsForDevices(newDevices, mOutputs);
@@ -6631,9 +7359,10 @@ void AudioPolicyManager::checkOutputForAttributes(const audio_attributes_t &attr
     // to a different policy mix than at creation time, invalidate corresponding stream
     for (size_t i = 0; i < mPreviousOutputs.size() && !invalidate; i++) {
         const sp<SwAudioOutputDescriptor>& desc = mPreviousOutputs.valueAt(i);
-        if (desc->isDuplicated()) {
-            continue;
-        }
+        // Ensure that all clients are considerd when dynamic audio policies change
+        // if (desc->isDuplicated()) {
+        //     continue;
+        // }
         for (const sp<TrackClientDescriptor>& client : desc->getClientIterable()) {
             if (mEngine->getProductStrategyForAttributes(client->attributes()) != psId) {
                 continue;
@@ -7054,6 +7783,10 @@ status_t AudioPolicyManager::getDevicesForAttributes(
                     mAvailableOutputDevices.getDevicesFromType(AUDIO_DEVICE_OUT_SPEAKER));
             curDevices.remove(speakerSafeDevices);
         }
+        DeviceVector remoteSubmixDevices = curDevices.getDevicesFromType(AUDIO_DEVICE_OUT_REMOTE_SUBMIX);
+        if (mEnableAudioLoopback && !remoteSubmixDevices.isEmpty()) {
+            curDevices.remove(remoteSubmixDevices);
+        }
     }
     for (const auto& device : curDevices) {
         devices->push_back(device->getDeviceTypeAddr());
@@ -7217,8 +7950,15 @@ uint32_t AudioPolicyManager::checkDeviceMuteStrategies(const sp<AudioOutputDescr
         for (const auto &activeVs : outputDesc->getActiveVolumeSources()) {
             // make sure that we do not start the temporary mute period too early in case of
             // delayed device change
+            int addMuteDelayMs = 0;
+            if ((outputDesc->getFlags().output & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) &&
+                (prevDevices.types().count(AUDIO_DEVICE_OUT_USB_HEADSET) != 0) &&
+                (devices.types().count(AUDIO_DEVICE_OUT_BLUETOOTH_A2DP) != 0)) {
+                addMuteDelayMs = 150;
+            }
+
             setVolumeSourceMute(activeVs, true, outputDesc, delayMs);
-            setVolumeSourceMute(activeVs, false, outputDesc, delayMs + tempMuteDurationMs,
+            setVolumeSourceMute(activeVs, false, outputDesc, delayMs + tempMuteDurationMs + addMuteDelayMs,
                                 devices.types());
         }
     }
@@ -7239,7 +7979,8 @@ uint32_t AudioPolicyManager::setOutputDevices(const sp<SwAudioOutputDescriptor>&
                                               audio_patch_handle_t *patchHandle,
                                               bool requiresMuteCheck, bool requiresVolumeCheck)
 {
-    ALOGV("%s device %s delayMs %d", __func__, devices.toString().c_str(), delayMs);
+    ALOGD("%s output %d device %s delayMs %d force %d requiresMuteCheck %d",
+        __func__, int(outputDesc->mIoHandle), devices.toString().c_str(), delayMs, force, int(requiresMuteCheck));
     uint32_t muteWaitMs;
 
     if (outputDesc->isDuplicated()) {
@@ -7255,7 +7996,7 @@ uint32_t AudioPolicyManager::setOutputDevices(const sp<SwAudioOutputDescriptor>&
     DeviceVector prevDevices = outputDesc->devices();
     DeviceVector availPrevDevices = mAvailableOutputDevices.filter(prevDevices);
 
-    ALOGV("setOutputDevices() prevDevice %s", prevDevices.toString().c_str());
+    ALOGD("setOutputDevices() prevDevice %s", prevDevices.toString().c_str());
 
     if (!filteredDevices.isEmpty()) {
         outputDesc->setDevices(filteredDevices);
@@ -7297,7 +8038,7 @@ uint32_t AudioPolicyManager::setOutputDevices(const sp<SwAudioOutputDescriptor>&
         return muteWaitMs;
     }
 
-    ALOGV("%s changing device to %s", __func__, filteredDevices.toString().c_str());
+    ALOGD("%s changing device to %s", __func__, filteredDevices.toString().c_str());
 
     // do the routing
     if (filteredDevices.isEmpty() || mAvailableOutputDevices.filter(filteredDevices).empty()) {
@@ -7420,6 +8161,13 @@ sp<IOProfile> AudioPolicyManager::getInputProfile(const sp<DeviceDescriptor> &de
     for (const auto& hwModule : mHwModules) {
         for (const auto& profile : hwModule->getInputProfiles()) {
             // profile->log();
+//MIUI ADD: start MIAUDIO_VEHICLE_VOIP_TX
+            //for car voip tx, only check flag
+            if ((flags & AUDIO_INPUT_FLAG_CAR_VOIP_TX) != 0 && (profile->getFlags() & AUDIO_INPUT_FLAG_CAR_VOIP_TX) != 0) {
+                ALOGE("%s choose profile %s", __func__, profile->getTagName().c_str());
+                return profile;
+            }
+//MIUI ADD: end
             //updatedFormat = format;
             // Choose the input profile based on this priority:
             // 1. exact match with both channel mask and format
@@ -7499,7 +8247,78 @@ float AudioPolicyManager::computeVolume(IVolumeCurves &curves,
                                         int index,
                                         const DeviceTypeSet& deviceTypes)
 {
-    float volumeDb = curves.volIndexToDb(Volume::getDeviceCategory(deviceTypes), index);
+    const auto musicVolumeSrc = toVolumeSource(AUDIO_STREAM_MUSIC);
+    const auto systemVolumeSrc = toVolumeSource(AUDIO_STREAM_SYSTEM);
+    float volumeDb = 0.0f;
+
+    //DEVICE_CATEGORY_USB -- usb
+    //DEVICE_CATEGORY_HEADSET_CE  -- headset_ce
+    //DEVICE_CATEGORY_USB_CE -- usb_ce
+    //DEVICE_CATEGORY_A2DP_CE -- a2dp_ce
+
+    //systemVolume & musicVolume should have CE
+    //if have. all DEVICE_CATEGORY_USB is required
+    if ((mIsCERegion && (headset_ce || usb_ce || a2dp_ce) &&
+                (volumeSource == musicVolumeSrc || volumeSource == systemVolumeSrc) &&
+                (!Intersection(deviceTypes,
+                               {AUDIO_DEVICE_OUT_WIRED_HEADSET, AUDIO_DEVICE_OUT_WIRED_HEADPHONE,
+                               AUDIO_DEVICE_OUT_USB_HEADSET, AUDIO_DEVICE_OUT_BLUETOOTH_A2DP,
+                               AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_HEADPHONES}).empty()))) {
+        if (deviceTypes.count(AUDIO_DEVICE_OUT_USB_HEADSET) != 0) {
+            if (usb_ce) { //check ce first
+                volumeDb = curves.volIndexToDb(DEVICE_CATEGORY_USB_CE, index);
+                ALOGE("%s USE USB CE HEADSET curve: %d.", __func__, index);
+            } else if (usb) { //If there is no usb ce but usb, use usb volume
+                volumeDb = curves.volIndexToDb(DEVICE_CATEGORY_USB, index);
+                ALOGE("%s USE USB HEADSET curve: %d.", __func__, index);
+            } else {
+                volumeDb = curves.volIndexToDb(DEVICE_CATEGORY_HEADSET, index);
+                ALOGE("%s curve not found, fallback normal HEADSET: %d.", __func__, index);
+            }
+        } else if (deviceTypes.count(AUDIO_DEVICE_OUT_BLUETOOTH_A2DP) != 0 ||
+                    deviceTypes.count(AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_HEADPHONES) != 0) {
+            if (a2dp_ce) {
+                volumeDb = curves.volIndexToDb(DEVICE_CATEGORY_A2DP_CE, index);
+                ALOGE("%s A2DP CE curve: %d.", __func__, index);
+            } else {
+                volumeDb = curves.volIndexToDb(DEVICE_CATEGORY_A2DP, index);
+                ALOGE("%s A2DP CE curve not found, fallback normal A2DP: %d.", __func__, index);
+            }
+        } else { //headset
+            if (headset_ce) {
+                volumeDb = curves.volIndexToDb(DEVICE_CATEGORY_HEADSET_CE, index);
+                ALOGE("%s HEADSET CE curve: %d.", __func__, index);
+            } else {
+                volumeDb = curves.volIndexToDb(DEVICE_CATEGORY_HEADSET, index);
+                ALOGE("%s HEADSET CE curve not found, fallback normal HEADSET: %d.", __func__, index);
+            }
+        }
+    } else if(AudioPolicyManagerStub::isOldVolumeCurveSupport() &&volumeSource == musicVolumeSrc
+                 && deviceTypes.count(AUDIO_DEVICE_OUT_SPEAKER) != 0){
+        volumeDb = curves.volIndexToDb(DEVICE_CATEGORY_SPEAKER_OLD, index);
+        ALOGD("%s use old volume curve: %d",__func__, index);
+    } else {
+        //Not in CE Region
+        //headphone and headset use default, usb is optional
+        //curVolumeDevice:
+        //When there are speakers and headphones at the same time,
+        //the existing logic is to use the speaker volume first
+        audio_devices_t curVolumeDevice = Volume::getDeviceForVolume(deviceTypes);
+        if(AUDIO_DEVICE_OUT_WIRED_HEADSET == curVolumeDevice ||
+             AUDIO_DEVICE_OUT_WIRED_HEADPHONE == curVolumeDevice ||
+                AUDIO_DEVICE_OUT_USB_HEADSET == curVolumeDevice) {
+            if (usb && AUDIO_DEVICE_OUT_USB_HEADSET == curVolumeDevice)
+                volumeDb = curves.volIndexToDb(DEVICE_CATEGORY_USB, index);
+            else
+                volumeDb = curves.volIndexToDb(DEVICE_CATEGORY_HEADSET, index);
+        } else {
+            volumeDb = curves.volIndexToDb(Volume::getDeviceCategory(deviceTypes), index);
+        }
+    }
+
+//MIUI ADD： start MIAUDIO_ALARM_FADEIN
+    float volumeDbCache = volumeDb;
+//MIUI ADD: end
 
     // handle the case of accessibility active while a ringtone is playing: if the ringtone is much
     // louder than the accessibility prompt, the prompt cannot be heard, thus masking the touch
@@ -7507,7 +8326,6 @@ float AudioPolicyManager::computeVolume(IVolumeCurves &curves,
     // the ringtone volume
     const auto callVolumeSrc = toVolumeSource(AUDIO_STREAM_VOICE_CALL, false);
     const auto ringVolumeSrc = toVolumeSource(AUDIO_STREAM_RING, false);
-    const auto musicVolumeSrc = toVolumeSource(AUDIO_STREAM_MUSIC, false);
     const auto alarmVolumeSrc = toVolumeSource(AUDIO_STREAM_ALARM, false);
     const auto a11yVolumeSrc = toVolumeSource(AUDIO_STREAM_ACCESSIBILITY, false);
 
@@ -7577,31 +8395,52 @@ float AudioPolicyManager::computeVolume(IVolumeCurves &curves,
         if (isStreamActive(AUDIO_STREAM_MUSIC, SONIFICATION_HEADSET_MUSIC_DELAY) ||
                 mLimitRingtoneVolume) {
             volumeDb += SONIFICATION_HEADSET_VOLUME_FACTOR_DB;
-            DeviceTypeSet musicDevice =
+
+            //when headset(3.5mm/usb/a2dp) connect,music is active
+            //alarm volume will not depend on music volume,only limit alarm max volume to -17.5db
+            //the range of the alarm volume index is limit to (1 ~ 12)
+            if(volumeSource == alarmVolumeSrc) {
+                ALOGV("computeVolume alarm volume to %f",volumeDb);
+                volumeDb = (volumeDb > ALARM_HEADSET_VOLUME_MAX_DB) ? ALARM_HEADSET_VOLUME_MAX_DB : volumeDb;
+                ALOGV("computeVolume limit alarm headset volume to %f",volumeDb);
+            } else {
+                DeviceTypeSet musicDevice =
                     mEngine->getOutputDevicesForAttributes(attributes_initializer(AUDIO_USAGE_MEDIA),
                                                            nullptr, true /*fromCache*/).types();
-            auto &musicCurves = getVolumeCurves(AUDIO_STREAM_MUSIC);
-            float musicVolDb = computeVolume(musicCurves,
+                auto &musicCurves = getVolumeCurves(AUDIO_STREAM_MUSIC);
+                float musicVolDb = computeVolume(musicCurves,
                                              musicVolumeSrc,
                                              musicCurves.getVolumeIndex(musicDevice),
                                              musicDevice);
+
             float minVolDb = (musicVolDb > SONIFICATION_HEADSET_VOLUME_MIN_DB) ?
                         musicVolDb : SONIFICATION_HEADSET_VOLUME_MIN_DB;
             if (volumeDb > minVolDb) {
                 volumeDb = minVolDb;
                 ALOGV("computeVolume limiting volume to %f musicVol %f", minVolDb, musicVolDb);
             }
-            if (Volume::getDeviceForVolume(deviceTypes) != AUDIO_DEVICE_OUT_SPEAKER
-                    &&  !Intersection(deviceTypes, {AUDIO_DEVICE_OUT_BLUETOOTH_A2DP,
+                // fade-in function of build-in Alarm application has conflict with current volume policy,
+                // the sound volume in the first 1 second from Alarm application is larger then the later.
+                // limit the alarm volume to keep Alarm's fade-in function.
+                //MIUI ADD:start MIAUDIO_ALARM_FADEIN
+                if (!Intersection(deviceTypes, {AUDIO_DEVICE_OUT_BLUETOOTH_A2DP,
+                    AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_HEADPHONES}).empty() &&
+                        (volumeSource == alarmVolumeSrc) &&
+                            ((musicVolDb - SONIFICATION_A2DP_MAX_MEDIA_DIFF_DB > volumeDbCache))) {
+                    volumeDb = volumeDbCache;
+                } else if (Volume::getDeviceForVolume(deviceTypes) != AUDIO_DEVICE_OUT_SPEAKER
+                        &&  !Intersection(deviceTypes, {AUDIO_DEVICE_OUT_BLUETOOTH_A2DP,
                         AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_HEADPHONES}).empty()) {
+                //MIUI ADD: end
                 // on A2DP, also ensure notification volume is not too low compared to media when
                 // intended to be played
-                if ((volumeDb > -96.0f) &&
+                    if ((volumeDb > -96.0f) &&
                         (musicVolDb - SONIFICATION_A2DP_MAX_MEDIA_DIFF_DB > volumeDb)) {
-                    ALOGV("%s increasing volume for volume source=%d device=%s from %f to %f",
+                        ALOGV("%s increasing volume for volume source=%d device=%s from %f to %f",
                           __func__, volumeSource, dumpDeviceTypes(deviceTypes).c_str(), volumeDb,
                           musicVolDb - SONIFICATION_A2DP_MAX_MEDIA_DIFF_DB);
-                    volumeDb = musicVolDb - SONIFICATION_A2DP_MAX_MEDIA_DIFF_DB;
+                        volumeDb = musicVolDb - SONIFICATION_A2DP_MAX_MEDIA_DIFF_DB;
+                    }
                 }
             }
         } else if ((Volume::getDeviceForVolume(deviceTypes) != AUDIO_DEVICE_OUT_SPEAKER) ||
@@ -7685,17 +8524,20 @@ status_t AudioPolicyManager::checkAndSetVolume(IVolumeCurves &curves,
     if (outputDesc->isFixedVolume(deviceTypes) ||
             // Force VoIP volume to max for bluetooth SCO device except if muted
             (index != 0 && (isVoiceVolSrc || isBtScoVolSrc) &&
-                    isSingleDeviceType(deviceTypes, audio_is_bluetooth_out_sco_device))) {
+                    (isSingleDeviceType(deviceTypes, audio_is_bluetooth_out_sco_device)
+                    || isSingleDeviceType(deviceTypes, audio_is_ble_out_device)))) {
         volumeDb = 0.0f;
     }
     const bool muted = (index == 0) && (volumeDb != 0.0f);
     outputDesc->setVolume(
             volumeDb, muted, volumeSource, curves.getStreamTypes(), deviceTypes, delayMs, force);
+    ALOGD("%s: set volumeSource %d volume index %d for device %s, volumeDb = %f",__func__,
+          volumeSource, index, dumpDeviceTypes(deviceTypes).c_str(), volumeDb);
 
     if (outputDesc == mPrimaryOutput && (isVoiceVolSrc || isBtScoVolSrc)) {
         float voiceVolume;
         // Force voice volume to max or mute for Bluetooth SCO as other attenuations are managed by the headset
-        if (isVoiceVolSrc) {
+        if (isVoiceVolSrc && !isSingleDeviceType(deviceTypes, audio_is_ble_out_device)) {
             voiceVolume = (float)index/(float)curves.getVolumeIndexMax();
         } else {
             voiceVolume = index == 0 ? 0.0 : 1.0;
@@ -7756,6 +8598,11 @@ void AudioPolicyManager::setVolumeSourceMute(VolumeSource volumeSource,
     }
     auto &curves = getVolumeCurves(volumeSource);
     if (on) {
+        if (mMultiRoutes.size() &&
+                ((deviceTypesToBitMask(deviceTypes) & AUDIO_DEVICE_OUT_PROXY) ||
+                  (deviceTypesToBitMask(deviceTypes) & AUDIO_DEVICE_OUT_REMOTE_SUBMIX))) {
+            return;
+        }
         if (!outputDesc->isMuted(volumeSource)) {
             if (curves.canBeMuted() &&
                     (volumeSource != toVolumeSource(AUDIO_STREAM_ENFORCED_AUDIBLE, false) ||
@@ -7813,6 +8660,9 @@ bool AudioPolicyManager::isValidAttributes(const audio_attributes_t *paa)
     case AUDIO_USAGE_SAFETY:
     case AUDIO_USAGE_VEHICLE_STATUS:
     case AUDIO_USAGE_ANNOUNCEMENT:
+    case AUDIO_USAGE_ENFORCED_AUDIBLE:
+    case AUDIO_USAGE_BLUETOOTH_SCO:
+    case AUDIO_USAGE_TTS:
         break;
     default:
         return false;
@@ -8135,6 +8985,18 @@ sp<SwAudioOutputDescriptor> AudioPolicyManager::openOutputWithProfileAndDevice(
         const sp<IOProfile>& profile, const DeviceVector& devices,
         const audio_config_base_t *mixerConfig)
 {
+    bool isKaraoke = getAppMaskByName(callingAppName) & APP_TYPE_KARAOKE ? true : false;
+    sp<SwAudioOutputDescriptor> changba;
+    for (size_t i = 0; i < mOutputs.size(); i++) {
+       sp<SwAudioOutputDescriptor> desc = mOutputs.valueAt(i);
+       if((desc->getAppMask() & APP_TYPE_KARAOKE) && (mOutputs[i]->isActive())){
+           isKaraoke = true;
+        }
+       if(isKaraoke &&(desc->mFlags & AUDIO_OUTPUT_FLAG_DEEP_BUFFER)){
+          changba=desc;
+        }
+    }
+
     for (const auto& device : devices) {
         // TODO: This should be checking if the profile supports the device combo.
         if (!profile->supportsDevice(device)) {
@@ -8216,6 +9078,9 @@ sp<SwAudioOutputDescriptor> AudioPolicyManager::openOutputWithProfileAndDevice(
             }
             if (hapticDesc != nullptr)
                 status = dupOutputDesc->openDuplicating(hapticDesc, desc, &duplicatedOutput);
+        } else if (isKaraoke && changba){
+            status = dupOutputDesc->openDuplicating(changba, desc, &duplicatedOutput);
+            ALOGD("mi karaoke duplicating thread open");
         } else {
             status = dupOutputDesc->openDuplicating(mPrimaryOutput, desc, &duplicatedOutput);
         }
@@ -8230,6 +9095,88 @@ sp<SwAudioOutputDescriptor> AudioPolicyManager::openOutputWithProfileAndDevice(
             nextAudioPortGeneration();
             return nullptr;
         }
+        //MULTI_A2DP_ENABLE
+        if (deviceType == AUDIO_DEVICE_OUT_REMOTE_SUBMIX) {
+            ALOGD("add remote submix dup output for MULTI_A2DP_ENABLE");
+            DeviceVector outputDevices = mAvailableOutputDevices.getDevicesFromType(AUDIO_DEVICE_OUT_BLUETOOTH_A2DP);
+            //check if MULTI_A2DP is enable
+            bool isMultiA2dpEnable = false;
+            for (size_t i = 0; i < outputDevices.size(); i++) {
+                if (outputDevices.itemAt(i)->getEncodedFormat() == AUDIO_FORMAT_FORCE_AOSP) {
+                    isMultiA2dpEnable = true;
+                    break;
+                }
+            }
+            //get Mutli_A2dp output
+            if (isMultiA2dpEnable) {
+                SortedVector<audio_io_handle_t> outputsUpdate;
+                sp<SwAudioOutputDescriptor> A2dp_desc = NULL;
+                for (size_t i = 0; i < mOutputs.size(); i++) {
+                    A2dp_desc = mOutputs.valueAt(i);
+                    if (A2dp_desc != NULL && A2dp_desc->mProfile != NULL) {
+                        findIoHandlesByFormat(A2dp_desc, AUDIO_DEVICE_OUT_BLUETOOTH_A2DP, AUDIO_FORMAT_FORCE_AOSP, outputsUpdate);
+                    }
+                    if (!outputsUpdate.isEmpty())
+                        break;
+                }
+                if(A2dp_desc != NULL && !outputsUpdate.isEmpty()) {
+                    // open another duplicating output thread for the new output and the A2dp output
+                    sp<SwAudioOutputDescriptor> dupOutputDesc =
+                    new SwAudioOutputDescriptor(NULL, mpClientInterface);
+                    status_t status = dupOutputDesc->openDuplicating(A2dp_desc, desc,
+                                                                &duplicatedOutput);
+                    ALOGD("open A2dp sub output %d  for devfice %x", duplicatedOutput,  deviceType);
+                    ALOGD("suboutput1 id %d", dupOutputDesc->subOutput1()->mIoHandle);
+                    ALOGD("suboutput2 id %d", dupOutputDesc->subOutput2()->mIoHandle);
+                    if (status == NO_ERROR) {
+                        // add duplicated output descriptor
+                        addOutput(duplicatedOutput, dupOutputDesc);
+                    } else {
+                        ALOGW("checkOutputsForDevice() could not open dup output for %d and %d",
+                            mPrimaryOutput->mIoHandle, output);
+                        desc->close();
+                        removeOutput(output);
+                        nextAudioPortGeneration();
+                        return nullptr;
+                    }
+                }
+            }
+        }
+        if (deviceType == AUDIO_DEVICE_OUT_BLUETOOTH_A2DP) {
+            //get remote sub output
+            if (device->getEncodedFormat() == AUDIO_FORMAT_FORCE_AOSP) {
+                SortedVector<audio_io_handle_t> outputsUpdate;
+                sp<SwAudioOutputDescriptor> remote_desc = NULL;
+                size_t i;
+                for (i = 0; i < mOutputs.size(); i++) {
+                    remote_desc = mOutputs.valueAt(i);
+                    if (isSingleDeviceType(remote_desc->supportedDevices().types(), AUDIO_DEVICE_OUT_REMOTE_SUBMIX))
+                        break;
+                }
+                if (i < mOutputs.size()) {
+                    // open another duplicating output thread for the new output and the A2dp output
+                    sp<SwAudioOutputDescriptor> dupOutputDesc =
+                    new SwAudioOutputDescriptor(NULL, mpClientInterface);
+                    status_t status = dupOutputDesc->openDuplicating(desc, remote_desc,
+                                                            &duplicatedOutput);
+                    ALOGD("open remote sub output %d  for devfice %x", duplicatedOutput,   deviceType);
+                    ALOGD("suboutput1 id %d", dupOutputDesc->subOutput1()->mIoHandle);
+                    ALOGD("suboutput2 id %d", dupOutputDesc->subOutput2()->mIoHandle);
+                    if (status == NO_ERROR) {
+                        // add duplicated output descriptor
+                        addOutput(duplicatedOutput, dupOutputDesc);
+                    } else {
+                        ALOGW("checkOutputsForDevice() could not open dup output for %d and %d",
+                            mPrimaryOutput->mIoHandle, output);
+                        desc->close();
+                        removeOutput(output);
+                        nextAudioPortGeneration();
+                        return nullptr;
+                    }
+                }
+            }
+        }
+        //MULIT A2dp END
     }
     if (mPrimaryOutput == nullptr && profile->getFlags() & AUDIO_OUTPUT_FLAG_PRIMARY) {
         ALOGV("%s(): re-assigning mPrimaryOutput", __func__);
@@ -8237,6 +9184,23 @@ sp<SwAudioOutputDescriptor> AudioPolicyManager::openOutputWithProfileAndDevice(
     }
     return desc;
 }
+
+//LHDC START
+void AudioPolicyManager::findIoHandlesByFormat(const sp<SwAudioOutputDescriptor>& desc /*in*/,
+        const audio_devices_t deviceType /*in*/,
+        const audio_format_t encodedFormat /*in*/,
+        SortedVector<audio_io_handle_t>& outputs /*out*/) {
+    if (desc == NULL || desc->mProfile == NULL)
+        return;
+    sp<DeviceDescriptor> devDesc =
+        desc->mProfile->getSupportedDeviceByFormat(deviceType, encodedFormat);
+    if (devDesc != 0) {
+        ALOGV("%s(): adding opened output %d on same encodedFormat %d", __func__,
+              desc->mIoHandle, encodedFormat);
+        outputs.add(desc->mIoHandle);
+    }
+}
+//LHDC END
 
 void AudioPolicyManager::chkDpConnAndAllowedForVoice(audio_devices_t device,
                                                      audio_policy_dev_state_t state)

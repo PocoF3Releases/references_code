@@ -77,6 +77,9 @@ public:
     virtual void setStartTimeOffsetMs(int ms) { mStartTimeOffsetMs = ms; }
     virtual int32_t getStartTimeOffsetMs() const { return mStartTimeOffsetMs; }
     virtual status_t setNextFd(int fd);
+//#ifdef MIAUDIO_OZO
+    void setOzoBranding() { mOzoBranding = true; }
+//#endif
 
 protected:
     virtual ~MPEG4Writer();
@@ -227,11 +230,17 @@ protected:
         int32_t height;
         int32_t rotation;
         sp<ABuffer> hvcc;
+        //MIUI ADD: HEIF ICC SUPPORT
+        sp<ABuffer> iccprofile;
+        //MIUI ADD: end
     } ItemProperty;
 
     bool mHasFileLevelMeta;
     uint64_t mFileLevelMetaDataSize;
     bool mHasMoovBox;
+//#ifdef MIAUDIO_OZO
+    bool mOzoBranding;                      // Include OZO Audio brand
+//#endif
     uint32_t mPrimaryItemId;
     uint32_t mAssociationEntryCount;
     uint32_t mNumGrids;
@@ -239,6 +248,8 @@ protected:
     bool mHasRefs;
     std::map<uint32_t, ItemInfo> mItems;
     Vector<ItemProperty> mProperties;
+
+    String16 mClientName;
 
     // Writer thread handling
     status_t startWriterThread();
@@ -301,6 +312,9 @@ protected:
     status_t reserveItemId_l(size_t numItems, uint16_t *itemIdBase);
     uint16_t addItem_l(const ItemInfo &);
     void addRefs_l(uint16_t itemId, const ItemRefs &);
+    //MIUI ADD: HEIF ICC SUPPORT
+    void addPropertyForItem(uint16_t itemId, uint16_t propIdx);
+    //MIUI ADD: end
 
     bool exceedsFileSizeLimit();
     bool exceedsFileDurationLimit();

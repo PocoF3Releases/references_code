@@ -179,6 +179,13 @@ public:
         mSupportedDevices = devices;
     }
 
+//LHDC START
+    sp<DeviceDescriptor> getSupportedDeviceByFormat(audio_devices_t type, audio_format_t encodedFormat) const
+    {
+        return mSupportedDevices.getDevice(type, String8(""), encodedFormat);
+    }
+//LHDC END
+
     const DeviceVector &getSupportedDevices() const { return mSupportedDevices; }
 
     bool canOpenNewIo() {

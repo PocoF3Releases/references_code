@@ -16,7 +16,7 @@
 */
 
 #define LOG_TAG "AudioFlinger"
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
 
 #include <media/audiohal/DeviceHalInterface.h>
 #include <media/audiohal/StreamHalInterface.h>

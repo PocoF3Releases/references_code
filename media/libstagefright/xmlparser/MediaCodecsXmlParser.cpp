@@ -151,6 +151,9 @@ std::string getVendorXmlPath(const std::string &path) {
         ALOGI("getVendorXmlPath (%s)", result.c_str());
     }
 
+    std::string xml_supportdolbycapture = "/vendor/etc/media_codecs_kalama_vendor.xml";
+    std::string xml_nosupportdolbycapture = "/vendor/etc/media_codecs_no_dolbyencoder_vendor.xml";
+    bool supportdolbycapture = property_get_bool("debug.config.media.video.dolby_capture_supports",0);
     // Choose different xmls based on system (if needed)
     if (!android::base::GetProperty("ro.media.xml_variant.codecs", "").empty()){
         const std::vector<std::string> &xmlFiles = MediaCodecsXmlParser::getDefaultXmlNames();
@@ -160,6 +163,12 @@ std::string getVendorXmlPath(const std::string &path) {
                 vendorPath = vendorPath.substr(0,vendorPath.size()-4) + "_vendor.xml";
                 if (fileExists(vendorPath)) {
                     result = vendorPath;
+                }
+                if (!supportdolbycapture) {
+                    ALOGD("debug.config.media.video.dolby_capture_supports == false");
+                    if(!strncmp(result.c_str(), xml_supportdolbycapture.c_str(), xml_supportdolbycapture.size())){
+                        result = xml_nosupportdolbycapture;
+                    }
                 }
                 ALOGI("getVendorXmlPath %s", result.c_str());
                 break;

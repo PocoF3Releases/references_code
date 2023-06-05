@@ -987,12 +987,64 @@ status_t HeicCompositeStream::processAppSegment(int64_t frameNumber, InputFrame 
         ALOGE("%s: Failed to initialize ExifUtils object!", __FUNCTION__);
         return BAD_VALUE;
     }
+    //MIUI ADD: Updates part of the exif info of the heif with the exif info of the jpeg.
+    uint16_t isoSpeedRatings = 0;
+    bool retIso = exifUtils->getIsoSpeedRatings(&isoSpeedRatings);
+    if(!retIso)
+    {
+        ALOGE("%s, Failed to get isoSpeedRatings", __FUNCTION__);
+    }
+
+    uint16_t focalLength35mmFilm = 0;
+    bool retFocal = exifUtils->getFocalLength35mmFilm(&focalLength35mmFilm);
+    if(!retFocal)
+    {
+        ALOGE("%s, Failed to get focalLength35mmFilm", __FUNCTION__);
+    }
+
+    uint16_t colorSpace = 0;
+    bool retClor = exifUtils->getImgColorSpace(&colorSpace);
+    if(!retClor)
+    {
+        ALOGE("%s, Failed to get colorSpace", __FUNCTION__);
+    }
+    //MIUI ADD: end
+
     exifRes = exifUtils->setFromMetadata(*inputFrame.result, mStaticInfo,
             mOutputWidth, mOutputHeight);
     if (!exifRes) {
         ALOGE("%s: Failed to set Exif tags using metadata and main image sizes", __FUNCTION__);
         return BAD_VALUE;
     }
+    //MIUI ADD: Updates part of the exif info of the heif with the exif info of the jpeg.
+    if(retIso)
+    {
+        exifRes = exifUtils->setIsoSpeedRatings(isoSpeedRatings);
+        if (!exifRes) {
+            ALOGE("%s: ExifUtils failed to set isoSpeedRatings", __FUNCTION__);
+            return BAD_VALUE;
+        }
+    }
+
+    if(retFocal)
+    {
+        exifRes = exifUtils->setFocalLength35mmFilm(focalLength35mmFilm);
+        if (!exifRes) {
+            ALOGE("%s: ExifUtils failed to set FocalLength35mmFilm", __FUNCTION__);
+            return BAD_VALUE;
+        }
+    }
+
+    if(retClor)
+    {
+        exifRes = exifUtils->setImgColorSpace(colorSpace);
+        if (!exifRes) {
+            ALOGE("%s: ExifUtils failed to set colorSpace", __FUNCTION__);
+            return BAD_VALUE;
+        }
+    }
+    //MIUI ADD: end
+
     exifRes = exifUtils->setOrientation(inputFrame.orientation);
     if (!exifRes) {
         ALOGE("%s: ExifUtils failed to set orientation", __FUNCTION__);
@@ -1644,7 +1696,17 @@ size_t HeicCompositeStream::calcAppSegmentMaxSize(const CameraMetadata& info) {
 void HeicCompositeStream::updateCodecQualityLocked(int32_t quality) {
     if (quality != mQuality) {
         sp<AMessage> qualityParams = new AMessage;
+
+#ifdef __XIAOMI_CAMERA__
+    if (CameraStub::getplatformversion().startsWith(String16("kona"))) {
         qualityParams->setInt32(PARAMETER_KEY_VIDEO_BITRATE, quality);
+    } else {
+        qualityParams->setInt32(KEY_QUALITY, quality);
+    }
+#else
+        qualityParams->setInt32(KEY_QUALITY, quality);
+#endif
+
         status_t res = mCodec->setParameters(qualityParams);
         if (res != OK) {
             ALOGE("%s: Failed to set codec quality: %s (%d)",

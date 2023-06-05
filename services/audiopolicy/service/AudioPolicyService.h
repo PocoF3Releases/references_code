@@ -223,9 +223,16 @@ public:
     binder::Status isHapticPlaybackSupported(bool* _aidl_return) override;
     binder::Status isUltrasoundSupported(bool* _aidl_return) override;
 
+//MIUI ADD: MIAUDIO_MULTI_ROUTE
+    binder::Status setProParameters(const std::string& keyValuePairs) override;
+
+//MIUI ADD: input reuse
+    binder::Status isReuseInput(int32_t uid, int32_t session, bool* _aidl_return) override;
+
           status_t doStartOutput(audio_port_handle_t portId);
     binder::Status listAudioProductStrategies(
             std::vector<media::AudioProductStrategy>* _aidl_return) override;
+    binder::Status setIsCERegion(bool isCERegion, bool* _aidl_return) override;
     binder::Status getProductStrategyFromAudioAttributes(const media::AudioAttributesEx& aa,
                                                          bool fallbackOnDefault,
                                                          int32_t* _aidl_return) override;
@@ -964,6 +971,14 @@ private:
                                 OpRecordAudioMonitor::createIfNeeded(attributionSource,
                                 attributes, commandThread)) {}
                 ~AudioRecordClient() override = default;
+                /* store app type here: start */
+                void setAppMask(audio_app_type_f mask) {
+                    mAppMask = mask;
+                }
+                audio_app_type_f getAppMask() {
+                    return mAppMask;
+                }
+                /* store app type here: end */
 
         bool hasOp() const {
             return mOpRecordAudioMonitor ? mOpRecordAudioMonitor->hasOp() : true;
@@ -977,6 +992,9 @@ private:
 
     private:
         sp<OpRecordAudioMonitor>           mOpRecordAudioMonitor;
+        /* store app type here: start */
+        audio_app_type_f mAppMask = APP_TYPE_NULL;
+        /* store app type here: end */
     };
 
 
@@ -1064,6 +1082,8 @@ private:
         GUARDED_BY(mLock);
     DefaultKeyedVector<audio_port_handle_t, sp<AudioPlaybackClient>> mAudioPlaybackClients
         GUARDED_BY(mLock);
+
+    int allowConcurrentApp(const sp<AudioRecordClient> &current, audio_app_type_f appType);
 
     MediaPackageManager mPackageManager; // To check allowPlaybackCapture
 

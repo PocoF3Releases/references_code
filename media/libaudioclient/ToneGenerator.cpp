@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
 #define LOG_TAG "ToneGenerator"
 
 #include <inttypes.h>
@@ -954,7 +954,7 @@ const unsigned char /*tone_type*/ ToneGenerator::sToneMappingTable[NUM_REGIONS-1
             TONE_SUP_RADIO_ACK,          // TONE_SUP_RADIO_ACK
             TONE_SUP_RADIO_NOTAVAIL,     // TONE_SUP_RADIO_NOTAVAIL
             TONE_SUP_ERROR,              // TONE_SUP_ERROR
-            TONE_INDIA_CALL_WAITING,     // TONE_SUP_CALL_WAITING
+            TONE_SUP_CALL_WAITING,     // TONE_SUP_CALL_WAITING
             TONE_INDIA_RINGTONE          // TONE_SUP_RINGTONE
         },
         {   // TAIWAN
@@ -1049,7 +1049,8 @@ ToneGenerator::ToneGenerator(audio_stream_type_t streamType, float volume, bool 
         mRegion = HONGKONG;
     } else if (strstr(value, "ie") != NULL) {
         mRegion = IRELAND;
-    } else if (strstr(value, "in") != NULL) {
+    } else if (strstr(value, "in") != NULL ||
+                    strstr(value, "my") != NULL ) {
         mRegion = INDIA;
     } else if (strstr(value, "tw") != NULL) {
         mRegion = TAIWAN;

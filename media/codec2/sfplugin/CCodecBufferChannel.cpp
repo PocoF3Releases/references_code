@@ -1617,6 +1617,7 @@ status_t CCodecBufferChannel::requestInitialInputBuffers(
             ALOGW("[%s] Error while queueing a flushed config", mName);
             return UNKNOWN_ERROR;
         }
+        clientInputBuffers.erase(clientInputBuffers.begin());
     }
     if (oStreamFormat.value == C2BufferData::LINEAR &&
             (!prepend || prepend.value == PREPEND_HEADER_TO_NONE) &&

@@ -109,6 +109,7 @@ public:
 private:
     void initDefaultDeviceEffects();
 
+public:
     // class to store the description of an effects and its parameters
     // as defined in audio_effects.conf
     class EffectDesc {
@@ -125,7 +126,7 @@ private:
                         mUuid(uuid),
                         mPriority(priority),
                         mId(id) { }
-        EffectDesc(const char *name, const effect_uuid_t& uuid) :
+        EffectDesc(const char *name = "", const effect_uuid_t& uuid = EFFECT_UUID_NULL_) :
                         EffectDesc(name,
                                    *EFFECT_UUID_NULL,
                                    String16(""),
@@ -169,6 +170,7 @@ private:
         Vector <effect_param_t *> mParams;
     };
 
+private:
     // class to store voctor of EffectDesc
     class EffectDescVector {
     public:
@@ -238,8 +240,14 @@ private:
     status_t loadStreamEffectConfigurations(cnode *root, const Vector <EffectDesc *>& effects);
     EffectDescVector *loadEffectConfig(cnode *root, const Vector <EffectDesc *>& effects);
 
+public:
+#ifndef EXPORT_API
+#define EXPORT_API __attribute__ ((visibility("default")))
+#endif
+
     // Load all automatic effect parameters
-    void loadEffectParameters(cnode *root, Vector <effect_param_t *>& params);
+    void EXPORT_API loadEffectParameters(cnode *root, Vector <effect_param_t *>& params);
+private:
     effect_param_t *loadEffectParameter(cnode *root);
     size_t readParamValue(cnode *node,
                           char **param,
@@ -276,6 +284,14 @@ private:
      * We must store the reference of the furture garantee real asynchronous operation.
      */
     std::future<void> mDefaultDeviceEffectFuture;
+
+//MIUI ADD: start  MIAUDIO_GLOBAL_AUDIO_EFFECT
+public:
+    int32_t mGlobalEffectsInitialized = 0;
+    Vector< EffectDesc > mGlobalEffectDescs;
+    Vector< sp<AudioEffect> > mGlobalEffects;
+//MIUI ADD: end
+
 };
 
 } // namespace android

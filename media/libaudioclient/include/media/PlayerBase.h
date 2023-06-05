@@ -67,6 +67,7 @@ protected:
     // mutex for IPlayer volume and pan, and player-specific volume
     Mutex mSettingsLock;
 
+public:
     // volume multipliers coming from the IPlayer volume and pan controls
     float mPanMultiplierL, mPanMultiplierR;
     float mVolumeMultiplierL, mVolumeMultiplierR;

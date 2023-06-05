@@ -155,6 +155,7 @@ NuPlayer::Renderer::Renderer(
       mVideoRenderingStartGeneration(0),
       mAudioRenderingStartGeneration(0),
       mRenderingDataDelivered(false),
+      mVideoPrerollMesSync(false),
       mNextAudioClockUpdateTimeUs(-1),
       mLastAudioMediaTimeUs(-1),
       mAudioOffloadPauseTimeoutGeneration(0),
@@ -167,6 +168,10 @@ NuPlayer::Renderer::Renderer(
       mWakeLock(new AWakeLock()),
       mNeedVideoClearAnchor(false),
       mIsSeekonPause(false),
+      mTotalRenderedFrameNum(0),
+      mTotalDropedFrameNum(0),
+      mContinueslyDropFrameNum(0),
+      mMaxContinueslyDropedFrameNum(0),
       mVideoRenderFps(0.0f) {
     CHECK(mediaClock != NULL);
     mPlaybackRate = mPlaybackSettings.mSpeed;
@@ -191,6 +196,14 @@ NuPlayer::Renderer::~Renderer() {
     mVideoScheduler.clear();
     mNotify.clear();
     mAudioSink.clear();
+
+    bool printMessage = !(mTotalRenderedFrameNum == 0 && mTotalDropedFrameNum == 0);
+    ALOGD_IF(printMessage, "Rendered %" PRIu64 " frames, droped %" PRIu64 " frames, "
+             "max contuesly drop %" PRIu64 " frames, drop frame rate is %.0f%%",
+             mTotalRenderedFrameNum,
+             mTotalDropedFrameNum,
+             mMaxContinueslyDropedFrameNum,
+             (double)mTotalDropedFrameNum / (double)(mTotalRenderedFrameNum + mTotalDropedFrameNum));
 }
 
 void NuPlayer::Renderer::queueBuffer(
@@ -913,6 +926,10 @@ size_t NuPlayer::Renderer::AudioSinkCallback(
     switch (event) {
         case MediaPlayerBase::AudioSink::CB_EVENT_FILL_BUFFER:
         {
+            if(!me) {
+                ALOGE("Render has been destoryed, return");
+                return 0;
+            }
             return me->fillAudioBuffer(buffer, size);
             break;
         }
@@ -1340,7 +1357,7 @@ void NuPlayer::Renderer::onNewAudioMediaTime(int64_t mediaTimeUs) {
 void NuPlayer::Renderer::postDrainVideoQueue() {
     if (mDrainVideoQueuePending
             || getSyncQueues()
-            || (mPaused && mVideoSampleReceived && !mVideoPrerollInprogress)) {
+            || (mPaused && mVideoSampleReceived && mVideoPrerollMesSync && !mVideoPrerollInprogress)) {
         return;
     }
 
@@ -1366,6 +1383,7 @@ void NuPlayer::Renderer::postDrainVideoQueue() {
         sp<AMessage> notify = mNotify->dup();
         notify->setInt32("what", kWhatVideoPrerollComplete);
         ALOGI("NOTE: notifying video preroll complete");
+        mVideoPrerollMesSync = true;
         notify->post();
         mVideoPrerollInprogress = false;
     }
@@ -1483,10 +1501,16 @@ void NuPlayer::Renderer::onDrainVideoQueue() {
         tooLate = (mVideoLateByUs > 40000);
 
         if (tooLate) {
-            ALOGV("video late by %lld us (%.2f secs)",
-                 (long long)mVideoLateByUs, mVideoLateByUs / 1E6);
+            mTotalDropedFrameNum++;
+            mContinueslyDropFrameNum++;
+            mMaxContinueslyDropedFrameNum = std::max(mMaxContinueslyDropedFrameNum, mContinueslyDropFrameNum);
+            ALOGD("video late by %lld us (%.2f secs) and "
+                     "continusely drop %" PRIu64 " frames",
+                     (long long)mVideoLateByUs, mVideoLateByUs / 1E6, mContinueslyDropFrameNum);
         } else {
             int64_t mediaUs = 0;
+            mTotalRenderedFrameNum++;
+            mContinueslyDropFrameNum = 0;
             mMediaClock->getMediaTime(realTimeUs, &mediaUs);
             ALOGV("rendering video at media time %.2f secs",
                     (mFlags & FLAG_REAL_TIME ? realTimeUs :
@@ -1520,6 +1544,14 @@ void NuPlayer::Renderer::onDrainVideoQueue() {
     entry->mNotifyConsumed->post();
     mVideoQueue.erase(mVideoQueue.begin());
     entry = NULL;
+
+    if (mPaused && mVideoSampleReceived && !mVideoPrerollMesSync) {
+        mVideoPrerollMesSync = true ;
+        sp<AMessage> notify = mNotify->dup();
+        notify->setInt32("what", kWhatVideoPrerollComplete);
+        ALOGI("NOTE: notifying video preroll complete -- mVideoPrerollMesSync");
+        notify->post();
+    }
 
     mVideoSampleReceived = true;
 
@@ -1829,6 +1861,7 @@ void NuPlayer::Renderer::onFlush(const sp<AMessage> &msg) {
     }
 
     mVideoSampleReceived = false;
+    mVideoPrerollMesSync = false;
 
     if (notifyComplete) {
         notifyFlushComplete(audio);
@@ -2093,22 +2126,12 @@ status_t NuPlayer::Renderer::onOpenAudioSink(
     CHECK(format->findInt32("channel-count", &numChannels));
 
     // channel mask info as read from the audio format
-    int32_t channelMaskFromFormat;
+    int32_t mediaFormatChannelMask;
     // channel mask to use for native playback
     audio_channel_mask_t channelMask;
-    if (format->findInt32("channel-mask", &channelMaskFromFormat)) {
+    if (format->findInt32("channel-mask", &mediaFormatChannelMask)) {
         // KEY_CHANNEL_MASK follows the android.media.AudioFormat java mask
-        // which is left-bitshifted by 2 relative to the native mask
-        if ((channelMaskFromFormat & 0b11) != 0) {
-            // received an unexpected mask (supposed to follow AudioFormat constants
-            // for output masks with the 2 least-significant bits at 0), but
-            // it may come from an extractor that uses native masks: keeping
-            // the mask as given is ok as it contains at least mono or stereo
-            // and potentially the haptic channels
-            channelMask = static_cast<audio_channel_mask_t>(channelMaskFromFormat);
-        } else {
-            channelMask = static_cast<audio_channel_mask_t>(channelMaskFromFormat >> 2);
-        }
+        channelMask = audio_channel_mask_from_media_format_mask(mediaFormatChannelMask);
     } else {
         // no mask found: the mask will be derived from the channel count
         channelMask = CHANNEL_MASK_USE_CHANNEL_ORDER;

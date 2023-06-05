@@ -634,7 +634,6 @@ public:
      * Consider making it more like AudioTrack::getUnderrunFrames which doesn't have side effects.
      */
             uint32_t    getInputFramesLost() const;
-
     /* Get the flags */
             audio_input_flags_t getFlags() const { AutoMutex _l(mLock); return mFlags; }
 
@@ -678,6 +677,7 @@ public:
       */
             status_t    dump(int fd, const Vector<String16>& args) const;
 
+	    void isLongTimeZeroData(const void *buffer, int size);
 private:
     /* copying audio record objects is not allowed */
                         AudioRecord(const AudioRecord& other);
@@ -833,6 +833,15 @@ private:
     bool                    mTimestampRetrogradePositionReported = false; // reduce log spam
     bool                    mTimestampRetrogradeTimeReported = false;     // reduce log spam
 
+    int64_t                mMuteTimeMs;
+    int64_t                mMuteTimeSec;
+    int64_t                mFineTimeMs;
+    int64_t                mFineTimeSec;
+    int64_t                mSmallTimeMs;
+    int64_t                mSmallTimeSec;
+
+    int64_t                mNowTimeMs;
+    int64_t                mBeforeTimeMs;
     // Format conversion. Maybe needed for adding fast tracks whose format is different from server.
     audio_config_base_t     mServerConfig;
     size_t                  mServerFrameSize;

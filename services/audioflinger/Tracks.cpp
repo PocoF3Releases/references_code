@@ -17,7 +17,8 @@
 
 
 #define LOG_TAG "AudioFlinger"
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
+#define LOG_NDEBUG_ASSERT 0
 #define ATRACE_TAG ATRACE_TAG_AUDIO
 
 #include "Configuration.h"
@@ -37,6 +38,17 @@
 #include <media/RecordBufferConverter.h>
 #include <mediautils/ServiceUtilities.h>
 #include <audio_utils/minifloat.h>
+#include <set>
+
+//MIUI ADD: start MIAUDIO_GLOBAL_AUDIO_EFFECT
+#include "AudioFlingerStub.h"
+//MIUI ADD: end
+
+// MIUI ADD: DOLBY_ENABLE
+#include <audio_utils/format.h>
+#include <audio_utils/ChannelMix.h>
+// MIUI END
+#include <mediautils/FeatureManager.h> /* AUDIO ADD */
 
 // ----------------------------------------------------------------------------
 
@@ -468,6 +480,12 @@ Status AudioFlinger::TrackHandle::getAudioDescriptionMixLevel(float* _aidl_retur
     return binderStatusFromStatusT(status);
 }
 
+Status AudioFlinger::TrackHandle::setFastTrackType(bool isFastTrack)
+{
+        mTrack->setFastTrackType(isFastTrack);
+        return Status::ok();
+}
+
 Status AudioFlinger::TrackHandle::setAudioDescriptionMixLevel(float leveldB)
 {
     return binderStatusFromStatusT(AudioValidator::validateAudioDescriptionMixLevel(leveldB)
@@ -672,7 +690,9 @@ AudioFlinger::PlaybackThread::Track::Track(
     mIsSpatialized(isSpatialized)
 {
     // client == 0 implies sharedBuffer == 0
+#if LOG_NDEBUG_ASSERT
     ALOG_ASSERT(!(client == 0 && sharedBuffer != 0));
+#endif
 
     ALOGV_IF(sharedBuffer != 0, "%s(%d): sharedBuffer: %p, size: %zu",
             __func__, mId, sharedBuffer->unsecurePointer(), sharedBuffer->size());
@@ -704,9 +724,13 @@ AudioFlinger::PlaybackThread::Track::Track(
         // race with setSyncEvent(). However, if we call it, we cannot properly start
         // static fast tracks (SoundPool) immediately after stopping.
         //mAudioTrackServerProxy->framesReadyIsCalledByMultipleThreads();
+#if LOG_NDEBUG_ASSERT
         ALOG_ASSERT(thread->mFastTrackAvailMask != 0);
+#endif
         int i = __builtin_ctz(thread->mFastTrackAvailMask);
+#if LOG_NDEBUG_ASSERT
         ALOG_ASSERT(0 < i && i < (int)FastMixerState::sMaxFastTracks);
+#endif
         // FIXME This is too eager.  We allocate a fast track index before the
         //       fast track becomes active.  Since fast tracks are a scarce resource,
         //       this means we are potentially denying other more important fast tracks from
@@ -732,6 +756,17 @@ AudioFlinger::PlaybackThread::Track::Track(
                 mUid, packageName, mAttr, mAudioVibrationController);
     }
 
+    mbIsAttrNeedFade = false;
+
+    if ((mAttr.usage == AUDIO_USAGE_ALARM ||
+        mAttr.usage == AUDIO_USAGE_MEDIA ||
+        mAttr.usage == AUDIO_USAGE_NOTIFICATION_TELEPHONY_RINGTONE) &&
+        isInWhiteList(attributionSource,uid)) {
+        mbIsAttrNeedFade = true;
+    }
+
+    mFadeType = TrackBase::TYPE_FADENONE;
+    ALOGD("%s(%d): usage = %d mbIsAttrNeedFade = %d", __func__, mId, mAttr.usage, mbIsAttrNeedFade);
     // Once this item is logged by the server, the client can add properties.
     const char * const traits = sharedBuffer == 0 ? "" : "static";
     mTrackMetrics.logConstructor(creatorPid, uid, id(), traits, streamType);
@@ -964,8 +999,16 @@ void AudioFlinger::PlaybackThread::Track::interceptBuffer(
     }
     for (auto& teePatch : mTeePatches) {
         RecordThread::PatchRecord* patchRecord = teePatch.patchRecord.get();
+        // MIUI MOD: DOLBY_ENABLE
+        audio_channel_mask_t channelMask = AUDIO_CHANNEL_INVALID;
+        audio_format_t format = AUDIO_FORMAT_INVALID;
+        if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE)) {
+            channelMask = mChannelMask;
+            format = mFormat;
+        }
         const size_t framesWritten = patchRecord->writeFrames(
-                sourceBuffer.i8, frameCount, mFrameSize);
+                sourceBuffer.i8, frameCount, mFrameSize, channelMask, format);
+        // MIUI END
         const size_t framesLeft = frameCount - framesWritten;
         ALOGW_IF(framesLeft != 0, "%s(%d) PatchRecord %d can not provide big enough "
                  "buffer %zu/%zu, dropping %zu frames", __func__, mId, patchRecord->mId,
@@ -1046,6 +1089,7 @@ bool AudioFlinger::PlaybackThread::Track::isReady() const {
 status_t AudioFlinger::PlaybackThread::Track::start(AudioSystem::sync_event_t event __unused,
                                                     audio_session_t triggerSession __unused)
 {
+    sp<Track> keep(this);
     status_t status = NO_ERROR;
     ALOGV("%s(%d): calling pid %d session %d",
             __func__, mId, IPCThreadState::self()->getCallingPid(), mSessionId);
@@ -1093,6 +1137,7 @@ status_t AudioFlinger::PlaybackThread::Track::start(AudioSystem::sync_event_t ev
             ALOGV("%s(%d): ? => ACTIVE on thread %d",
                     __func__, mId, (int)mThreadIoHandle);
         }
+        setFadeIn();
 
         // states to reset position info for non-offloaded/direct tracks
         if (!isOffloaded() && !isDirect()
@@ -1133,6 +1178,12 @@ status_t AudioFlinger::PlaybackThread::Track::start(AudioSystem::sync_event_t ev
         if (status == ALREADY_EXISTS) {
             status = NO_ERROR;
         } else {
+            mCallingPid = IPCThreadState::self()->getCallingPid();
+            mCallingUid = IPCThreadState::self()->getCallingUid();
+            if (mCallingUid > 10000 && mSharedBuffer == 0 && !mFastTrack) {
+                LOG_EVENT_STRING(30200, String8::format("%d&%d&%d&%d", mCallingPid, mCallingUid, 1, mSessionId).string());
+            }
+
             // Acknowledge any pending flush(), so that subsequent new data isn't discarded.
             // It is usually unsafe to access the server proxy from a binder thread.
             // But in this case we know the mixer thread (whether normal mixer or fast mixer)
@@ -1143,6 +1194,9 @@ status_t AudioFlinger::PlaybackThread::Track::start(AudioSystem::sync_event_t ev
             buffer.mFrameCount = 1;
             (void) mAudioTrackServerProxy->obtainBuffer(&buffer, true /*ackFlush*/);
         }
+//MIUI ADD: start  MIAUDIO_GLOBAL_AUDIO_EFFECT
+        AudioFlingerStub::audioEffectSetAppName(thread->mEffectChains, mStreamType, true);
+//MIUI ADD: end
     } else {
         status = BAD_VALUE;
     }
@@ -1157,6 +1211,7 @@ void AudioFlinger::PlaybackThread::Track::stop()
     ALOGV("%s(%d): calling pid %d", __func__, mId, IPCThreadState::self()->getCallingPid());
     sp<ThreadBase> thread = mThread.promote();
     if (thread != 0) {
+        setFadeOut();
         Mutex::Autolock _l(thread->mLock);
         track_state state = mState;
         if (state == RESUMING || state == ACTIVE || state == PAUSING || state == PAUSED) {
@@ -1181,7 +1236,11 @@ void AudioFlinger::PlaybackThread::Track::stop()
             ALOGV("%s(%d): not stopping/stopped => stopping/stopped on thread %d",
                     __func__, mId, (int)mThreadIoHandle);
         }
+//MIUI ADD: start MIAUDIO_GLOBAL_AUDIO_EFFECT
+        AudioFlingerStub::audioEffectSetAppName(thread->mEffectChains, mStreamType, false);
+//MIUI ADD: end
     }
+
     forEachTeePatchTrack([](auto patchTrack) { patchTrack->stop(); });
 }
 
@@ -1217,9 +1276,13 @@ void AudioFlinger::PlaybackThread::Track::pause()
         default:
             break;
         }
+//MIUI ADD: start MIAUDIO_GLOBAL_AUDIO_EFFECT
+        AudioFlingerStub::audioEffectSetAppName(thread->mEffectChains, mStreamType, false);
+//MIUI ADD: end
     }
     // Pausing the TeePatch to avoid a glitch on underrun, at the cost of buffered audio loss.
     forEachTeePatchTrack([](auto patchTrack) { patchTrack->pause(); });
+    setFadeOut();
 }
 
 void AudioFlinger::PlaybackThread::Track::flush()
@@ -1600,6 +1663,117 @@ void AudioFlinger::PlaybackThread::Track::notifyPresentationComplete()
     mAudioTrackServerProxy->setStreamEndDone();
 }
 
+std::set<std::string> FadeAPPs = {
+    "com.miui.video",
+    "com.miui.mediaviewer",
+    "com.miui.videoplayer",
+    "com.smile.gifmaker",
+    "com.youku.phone",
+    "com.qiyi.video",
+    "com.ss.android.ugc.aweme",
+    "com.ss.android.ugc.aweme.lite",
+    "com.ss.android.ugc.live",
+    "com.ss.android.article.video",
+    "com.yixia.videoeditor",
+    "com.tencent.qqlive",
+    "tv.danmaku.bili",
+    "com.kuaishou.nebula",
+    "com.baidu.haokan",
+    "org.videolan.vlc",
+    "com.hunantv.imgo.activity",
+    "com.storm.smart",
+    "com.ss.android.ugc.trill",
+    "com.google.process.gapps",
+    "com.amazon.avod.thirdpartyclient",
+    "com.tubitv",
+    "com.justwatch.justwatch",
+    "com.mxtech.videoplayer.ad",
+    "com.mxtech.ffmpeg.v7_neon",
+    "com.google.android.videos",
+    "com.google.android.youtube",
+    "com.playit.videoplayer",
+    "com.vidmix.app",
+    "com.miui.player",
+    "com.tencent.qqmusiclite",
+    "com.tencent.qqmusic",
+    "cn.kuwo.player",
+    "cn.kuwo.kwmusichd",
+    "com.kugou.android",
+    "com.tencent.karaoke",
+    "cmccwm.mobilemusic",
+    "com.kugou.android.ktvapp",
+    "cn.banshenggua.aichang",
+    "com.netease.cloudmusic",
+    "com.xingin.xhs",
+    "com.ss.android.article.news",
+    "com.xiaomi.mibrain.speech",
+    "com.miui.misound",
+    "com.ximalaya.ting.android",
+};
+
+//Some system apps no need to fade volume
+std::set<std::string> disableFadeAPPs = {
+    "com.miui.cit",//Factory test app
+};
+
+bool AudioFlinger::PlaybackThread::Track::isInWhiteList(const AttributionSourceState attr,uid_t uid) {
+    std::string curPkgName;
+    if(attr.packageName.has_value()) {
+        curPkgName = attr.packageName.value();
+    } else {
+        curPkgName = String8(getPackageName(uid)).string();
+    }
+    ALOGI("isInWhiteList curPkgName %s  uid %d", curPkgName.c_str(), uid);
+    if (((uid == 1000) && (disableFadeAPPs.find(curPkgName) == disableFadeAPPs.end())) ||
+            (FadeAPPs.find(curPkgName) != FadeAPPs.end())) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+bool AudioFlinger::PlaybackThread::Track::isFadeNeeded() {
+    return mbFadeFeatureOn && mbIsAttrNeedFade && !isOffloadedOrDirect();
+}
+
+
+void AudioFlinger::PlaybackThread::Track::setFadeIn() {
+    ALOGD("setFadeIn isFadeNeeded = %d", isFadeNeeded());
+    if (isFadeNeeded()) {
+        mFadeType = TrackBase::TYPE_FADEIN;
+    }
+}
+
+void AudioFlinger::PlaybackThread::Track::setFadeOut() {
+    ALOGD("setFadeOut isFadeNeeded = %d isFadingOut = %d", isFadeNeeded(),isFadingOut);
+    if (isFadeNeeded() && !isFadingOut) {
+        sp<ThreadBase> thread = mThread.promote();
+        if (thread != nullptr) {
+            isFadingOut = true;
+            mFadeType = TrackBase::TYPE_FADEOUT;
+            uint32_t wait = thread->frameCount()*1000000/thread->sampleRate();
+            if(wait > 0) {
+                ALOGV("setFadeOut frameCount=%d,sampleRate=%d,wait=%d(us)", thread->frameCount(),thread->sampleRate(),wait);
+                usleep(wait);
+            }
+            isFadingOut = false;
+        } else {
+            ALOGE("setFadeOut thread is null.");
+        }
+    }
+    ALOGD("setFadeOut Done");
+}
+
+float AudioFlinger::PlaybackThread::Track::getFadeRatio()
+{
+    float FadeRatio = 1.0f;
+    if(mFadeType != TrackBase::TYPE_FADENONE) {
+        mFadeType = TrackBase::TYPE_FADENONE;
+        FadeRatio = 0;
+    }
+    return FadeRatio;
+}
+
 void AudioFlinger::PlaybackThread::Track::triggerEvents(AudioSystem::sync_event_t type)
 {
     for (size_t i = 0; i < mSyncEvents.size();) {
@@ -1617,7 +1791,9 @@ void AudioFlinger::PlaybackThread::Track::triggerEvents(AudioSystem::sync_event_
 gain_minifloat_packed_t AudioFlinger::PlaybackThread::Track::getVolumeLR()
 {
     // called by FastMixer, so not allowed to take any locks, block, or do I/O including logs
+#if LOG_NDEBUG_ASSERT
     ALOG_ASSERT(isFastTrack() && (mCblk != NULL));
+#endif
     gain_minifloat_packed_t vlr = mAudioTrackServerProxy->getVolumeLR();
     float vl = float_from_gain(gain_minifloat_unpack_left(vlr));
     float vr = float_from_gain(gain_minifloat_unpack_right(vlr));
@@ -2005,7 +2181,7 @@ ssize_t AudioFlinger::PlaybackThread::OutputTrack::write(void* data, uint32_t fr
     inBuffer.frameCount = frames;
     inBuffer.raw = data;
 
-    uint32_t waitTimeLeftMs = mSourceThread->waitTimeMs();
+    uint32_t waitTimeLeftMs = mSourceThread->waitTimeMs()/2;
 
     if (!mActive && frames != 0) {
         (void) start();
@@ -2215,7 +2391,9 @@ status_t AudioFlinger::PlaybackThread::PatchTrack::start(AudioSystem::sync_event
 status_t AudioFlinger::PlaybackThread::PatchTrack::getNextBuffer(
         AudioBufferProvider::Buffer* buffer)
 {
+#if LOG_NDEBUG_ASSERT
     ALOG_ASSERT(mPeerProxy != 0, "%s(%d): called without peer proxy", __func__, mId);
+#endif
     Proxy::Buffer buf;
     buf.mFrameCount = buffer->frameCount;
     if (ATRACE_ENABLED()) {
@@ -2240,7 +2418,9 @@ status_t AudioFlinger::PlaybackThread::PatchTrack::getNextBuffer(
 
 void AudioFlinger::PlaybackThread::PatchTrack::releaseBuffer(AudioBufferProvider::Buffer* buffer)
 {
+#if LOG_NDEBUG_ASSERT
     ALOG_ASSERT(mPeerProxy != 0, "%s(%d): called without peer proxy", __func__, mId);
+#endif
     Proxy::Buffer buf;
     buf.mFrameCount = buffer->frameCount;
     buf.mRaw = buffer->raw;
@@ -2431,7 +2611,9 @@ AudioFlinger::RecordThread::RecordTrack::RecordTrack(
     mResamplerBufferProvider = new ResamplerBufferProvider(this);
 
     if (flags & AUDIO_INPUT_FLAG_FAST) {
+#if LOG_NDEBUG_ASSERT
         ALOG_ASSERT(thread->mFastTrackAvail);
+#endif
         thread->mFastTrackAvail = false;
     } else {
         // TODO: only Normal Record has timestamps (Fast Record does not).
@@ -2761,7 +2943,9 @@ AudioFlinger::RecordThread::PatchRecord::~PatchRecord()
 }
 
 static size_t writeFramesHelper(
-        AudioBufferProvider* dest, const void* src, size_t frameCount, size_t frameSize)
+        AudioBufferProvider* dest, const void* src, size_t frameCount, size_t frameSize,
+        audio_channel_mask_t channelMask = AUDIO_CHANNEL_INVALID/* DOLBY_ENABLE */,
+        audio_format_t format = AUDIO_FORMAT_INVALID /* DOLBY_ENABLE */)
 {
     AudioBufferProvider::Buffer patchBuffer;
     patchBuffer.frameCount = frameCount;
@@ -2771,8 +2955,41 @@ static size_t writeFramesHelper(
              __func__, status, strerror(-status));
        return 0;
     }
+#if LOG_NDEBUG_ASSERT
     ALOG_ASSERT(patchBuffer.frameCount <= frameCount);
-    memcpy(patchBuffer.raw, src, patchBuffer.frameCount * frameSize);
+#endif
+    // MIUI MOD: DOLBY_ENABLE
+    if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE)) {
+        if (channelMask == AUDIO_CHANNEL_OUT_5POINT1POINT2 ||
+            channelMask == AUDIO_CHANNEL_OUT_7POINT1 ||
+            channelMask == AUDIO_CHANNEL_OUT_7POINT1POINT4) {
+            const int channelCount = audio_channel_count_from_out_mask(channelMask);
+            float* pSrc = (float*)src;
+            float floatBuffer[patchBuffer.frameCount * channelCount];
+            float* pDst = (float*)patchBuffer.raw;
+            if (format != AUDIO_FORMAT_PCM_FLOAT) {
+                // Covert the data format to float in order to use system dowmixer
+                memcpy_by_audio_format((void*)floatBuffer, AUDIO_FORMAT_PCM_FLOAT,
+                                    src, format, patchBuffer.frameCount*channelCount);
+                pSrc = floatBuffer;
+            }
+            // Call system downmixer to downmix the input to stereo
+            android::audio_utils::channels::ChannelMix channelMix;
+            channelMix.process(pSrc, pDst, patchBuffer.frameCount,
+                            false, channelMask);
+            // Since the output amplitude of system dowmixer is allowed to be +3dBFS,
+            // apply -3dB on output
+            pDst = (float*)patchBuffer.raw;
+            for (int i = 0; i < patchBuffer.frameCount * 2; i++) {
+                *pDst++ *= 0.70710678f; // -3dB = 0.70710678f
+            }
+        } else {
+            memcpy(patchBuffer.raw, src, patchBuffer.frameCount * frameSize);
+        }
+    } else {
+        memcpy(patchBuffer.raw, src, patchBuffer.frameCount * frameSize);
+    }
+    // MIUI END
     size_t framesWritten = patchBuffer.frameCount;
     dest->releaseBuffer(&patchBuffer);
     return framesWritten;
@@ -2780,15 +2997,31 @@ static size_t writeFramesHelper(
 
 // static
 size_t AudioFlinger::RecordThread::PatchRecord::writeFrames(
-        AudioBufferProvider* dest, const void* src, size_t frameCount, size_t frameSize)
+        AudioBufferProvider* dest, const void* src, size_t frameCount, size_t frameSize,
+        audio_channel_mask_t channelMask /* DOLBY_ENABLE */, audio_format_t format /* DOLBY_ENABLE */)
 {
-    size_t framesWritten = writeFramesHelper(dest, src, frameCount, frameSize);
+    // MIUI MOD: DOLBY_ENABLE
+    size_t framesWritten = 0;
+    if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE)) {
+        framesWritten = writeFramesHelper(dest, src, frameCount, frameSize,
+                                            channelMask, format);
+    } else {
+        framesWritten = writeFramesHelper(dest, src, frameCount, frameSize);
+    }
+    // MIUI END
+
     // On buffer wrap, the buffer frame count will be less than requested,
     // when this happens a second buffer needs to be used to write the leftover audio
     const size_t framesLeft = frameCount - framesWritten;
     if (framesWritten != 0 && framesLeft != 0) {
-        framesWritten += writeFramesHelper(dest, (const char*)src + framesWritten * frameSize,
-                        framesLeft, frameSize);
+        // MIUI MOD: DOLBY_ENABLE
+        if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE)) {
+            framesWritten = writeFramesHelper(dest, src, frameCount, frameSize,
+                                                channelMask, format);
+        } else {
+            framesWritten = writeFramesHelper(dest, src, frameCount, frameSize);
+        }
+        // MIUI END
     }
     return framesWritten;
 }
@@ -2797,7 +3030,9 @@ size_t AudioFlinger::RecordThread::PatchRecord::writeFrames(
 status_t AudioFlinger::RecordThread::PatchRecord::getNextBuffer(
                                                   AudioBufferProvider::Buffer* buffer)
 {
+#if LOG_NDEBUG_ASSERT
     ALOG_ASSERT(mPeerProxy != 0, "%s(%d): called without peer proxy", __func__, mId);
+#endif
     Proxy::Buffer buf;
     buf.mFrameCount = buffer->frameCount;
     status_t status = mPeerProxy->obtainBuffer(&buf, &mPeerTimeout);
@@ -2818,7 +3053,9 @@ status_t AudioFlinger::RecordThread::PatchRecord::getNextBuffer(
 
 void AudioFlinger::RecordThread::PatchRecord::releaseBuffer(AudioBufferProvider::Buffer* buffer)
 {
+#if LOG_NDEBUG_ASSERT
     ALOG_ASSERT(mPeerProxy != 0, "%s(%d): called without peer proxy", __func__, mId);
+#endif
     Proxy::Buffer buf;
     buf.mFrameCount = buffer->frameCount;
     buf.mRaw = buffer->raw;

@@ -41,6 +41,12 @@
 #include <media/stagefright/Utils.h>
 #include <stagefright/AVExtensions.h>
 #include <OMX_Core.h>
+//MIUI ADD: start MIAUDIO_OZO
+#include <media/stagefright/IMediaCodecEvent.h>
+//MIUI ADD: end
+#include <cutils/properties.h>
+
+static const bool kSupportOZO = property_get_bool("ro.vendor.audio.zoom.support", false );
 
 namespace android {
 
@@ -391,6 +397,15 @@ status_t MediaCodecSource::setStopTimeUs(int64_t stopTimeUs) {
     return postSynchronouslyAndReturnError(msg);
 }
 
+//MIUI ADD: start MIAUDIO_OZO
+status_t MediaCodecSource::setRuntimeParameters(const sp<AMessage> &msg) {
+    sp<AMessage> dst = msg->dup();
+    dst->setWhat(kWhatSetRuntimeParams);
+    dst->setTarget(mReflector);
+    return postSynchronouslyAndReturnError(dst);
+}
+//MIUI ADD: end
+
 status_t MediaCodecSource::pause(MetaData* params) {
     sp<AMessage> msg = new AMessage(kWhatPause, mReflector);
     msg->setObject("meta", params);
@@ -418,6 +433,16 @@ status_t MediaCodecSource::read(
     }
     if (!output->mEncoderReachedEOS) {
         *buffer = *output->mBufferQueue.begin();
+//MIUI ADD: start MIAUDIO_OZO
+        if(kSupportOZO){
+            // Handle codec buffer notifications
+            if (this->mCodecBufferPacketizer)
+                mCodecBufferPacketizer->notify(*buffer);
+            // Handle event notifications
+            if (this->mCodecEventListener)
+                mCodecEventListener->notify(*buffer);
+        }
+//MIUI ADD: end
         output->mBufferQueue.erase(output->mBufferQueue.begin());
         return OK;
     }
@@ -478,6 +503,10 @@ MediaCodecSource::MediaCodecSource(
       mGeneration(0),
       mPrevBufferTimestampUs(0),
       mIsHFR(false),
+//MIUI ADD: start MIAUDIO_OZO
+      mCodecEventListener(0),
+      mCodecBufferPacketizer(0),
+//MIUI ADD: end
       mBatchSize(0){
     CHECK(mLooper != NULL);
 
@@ -1029,6 +1058,16 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
                             timeUs, timeUs / 1E6, driftTimeUs);
                 }
                 mbuf->meta_data().setInt64(kKeyTime, timeUs);
+//MIUI ADD: start MIAUDIO_OZO
+                if(kSupportOZO){
+                    // Handle codec buffer packetization
+                    // Call only once even if both handles are present
+                    if (this->mCodecBufferPacketizer)
+                        this->mCodecBufferPacketizer->notify(outbuf, mbuf);
+                    else if (this->mCodecEventListener)
+                        this->mCodecEventListener->notify(outbuf, mbuf);
+                }
+//MIUI ADD: end
             } else {
                 mbuf->meta_data().setInt64(kKeyTime, 0LL);
                 mbuf->meta_data().setInt32(kKeyIsCodecConfig, true);
@@ -1212,6 +1251,23 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
         response->postReply(replyID);
         break;
     }
+//MIUI ADD: start MIAUDIO_OZO
+    case kWhatSetRuntimeParams:
+    {
+        if(kSupportOZO){
+            sp<AReplyToken> replyID;
+            CHECK(msg->senderAwaitsResponse(&replyID));
+            msg->setObject("replyID", replyID);
+
+            status_t err = mEncoder->setParameters(msg);
+
+            sp<AMessage> response = new AMessage;
+            response->setInt32("err", err);
+            response->postReply(replyID);
+        }
+        break;
+    }
+//MIUI ADD: end
     default:
         TRESPASS();
     }
@@ -1224,4 +1280,19 @@ void MediaCodecSource::notifyPerformanceMode() {
         mEncoder->setParameters(params);
     }
 }
+
+//MIUI ADD: start MIAUDIO_OZO
+void
+MediaCodecSource::setCodecEventListener(IMediaCodecEventListener *listener)
+{
+    this->mCodecEventListener = listener;
+}
+
+void
+MediaCodecSource::setCodecBufferPacketizer(IMediaCodecEventListener *packetizer)
+{
+    this->mCodecBufferPacketizer = packetizer;
+}
+//MIUI ADD: end
+
 } // namespace android

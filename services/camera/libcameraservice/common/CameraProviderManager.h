@@ -401,6 +401,9 @@ public:
     status_t notifyUsbDeviceEvent(int32_t eventId, const std::string &usbDeviceId);
 
     static const float kDepthARTolerance;
+#ifdef __XIAOMI_CAMERA__
+    static uint64_t getCameraFoldState();
+#endif
 private:
     // All private members, unless otherwise noted, expect mInterfaceMutex to be locked before use
     mutable std::mutex mInterfaceMutex;
@@ -643,7 +646,13 @@ private:
                     const CameraResourceCost& resourceCost,
                     sp<ProviderInfo> parentProvider,
                     const std::vector<std::string>& publicCameraIds);
-            virtual ~DeviceInfo3() {};
+            virtual ~DeviceInfo3() {
+#ifdef __XIAOMI_CAMERA__
+                    if (mLockStatus == true) {
+                        pthread_rwlock_destroy(&mRWLock);
+                    }
+#endif
+            };
         protected:
             // Modified by derived transport specific (hidl / aidl) class
             CameraMetadata mCameraCharacteristics;
@@ -652,6 +661,10 @@ private:
             // A copy of mCameraCharacteristics without performance class
             // override
             std::unique_ptr<CameraMetadata> mCameraCharNoPCOverride;
+#ifdef __XIAOMI_CAMERA__
+            mutable pthread_rwlock_t mRWLock;
+            bool mLockStatus = false;
+#endif
             // Only contains characteristics for hidden physical cameras,
             // not for public physical cameras.
             std::unordered_map<std::string, CameraMetadata> mPhysicalCameraCharacteristics;
@@ -843,6 +856,9 @@ private:
     status_t usbDeviceDetached(const std::string &usbDeviceId);
     ndk::ScopedAStatus onAidlRegistration(const std::string& in_name,
             const ::ndk::SpAIBinder& in_binder);
+#ifdef __XIAOMI_CAMERA__
+    static uint64_t gCameraFoldState;
+#endif
 };
 
 } // namespace android

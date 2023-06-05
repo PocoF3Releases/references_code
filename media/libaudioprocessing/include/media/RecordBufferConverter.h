@@ -77,6 +77,10 @@ public:
 
     // called to reset resampler buffers on record track discontinuity
     void reset();
+    //MIUI ADD: start voice change
+    uint32_t getDstSampleRate() { return mDstSampleRate; };
+    uint32_t getDstChannelCount() { return mDstChannelCount; };
+    //MIUI ADD: end
 
 private:
     // format conversion when not using resampler

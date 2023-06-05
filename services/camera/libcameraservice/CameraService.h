@@ -1338,6 +1338,10 @@ private:
     Mutex mInjectionParametersLock;
 
     void updateTorchUidMapLocked(const String16& cameraId, int uid);
+#ifdef __XIAOMI_CAMERA__
+private:
+    bool mEnableCacheDump;
+#endif
 };
 
 } // namespace android

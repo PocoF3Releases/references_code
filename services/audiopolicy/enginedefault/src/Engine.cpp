@@ -15,7 +15,7 @@
  */
 
 #define LOG_TAG "APM::AudioPolicyEngine"
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
 
 //#define VERY_VERBOSE_LOGGING
 #ifdef VERY_VERBOSE_LOGGING
@@ -36,10 +36,29 @@
 #include <utils/Log.h>
 #include <cutils/properties.h>
 
+#include <media/AudioSystem.h>
+
+static bool screenCaptueStart = false;
+
+//MIUI ADD: start MIAUDIO_NOTIFICATION_FILTER
+#include "AudioPolicyManagerStub.h"
+//MIUI ADD: end
+
 namespace android
 {
 namespace audio_policy
 {
+
+//MIUI ADD: start MIAUDIO_VEHICLE_VOIP_TX
+bool getCarVoipState() {
+    bool carVoipState = property_get_bool("persist.audio.car.voip.tx", false);
+    if(carVoipState) {
+        return true;
+    } else {
+        return false;
+    }
+}
+//MIUI ADD: end
 
 struct legacy_strategy_map { const char *name; legacy_strategy id; };
 static const std::vector<legacy_strategy_map>& getLegacyStrategy() {
@@ -71,6 +90,7 @@ Engine::Engine()
     for (const auto &strategy : legacyStrategy) {
         mLegacyStrategyMap[getProductStrategyByName(strategy.name)] = strategy.id;
     }
+    screenCaptueStart = property_get_bool("vendor.audio.screen.capture.start", false);
 }
 
 status_t Engine::setForceUse(audio_policy_force_use_t usage, audio_policy_forced_cfg_t config)
@@ -115,6 +135,13 @@ status_t Engine::setForceUse(audio_policy_force_use_t usage, audio_policy_forced
             ALOGW("setForceUse() invalid config %d for FOR_SYSTEM", config);
         }
         break;
+//MIUI ADD: start MIAUDIO_FORCE_EARPIECE
+    case AUDIO_POLICY_FORCE_FOR_LB_TEST:
+        if (config != AUDIO_POLICY_FORCE_EARPIECE) {
+            ALOGW("setForceUse() invalid config %d for FOR_LB_TEST", config);
+        }
+        break;
+//MIUI ADD: end
     case AUDIO_POLICY_FORCE_FOR_HDMI_SYSTEM_AUDIO:
         if (config != AUDIO_POLICY_FORCE_NONE &&
             config != AUDIO_POLICY_FORCE_HDMI_SYSTEM_AUDIO_ENFORCED) {
@@ -134,6 +161,21 @@ status_t Engine::setForceUse(audio_policy_force_use_t usage, audio_policy_forced
         if (config != AUDIO_POLICY_FORCE_BT_SCO && config != AUDIO_POLICY_FORCE_NONE) {
             ALOGW("setForceUse() invalid config %d for FOR_VIBRATE_RINGING", config);
             return BAD_VALUE;
+        }
+        break;
+    case AUDIO_POLICY_FORCE_FOR_LOOPBACK:
+        if (config != AUDIO_POLICY_FORCE_SPEAKER && config != AUDIO_POLICY_FORCE_NONE) {
+            ALOGW("setForceUse() invalid config %d for audioloopback", config);
+            return BAD_VALUE;
+        }
+        if (config == AUDIO_POLICY_FORCE_SPEAKER) {
+            screenCaptueStart = true;
+            AudioSystem::setParameters(String8("screen_capture_start=true"));
+            ALOGD("setForceUse() screenCaptueStart");
+        } else if (config == AUDIO_POLICY_FORCE_NONE){
+            screenCaptueStart = false;
+            AudioSystem::setParameters(String8("screen_capture_start=false"));
+            ALOGD("setForceUse() screenCaptueStop");
         }
         break;
     default:
@@ -219,7 +261,14 @@ product_strategy_t Engine::remapStrategyFromContext(product_strategy_t strategy,
     auto legacyStrategy = mLegacyStrategyMap.find(strategy) != end(mLegacyStrategyMap) ?
                           mLegacyStrategyMap.at(strategy) : STRATEGY_NONE;
 
-    if (isInCall()) {
+    //MIUI ADD: start MIAUDIO_VEHICLE_VOIP_TX
+    bool isCarVoipTx = (getCarVoipState() && getPhoneState()==AUDIO_MODE_IN_COMMUNICATION);
+    //MIUI ADD: end
+    if (isInCall()
+//MIUI ADD: start MIAUDIO_VEHICLE_VOIP_TX
+    &&!isCarVoipTx
+//MIUI ADD: end
+    ) {
         switch (legacyStrategy) {
         case STRATEGY_ACCESSIBILITY:
         case STRATEGY_DTMF:
@@ -260,6 +309,9 @@ DeviceVector Engine::getDevicesForStrategyInt(legacy_strategy strategy,
                                               const SwAudioOutputCollection &outputs) const
 {
     DeviceVector devices;
+    //MIUI ADD: start MIAUDIO_VEHICLE_VOIP_TX
+    bool isCarVoipTx = (getCarVoipState() && getPhoneState()==AUDIO_MODE_IN_COMMUNICATION);
+    //MIUI ADD: end
 
     switch (strategy) {
 
@@ -344,7 +396,11 @@ DeviceVector Engine::getDevicesForStrategyInt(legacy_strategy strategy,
     case STRATEGY_SONIFICATION_RESPECTFUL:
     case STRATEGY_REROUTING:
     case STRATEGY_MEDIA: {
-        if (isInCall() && devices.isEmpty()) {
+        if (isInCall() && devices.isEmpty()
+//MIUI ADD: start  MIAUDIO_VEHICLE_VOIP_TX        
+        && !isCarVoipTx
+//MIUI ADD: end
+        ) {
           // when in call, get the device for Phone strategy
           devices = getDevicesForStrategyInt(
                     STRATEGY_PHONE, availableOutputDevices, outputs);
@@ -352,13 +408,54 @@ DeviceVector Engine::getDevicesForStrategyInt(legacy_strategy strategy,
         }
 
         DeviceVector devices2;
-        if (strategy != STRATEGY_SONIFICATION) {
+//MIUI ADD: start MIAUDIO_FORCE_EARPIECE
+        if (EngineBase::getForceUse(AUDIO_POLICY_FORCE_FOR_LB_TEST) == AUDIO_POLICY_FORCE_EARPIECE) {
+            devices2 = availableOutputDevices.getDevicesFromType(AUDIO_DEVICE_OUT_EARPIECE);
+            devices.add(devices2);
+            if (devices.isEmpty()) {
+               sp<DeviceDescriptor> defaultOutputDevice = getApmObserver()->getDefaultOutputDevice();
+               if (defaultOutputDevice != nullptr) {
+                   devices.add(defaultOutputDevice);
+               }
+            }
+
+            if (devices.isEmpty())
+                ALOGE("getDeviceForStrategy() no device found FOR_LB_TEST force use case");
+            else
+                break;
+        }
+//MIUI ADD: end
+
+//MIUI ADD: start MIAUDIO_VEHICLE_VOIP_TX
+        if(isCarVoipTx && devices2.isEmpty()) {
+            if (!availableOutputDevices.getDevicesFromType(AUDIO_DEVICE_OUT_REMOTE_SUBMIX).isEmpty()) {
+               devices2.add(availableOutputDevices.getDevicesFromTypes({
+                    AUDIO_DEVICE_OUT_REMOTE_SUBMIX}));
+           }
+        }
+//MIUI ADD: end
+
+        if (strategy != STRATEGY_SONIFICATION && !screenCaptueStart) {
             // no sonification on remote submix (e.g. WFD)
             sp<DeviceDescriptor> remoteSubmix;
             if ((remoteSubmix = availableOutputDevices.getDevice(
                     AUDIO_DEVICE_OUT_REMOTE_SUBMIX, String8("0"),
                     AUDIO_FORMAT_DEFAULT)) != nullptr) {
-                devices2.add(remoteSubmix);
+                if (devices2.isEmpty()) {
+                    devices2 = availableOutputDevices.getFirstDevicesFromTypes({
+                                 AUDIO_DEVICE_OUT_WIRED_HEADPHONE, AUDIO_DEVICE_OUT_WIRED_HEADSET,
+                                 AUDIO_DEVICE_OUT_LINE, AUDIO_DEVICE_OUT_USB_HEADSET,
+                                 AUDIO_DEVICE_OUT_USB_DEVICE});
+                }
+
+                if (devices2.isEmpty()) {
+                    devices2 = availableOutputDevices.getFirstDevicesFromTypes({
+                                 AUDIO_DEVICE_OUT_BLUETOOTH_A2DP,
+                                 AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_HEADPHONES,
+                                 AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_SPEAKER});
+                }
+                if (devices2.isEmpty() && !mForceSkipRemoteSubmix)
+                    devices2.add(remoteSubmix);
             }
         }
 
@@ -392,9 +489,26 @@ DeviceVector Engine::getDevicesForStrategyInt(legacy_strategy strategy,
 
         if (devices2.isEmpty() && (getLastRemovableMediaDevices().size() > 0)) {
             if ((getForceUse(AUDIO_POLICY_FORCE_FOR_MEDIA) != AUDIO_POLICY_FORCE_NO_BT_A2DP)) {
-                // Get the last connected device of wired and bluetooth a2dp
-                devices2 = availableOutputDevices.getFirstDevicesFromTypes(
-                        getLastRemovableMediaDevices());
+                bool isScoRequestedForComm1 = false;
+                AudioDeviceTypeAddrVector devices;
+                getDevicesForRoleAndStrategy(getProductStrategyForAttributes(getAttributesForStreamType(AUDIO_STREAM_VOICE_CALL)), DEVICE_ROLE_PREFERRED, devices);
+                for (const auto &device : devices) {
+                    if (audio_is_bluetooth_out_sco_device(device.mType)) {
+                        isScoRequestedForComm1 = true;
+                    }
+                }
+                // mBtScoProfileOn is set during a2dpsuspended key/value pair received
+                if (isScoRequestedForComm1) {
+                    ALOGVV("get SCO device for STRATEGY_MEDIA since a2dpsuspended is true");
+                    devices2 = availableOutputDevices.getFirstDevicesFromTypes({
+                    AUDIO_DEVICE_OUT_BLUETOOTH_SCO_HEADSET, AUDIO_DEVICE_OUT_BLUETOOTH_SCO});
+                }
+                if (devices2.isEmpty()) {
+                    ALOGVV("get A2DP device for STRATEGY_MEDIA");
+                    // Get the last connected device of wired and bluetooth a2dp
+                    devices2 = availableOutputDevices.getFirstDevicesFromTypes(
+                            getLastRemovableMediaDevices());
+                }
             } else {
                 // Get the last connected device of wired except bluetooth a2dp
                 devices2 = availableOutputDevices.getFirstDevicesFromTypes(
@@ -416,7 +530,11 @@ DeviceVector Engine::getDevicesForStrategyInt(legacy_strategy strategy,
             devices2 = availableOutputDevices.getDevicesFromType(
                     AUDIO_DEVICE_OUT_ANLG_DOCK_HEADSET);
         }
-        if ((devices2.isEmpty()) && (strategy != STRATEGY_SONIFICATION) && (devices.isEmpty())) {
+        if ((devices2.isEmpty()) && (strategy != STRATEGY_SONIFICATION) && (devices.isEmpty())
+//MIUI ADD: start MIAUDIO_MULTI_ROUTE
+            && !mForceSkipProxy
+//MIUI ADD: end
+            ) {
             // no sonification on WFD sink
             devices2 = availableOutputDevices.getDevicesFromType(AUDIO_DEVICE_OUT_PROXY);
         }
@@ -432,7 +550,12 @@ DeviceVector Engine::getDevicesForStrategyInt(legacy_strategy strategy,
                     AUDIO_DEVICE_OUT_SPDIF, AUDIO_DEVICE_OUT_AUX_LINE,
                     });
         }
-
+        if (screenCaptueStart && !devices2.containsDeviceAmongTypes({AUDIO_DEVICE_OUT_HEARING_AID})) {
+            if (!availableOutputDevices.getDevicesFromType(AUDIO_DEVICE_OUT_REMOTE_SUBMIX).isEmpty()) {
+               devices2.add(availableOutputDevices.getDevicesFromTypes({
+                    AUDIO_DEVICE_OUT_REMOTE_SUBMIX}));
+           }
+        }
         devices2.add(devices3);
         // device is DEVICE_OUT_SPEAKER if we come from case STRATEGY_SONIFICATION or
         // STRATEGY_ENFORCED_AUDIBLE, AUDIO_DEVICE_NONE otherwise
@@ -452,6 +575,13 @@ DeviceVector Engine::getDevicesForStrategyInt(legacy_strategy strategy,
                     toVolumeSource(AUDIO_STREAM_ACCESSIBILITY),
                     SONIFICATION_RESPECTFUL_AFTER_MUSIC_DELAY);
 
+//MIUI ADD: start MIAUDIO_NOTIFICATION_FILTER
+        if (strategy == STRATEGY_SONIFICATION_RESPECTFUL && mediaActiveLocally) {
+            devices = getDevicesForStrategyInt(STRATEGY_MEDIA,
+                    availableOutputDevices, outputs);
+        }
+//MIUI ADD: end
+
         bool ringActiveLocally = outputs.isActiveLocally(toVolumeSource(AUDIO_STREAM_RING), 0);
         // - for STRATEGY_SONIFICATION and ringtone active:
         // if SPEAKER was selected, and SPEAKER_SAFE is available, use SPEAKER_SAFE instead
@@ -460,6 +590,14 @@ DeviceVector Engine::getDevicesForStrategyInt(legacy_strategy strategy,
         // when media would have played on speaker, and the safe speaker path is available
         if (strategy == STRATEGY_SONIFICATION || ringActiveLocally
             || (strategy == STRATEGY_SONIFICATION_RESPECTFUL && !mediaActiveLocally)) {
+//MIUI ADD: start MIAUDIO_NOTIFICATION_FILTER
+            if (strategy == STRATEGY_SONIFICATION_RESPECTFUL) {
+                ALOGD("%s: STRATEGY_SONIFICATION_RESPECTFUL :Use STRATEGY_SONIFICATION to getDevice"
+                      , __func__);
+                devices = getDevicesForStrategyInt(STRATEGY_SONIFICATION,
+                        availableOutputDevices, outputs);
+            }
+//MIUI ADD: end
             devices.replaceDevicesByType(
                     AUDIO_DEVICE_OUT_SPEAKER,
                     availableOutputDevices.getDevicesFromType(
@@ -479,6 +617,10 @@ DeviceVector Engine::getDevicesForStrategyInt(legacy_strategy strategy,
         ALOGW("%s unknown strategy: %d", __func__, strategy);
         break;
     }
+
+//MIUI ADD: start MIAUDIO_NOTIFICATION_FILTER
+    AudioPolicyManagerStub::notificationFilterGetDevicesForStrategyInt(strategy, devices, outputs, availableOutputDevices, this);
+//MIUI ADD: end
 
     if (devices.isEmpty()) {
         ALOGV("%s no device found for strategy %d", __func__, strategy);
@@ -540,7 +682,8 @@ sp<DeviceDescriptor> Engine::getDeviceForInputSource(audio_source_t inputSource)
         device = availableDevices.getDevice(
                 AUDIO_DEVICE_IN_BLUETOOTH_A2DP, String8(""), AUDIO_FORMAT_DEFAULT);
         if (device != nullptr) break;
-        if (audio_is_bluetooth_out_sco_device(commDeviceType)) {
+        if (audio_is_bluetooth_out_sco_device(commDeviceType) &&
+            !AudioPolicyManagerStub::soundTransmitEnable()) {
             device = availableDevices.getDevice(
                     AUDIO_DEVICE_IN_BLUETOOTH_SCO_HEADSET, String8(""), AUDIO_FORMAT_DEFAULT);
             if (device != nullptr) break;
@@ -580,6 +723,27 @@ sp<DeviceDescriptor> Engine::getDeviceForInputSource(audio_source_t inputSource)
                     AUDIO_DEVICE_IN_USB_DEVICE, AUDIO_DEVICE_IN_USB_HEADSET});
             break;
         default:    // FORCE_NONE
+            // For 3-pole headphone, priority use speaker mic.
+            if (availableOutputDevices.containsDeviceWithType(AUDIO_DEVICE_OUT_WIRED_HEADPHONE)) {
+                device = availableDevices.getFirstExistingDevice({
+                    AUDIO_DEVICE_IN_BACK_MIC, AUDIO_DEVICE_IN_WIRED_HEADSET,
+                    AUDIO_DEVICE_IN_USB_HEADSET, AUDIO_DEVICE_IN_USB_DEVICE,
+                    AUDIO_DEVICE_IN_BLUETOOTH_BLE, AUDIO_DEVICE_IN_BUILTIN_MIC});
+                if (device != nullptr) {
+                    break;
+                }
+            }
+            // For 3-pole usb headphone, identified as AUDIO_DEVICE_OUT_USB_HEADSET, priority use speaker mic.
+            if (availableOutputDevices.containsDeviceWithType(AUDIO_DEVICE_OUT_USB_HEADSET)) {
+                device = availableDevices.getFirstExistingDevice({
+                    AUDIO_DEVICE_IN_WIRED_HEADSET, AUDIO_DEVICE_IN_USB_HEADSET,
+                    AUDIO_DEVICE_IN_USB_DEVICE, AUDIO_DEVICE_IN_BLUETOOTH_BLE,
+                    AUDIO_DEVICE_IN_BACK_MIC, AUDIO_DEVICE_IN_BUILTIN_MIC});
+                if (device != nullptr) {
+                    break;
+                }
+            }
+
             device = availableDevices.getFirstExistingDevice({
                     AUDIO_DEVICE_IN_WIRED_HEADSET, AUDIO_DEVICE_IN_USB_HEADSET,
                     AUDIO_DEVICE_IN_USB_DEVICE, AUDIO_DEVICE_IN_BLUETOOTH_BLE,
@@ -634,8 +798,9 @@ sp<DeviceDescriptor> Engine::getDeviceForInputSource(audio_source_t inputSource)
     case AUDIO_SOURCE_CAMCORDER:
         // For a device without built-in mic, adding usb device
         device = availableDevices.getFirstExistingDevice({
-                AUDIO_DEVICE_IN_BACK_MIC, AUDIO_DEVICE_IN_BUILTIN_MIC,
-                AUDIO_DEVICE_IN_USB_DEVICE});
+                AUDIO_DEVICE_IN_WIRED_HEADSET, AUDIO_DEVICE_IN_USB_HEADSET,
+                AUDIO_DEVICE_IN_USB_DEVICE, AUDIO_DEVICE_IN_BACK_MIC,
+                AUDIO_DEVICE_IN_BUILTIN_MIC});
         break;
     case AUDIO_SOURCE_VOICE_DOWNLINK:
     case AUDIO_SOURCE_VOICE_CALL:
@@ -664,6 +829,12 @@ sp<DeviceDescriptor> Engine::getDeviceForInputSource(audio_source_t inputSource)
     case AUDIO_SOURCE_ULTRASOUND:
         device = availableDevices.getFirstExistingDevice({
                 AUDIO_DEVICE_IN_BUILTIN_MIC, AUDIO_DEVICE_IN_BACK_MIC});
+        break;
+    case AUDIO_SOURCE_VOIP_CALL:
+    case AUDIO_SOURCE_VOIP_UPLINK:
+    case AUDIO_SOURCE_VOIP_DOWNLINK:
+            device = availableDevices.getDevice(
+                AUDIO_DEVICE_IN_BUILTIN_MIC, String8(""), AUDIO_FORMAT_DEFAULT);
         break;
     default:
         ALOGW("getDeviceForInputSource() invalid input source %d", inputSource);
@@ -760,6 +931,14 @@ DeviceVector Engine::getDevicesForProductStrategy(product_strategy_t strategy) c
                                     availableOutputDevices,
                                     outputs);
 }
+
+//MIUI ADD: start MIAUDIO_MULTI_ROUTE
+//skip to select this device if it has been force
+bool Engine::setForceSkipDevice(audio_skip_device_t skipDevive)
+{
+    return AudioPolicyManagerStub::multiRouteSetForceSkipDevice(skipDevive, this);
+}
+//MIUI ADD: end
 
 DeviceVector Engine::getOutputDevicesForAttributes(const audio_attributes_t &attributes,
                                                    const sp<DeviceDescriptor> &preferredDevice,

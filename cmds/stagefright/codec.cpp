@@ -20,6 +20,10 @@
 #include <utils/Log.h>
 
 #include "SimplePlayer.h"
+//MIUI ADD: start MIAUDIO_OZO
+#include "WaveWriter.h"
+#include <MediaStub.h>
+//MIUI ADD: end
 
 #include <binder/IServiceManager.h>
 #include <binder/ProcessState.h>
@@ -40,6 +44,13 @@
 #include <gui/SurfaceComposerClient.h>
 #include <gui/Surface.h>
 #include <ui/DisplayMode.h>
+#include <cutils/properties.h>
+
+//MIUI ADD: start MIAUDIO_OZO
+static const char *ozoGuidanceTag = "vendor.ozoaudio.guidance.value";
+static const char *ozoOrientationTag = "vendor.ozoaudio.orientation.value";
+static const bool kSupportOZO = property_get_bool("ro.vendor.audio.zoom.support", false );
+//MIUI ADD: end
 
 static void usage(const char *me) {
     fprintf(stderr, "usage: %s [-a] use audio\n"
@@ -47,8 +58,14 @@ static void usage(const char *me) {
                     "\t\t[-p] playback\n"
                     "\t\t[-S] allocate buffers from a surface\n"
                     "\t\t[-R] render output to surface (enables -S)\n"
-                    "\t\t[-T] use render timestamps (enables -R)\n",
-                    me);
+                    "\t\t[-T] use render timestamps (enables -R)\n"
+//MIUI ADD: start MIAUDIO_OZO
+                    "\t\t[-o] use OZO audio decoder\n"
+                    "\t\t[-O file] write decoded audio to specified file\n"
+                    "\t\t[-g guidance] set OZO guidance mode\n"
+                    "\t\t[-l orientations] set OZO listener orientation, format [frame_ind yaw pitch roll]\n"
+//MIUI ADD: end
+                    , me);
     exit(1);
 }
 
@@ -67,6 +84,7 @@ struct CodecState {
 
 }  // namespace android
 
+//MIUI ADD: start MIAUDIO_OZO
 static int decode(
         const android::sp<android::ALooper> &looper,
         const char *path,
@@ -74,10 +92,20 @@ static int decode(
         bool useVideo,
         const android::sp<android::Surface> &surface,
         bool renderSurface,
-        bool useTimestamp) {
+        bool useTimestamp,
+        const char *output,
+        bool isOzoAudio,
+        const char *ozoGuidance,
+        android::KeyedVector<size_t, android::AString> & ozoEvents,
+        android::KeyedVector<size_t, android::AString> & ozoHeadsetEvents) {
+//MIUI ADD: end
     using namespace android;
 
     static int64_t kTimeout = 500ll;
+
+//MIUI ADD: start MIAUDIO_OZO
+    WaveWriter *waveWriter = nullptr;
+//MIUI ADD: end
 
     sp<NuMediaExtractor> extractor = new NuMediaExtractor(NuMediaExtractor::EntryPoint::OTHER);
     if (extractor->setDataSource(NULL /* httpService */, path) != OK) {
@@ -95,6 +123,20 @@ static int decode(
         CHECK_EQ(err, (status_t)OK);
 
         AString mime;
+//MIUI ADD: start MIAUDIO_OZO
+        if (isOzoAudio) {
+            format->setString("mime", MEDIA_MIMETYPE_AUDIO_OZOAUDIO);
+        }
+
+        if (ozoGuidance) {
+            format->setString(ozoGuidanceTag, ozoGuidance);
+        }
+
+        ssize_t eventIndex = ozoEvents.indexOfKey(0);
+        if (eventIndex >= 0) {
+            format->setString(ozoOrientationTag, ozoEvents.valueAt(eventIndex));
+        }
+//MIUI ADD: end
         CHECK(format->findString("mime", &mime));
 
         bool isAudio = !strncasecmp(mime.c_str(), "audio/", 6);
@@ -262,7 +304,16 @@ static int decode(
             if (err == OK) {
                 ALOGV("draining output buffer %zu, time = %lld us",
                       index, (long long)presentationTimeUs);
+//MIUI ADD: start MIAUDIO_OZO
+                if (waveWriter)
+                {
+                    sp<MediaCodecBuffer> outputBuffer;
+                    auto err = state->mCodec->getOutputBuffer(index, &outputBuffer);
+                    CHECK_EQ(err, (status_t) OK);
 
+                    waveWriter->Append(outputBuffer->data(), outputBuffer->size());
+                }
+//MIUI ADD: end
                 ++state->mNumBuffersDecoded;
                 state->mNumBytesDecoded += size;
 
@@ -301,9 +352,26 @@ static int decode(
                 CHECK_EQ((status_t)OK, state->mCodec->getOutputFormat(&format));
 
                 ALOGV("INFO_FORMAT_CHANGED: %s", format->debugString().c_str());
+//MIUI ADD: start MIAUDIO_OZO
+                if (!waveWriter && output) {
+                    int32_t channelCount = 2;
+                    int32_t sampleRate = 48000;
+                    CHECK(format->findInt32("channel-count", &channelCount));
+                    CHECK(format->findInt32("sample-rate", &sampleRate));
+                    waveWriter = new WaveWriter(output, channelCount, sampleRate);
+                }
+//MIUI ADD: end
             } else {
                 CHECK_EQ(err, -EAGAIN);
             }
+//MIUI ADD: start MIAUDIO_OZO
+            ssize_t eventIndex = ozoEvents.indexOfKey(state->mNumBuffersDecoded);
+            if (eventIndex >= 0) {
+                sp<AMessage> message = new AMessage();
+                message->setString(ozoOrientationTag, ozoEvents.valueAt(eventIndex));
+                state->mCodec->setParameters(message);
+            }
+//MIUI ADD: end
         }
     }
 
@@ -329,7 +397,9 @@ static int decode(
                    state->mNumBytesDecoded * 1E6 / 1024 / elapsedTimeUs);
         }
     }
-
+//MIUI ADD: start MIAUDIO_OZO
+    delete waveWriter;
+//MIUI ADD: end
     return 0;
 }
 
@@ -344,9 +414,17 @@ int main(int argc, char **argv) {
     bool useSurface = false;
     bool renderSurface = false;
     bool useTimestamp = false;
+//MIUI ADD: start MIAUDIO_OZO
+    bool isOzoAudio = false;
+    const char* ozoGuidance = "none";
+    const char* ozoOrientations = nullptr;
+    const char* ozoHeadsets = nullptr;
+    const char* output = nullptr;
+
+//MIUI ADD: end
 
     int res;
-    while ((res = getopt(argc, argv, "havpSDRT")) >= 0) {
+     while ((res = getopt(argc, argv, "havpSDRToH:O:g:l:")) >= 0) {
         switch (res) {
             case 'a':
             {
@@ -363,6 +441,33 @@ int main(int argc, char **argv) {
                 playback = true;
                 break;
             }
+//MIUI ADD: start MIAUDIO_OZO
+            case 'o':
+            {
+                isOzoAudio = true;
+                break;
+            }
+            case 'O':
+            {
+                if(optarg) output = optarg;
+                break;
+            }
+            case 'g':
+            {
+                if(optarg) ozoGuidance = optarg;
+                break;
+            }
+            case 'H':
+            {
+                if(optarg) ozoHeadsets = optarg;
+                break;
+            }
+            case 'l':
+            {
+                if(optarg) ozoOrientations = optarg;
+                break;
+            }
+//MIUI ADD: end
             case 'T':
             {
                 useTimestamp = true;
@@ -397,7 +502,17 @@ int main(int argc, char **argv) {
     if (!useAudio && !useVideo) {
         useAudio = useVideo = true;
     }
+//MIUI ADD: start MIAUDIO_OZO
+    // Orientation events for Ozo audio decoding
+    if(kSupportOZO){
+        KeyedVector<size_t, AString> ozoEvents;
+        MediaStub::parseOzoOrientations(ozoEvents, ozoOrientations);
 
+        // Headset (on/off) events for Ozo audio decoding
+        KeyedVector<size_t, AString> ozoHeadsetEvents;
+        MediaStub::parseOzoOrientations(ozoHeadsetEvents, ozoHeadsets);
+    }
+//MIUI ADD: end
     ProcessState::self()->startThreadPool();
 
     sp<android::ALooper> looper = new android::ALooper;
@@ -453,8 +568,15 @@ int main(int argc, char **argv) {
         player->stop();
         player->reset();
     } else {
-        decode(looper, argv[0], useAudio, useVideo, surface, renderSurface,
-                useTimestamp);
+//MIUI ADD: start MIAUDIO_OZO
+        if(kSupportOZO){
+            decode(looper, argv[0], useAudio, useVideo, surface, renderSurface,
+               useTimestamp, output, isOzoAudio,
+                ozoGuidance, ozoEvents, ozoHeadsetEvents);
+//MIUI ADD: end
+        } else {
+            decode(looper, argv[0], useAudio, useVideo, surface, renderSurface,useTimestamp,NULL,NULL,NULL,NULL,NULL);
+        }
     }
 
     if (playback || (useSurface && useVideo)) {

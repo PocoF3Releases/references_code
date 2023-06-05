@@ -29,6 +29,13 @@
 #include <media/stagefright/foundation/AHandler.h>
 #include <media/stagefright/FrameRenderTracker.h>
 #include <utils/Vector.h>
+#include <media/hardware/VideoAPI.h>
+
+#include "VideoInfoImp.h"
+
+#ifdef DLB_VISION
+#include <PixelProcessing.h>
+#endif
 
 class C2Buffer;
 class C2GraphicBlock;
@@ -231,6 +238,23 @@ struct MediaCodec : public AHandler {
             uint32_t *flags,
             int64_t timeoutUs = 0ll);
 
+    //MIUI ADD FOR ONETRACK:START
+    enum HDR_FLAG {
+        HDR_FLAG_FALSE = 0,
+        HDR_FLAG_TRUE,
+    };
+    int32_t fHdr;
+    HDRStaticInfo mLastHDRStaticInfo;
+    sp<ABuffer> mLastHdr10PlusBuffer;
+    sp<AMessage> mHdrDateMsg;
+    int fBufferIndex;
+    float timeAttrSum;
+    int64_t timeInit;
+    int64_t timeAttrHead;
+    int64_t timeAttrPrev;
+    float frameRateFloatCal;
+    //MIUI ADD FOR ONETRACK:END
+
     status_t renderOutputBufferAndRelease(size_t index, int64_t timestampNs);
     status_t renderOutputBufferAndRelease(size_t index);
     status_t releaseOutputBuffer(size_t index);
@@ -427,6 +451,14 @@ private:
     status_t mStickyError;
     sp<Surface> mSurface;
     SoftwareRenderer *mSoftRenderer;
+#ifdef DLB_VISION
+    sp<PixelProcessing> mPixelProcessor;
+    sp<ALooper> pLooper;
+    sp<AMessage> ppConfigure;
+    int mDoviProfile;
+#endif
+    bool mVideoBoxEnabled;
+    void *mVideoBoxHandle;
 
     mediametrics_handle_t mMetricsHandle = 0;
     nsecs_t mLifetimeStartNs = 0;
@@ -618,7 +650,15 @@ private:
     int64_t mIndexOfFirstFrameWhenLowLatencyOn;  // index of the first frame queued
                                                  // when low latency is on
     int64_t mInputBufferCounter;  // number of input buffers queued since last reset/flush
-
+    //MIUI ADD: video realtime fps features
+    bool mDecRealTimeFpsEnabled;
+    void* mDecRealTimeFpsHandle;
+    float mFpsFromPlayer;
+    bool DoviPlayback;
+    String16 mClientName;
+    uid_t mUid;
+    uint32_t mId;
+    //MIUI ADD: end
     class ReleaseSurface;
     std::unique_ptr<ReleaseSurface> mReleaseSurface;
 
@@ -678,6 +718,8 @@ private:
     std::function<sp<CodecBase>(const AString &, const char *)> mGetCodecBase;
     std::function<status_t(const AString &, sp<MediaCodecInfo> *)> mGetCodecInfo;
     friend class MediaTestHelper;
+
+    VideoInfoImp *mVideoInfoImp = nullptr;
 
     DISALLOW_EVIL_CONSTRUCTORS(MediaCodec);
 };

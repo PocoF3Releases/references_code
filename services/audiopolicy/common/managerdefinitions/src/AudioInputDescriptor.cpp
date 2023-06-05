@@ -15,7 +15,8 @@
  */
 
 #define LOG_TAG "APM::AudioInputDescriptor"
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
+#define LOG_NDEBUG_ASSERT 0
 
 #include <android-base/stringprintf.h>
 
@@ -76,8 +77,10 @@ status_t AudioInputDescriptor::applyAudioPortConfig(const struct audio_port_conf
 void AudioInputDescriptor::toAudioPortConfig(struct audio_port_config *dstConfig,
                                              const struct audio_port_config *srcConfig) const
 {
+#if LOG_NDEBUG_ASSERT
     ALOG_ASSERT(mProfile != 0,
                 "toAudioPortConfig() called on input with null profile %d", mIoHandle);
+#endif
     dstConfig->config_mask = AUDIO_PORT_CONFIG_ALL;
     if (srcConfig != NULL) {
         dstConfig->config_mask |= srcConfig->config_mask;
@@ -94,7 +97,9 @@ void AudioInputDescriptor::toAudioPortConfig(struct audio_port_config *dstConfig
 
 void AudioInputDescriptor::toAudioPort(struct audio_port_v7 *port) const
 {
+#if LOG_NDEBUG_ASSERT
     ALOG_ASSERT(mProfile != 0, "toAudioPort() called on input with null profile %d", mIoHandle);
+#endif
 
     mProfile->toAudioPort(port);
     port->id = mId;
@@ -229,13 +234,28 @@ status_t AudioInputDescriptor::open(const audio_config_t *config,
 
     audio_devices_t deviceType = mDevice->type();
 
-    status_t status = mClientInterface->openInput(mProfile->getModuleHandle(),
+    status_t status = NO_ERROR;
+//MIUI ADD: start MIAUDIO_VEHICLE_VOIP_TX
+    if ((flags & AUDIO_INPUT_FLAG_CAR_VOIP_TX) != 0) {
+        String8 addr = String8("vehicle_display");
+        ALOGD("open() set car display address");
+        status = mClientInterface->openInput(mProfile->getModuleHandle(),
+                                                  input,
+                                                  &lConfig,
+                                                  &deviceType,
+                                                  String8(addr.c_str()),
+                                                  source,
+                                                  flags);
+    } else{
+//MIUI ADD: end
+        status = mClientInterface->openInput(mProfile->getModuleHandle(),
                                                   input,
                                                   &lConfig,
                                                   &deviceType,
                                                   String8(mDevice->address().c_str()),
                                                   source,
                                                   flags);
+    }
     LOG_ALWAYS_FATAL_IF(mDevice->type() != deviceType,
                         "%s openInput returned device %08x when given device %08x",
                         __FUNCTION__, mDevice->type(), deviceType);

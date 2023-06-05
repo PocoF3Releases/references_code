@@ -15,7 +15,8 @@
  */
 
 #define LOG_TAG "APM::VolumeCurve"
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
+#define LOG_NDEBUG_ASSERT 0
 
 #include "VolumeCurve.h"
 #include "TypeConverter.h"
@@ -25,7 +26,9 @@ namespace android {
 
 float VolumeCurve::volIndexToDb(int indexInUi, int volIndexMin, int volIndexMax) const
 {
+#if LOG_NDEBUG_ASSERT
     ALOG_ASSERT(!mCurvePoints.isEmpty(), "Invalid volume curve");
+#endif
     if (volIndexMin < 0 || volIndexMax < 0) {
         // In order to let AudioService initialize the min and max, convention is to use -1
         return NAN;
@@ -52,7 +55,7 @@ float VolumeCurve::volIndexToDb(int indexInUi, int volIndexMin, int volIndexMax)
             volIdx = volIndexMin;
         } else {
             // This would result in a divide-by-zero below
-            ALOG_ASSERT(volIndexmin != volIndexMax, "Invalid volume index range & value: 0");
+            ALOG_ASSERT(volIndexMin != volIndexMax, "Invalid volume index range & value: 0");
             return NAN;
         }
     } else {
@@ -76,17 +79,19 @@ float VolumeCurve::volIndexToDb(int indexInUi, int volIndexMin, int volIndexMax)
     }
     // linear interpolation in the attenuation table in dB
     float decibels = (mCurvePoints[indexInUiPosition - 1].mAttenuationInMb / 100.0f) +
-            ((float)(volIdx - mCurvePoints[indexInUiPosition - 1].mIndex)) *
-                ( ((mCurvePoints[indexInUiPosition].mAttenuationInMb / 100.0f) -
-                        (mCurvePoints[indexInUiPosition - 1].mAttenuationInMb / 100.0f)) /
+            (((float)(volIdx - mCurvePoints[indexInUiPosition - 1].mIndex)) *
+                ( (mCurvePoints[indexInUiPosition].mAttenuationInMb / 100.0f) -
+                        (mCurvePoints[indexInUiPosition - 1].mAttenuationInMb / 100.0f))) /
                     ((float)(mCurvePoints[indexInUiPosition].mIndex -
-                            mCurvePoints[indexInUiPosition - 1].mIndex)) );
+                            mCurvePoints[indexInUiPosition - 1].mIndex));
 
     ALOGV("VOLUME vol index=[%d %d %d], dB=[%.1f %.1f %.1f]",
             mCurvePoints[indexInUiPosition - 1].mIndex, volIdx,
             mCurvePoints[indexInUiPosition].mIndex,
             ((float)mCurvePoints[indexInUiPosition - 1].mAttenuationInMb / 100.0f), decibels,
             ((float)mCurvePoints[indexInUiPosition].mAttenuationInMb / 100.0f));
+    if(decibels > 0.0)
+        decibels = 0.0;
 
     return decibels;
 }

@@ -54,6 +54,12 @@ public:
         TYPE_PATCH,
     };
 
+    enum fade_type {
+        TYPE_FADENONE,
+        TYPE_FADEIN,
+        TYPE_FADEOUT,
+    };
+
                         TrackBase(ThreadBase *thread,
                                 const sp<Client>& client,
                                 const audio_attributes_t& mAttr,
@@ -82,6 +88,12 @@ public:
             audio_session_t sessionId() const { return mSessionId; }
             uid_t       uid() const { return mUid; }
             pid_t       creatorPid() const { return mCreatorPid; }
+            //MIUI ADD START
+            pid_t       clientPid() const {
+                if (mClient == 0) return -1;
+                return mClient->pid();
+            }
+            //END
 
             audio_port_handle_t portId() const { return mPortId; }
     virtual status_t    setSyncEvent(const sp<SyncEvent>& event);
@@ -209,6 +221,10 @@ public:
            audio_format_t format() const { return mFormat; }
            int id() const { return mId; }
 
+    //MIUI ADD: start MIPERF_PRELOAD_MUTE
+    sp<Client>   getTrackClient() { return mClient; }
+    //MIUI ADD: end
+
     const char *getTrackStateAsString() const {
         if (isTerminated()) {
             return "TERMINATED";
@@ -289,6 +305,11 @@ protected:
     // ExtendedAudioBufferProvider interface is only needed for Track,
     // but putting it in TrackBase avoids the complexity of virtual inheritance
     virtual size_t  framesReady() const { return SIZE_MAX; }
+
+    // MIUI ADD: DOLBY_ENABLE && DOLBY_VQE
+    // Allow accessing format/channelmask/samplerate in Threads.cpp when add/remove active track
+    friend class AudioFlinger::ThreadBase;
+    // MIUI END
 
     uint32_t channelCount() const { return mChannelCount; }
 

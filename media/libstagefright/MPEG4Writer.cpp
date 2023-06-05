@@ -57,9 +57,17 @@
 
 #include <stagefright/AVExtensions.h>
 
+#include <binder/IPCThreadState.h>
+#include <binder/IServiceManager.h>
+#ifndef __ANDROID_VNDK___
+    #include <binder/IPermissionController.h>
+#endif
+
 #ifndef __predict_false
 #define __predict_false(exp) __builtin_expect((exp) != 0, 0)
 #endif
+
+static const bool kSupportOZO = property_get_bool("ro.vendor.audio.zoom.support", false );
 
 #define WARN_UNLESS(condition, message, ...) \
 ( (__predict_false(condition)) ? false : ({ \
@@ -68,7 +76,10 @@
 }))
 
 namespace android {
-
+//MIUI ADD: start MIAUDIO_OZO
+static const uint16_t OZO_MAJOR_VERSION = 1;
+static const uint16_t OZO_MINOR_VERSION = 1;
+//MIUI ADD: end
 static const int64_t kMinStreamableFileSizeInBytes = 5 * 1024 * 1024;
 static const uint8_t kNalUnitTypeSeqParamSet = 0x07;
 static const uint8_t kNalUnitTypePicParamSet = 0x08;
@@ -174,6 +185,9 @@ public:
     const char *getTrackType() const;
     void resetInternal();
     int64_t trackMetaDataSize();
+    //MIUI ADD: HEIF ICC SUPPORT
+    void getICCProfileFromExif(MediaBufferBase *buffer);
+    //MIUI ADD: end
 
 private:
     // A helper class to handle faster write box with table entries
@@ -408,6 +422,9 @@ private:
     int32_t mTileWidth, mTileHeight;
     int32_t mGridRows, mGridCols;
     size_t mNumTiles, mTileIndex;
+    //MIUI ADD: HEIF ICC SUPPORT
+    sp<ABuffer> mIccProfile;
+    //MIUI ADD: end
 
     // Update the audio track's drift information.
     void updateDriftTime(const sp<MetaData>& meta);
@@ -500,6 +517,27 @@ private:
 };
 
 MPEG4Writer::MPEG4Writer(int fd) {
+
+    const uid_t uid = IPCThreadState::self()->getCallingUid();
+    sp<IServiceManager> sm = defaultServiceManager();
+    sp<IBinder> binder = sm->getService(String16("permission"));
+    if (binder == 0) {
+        ALOGE("Cannot get permission service");
+        return;
+    }
+
+    sp<IPermissionController> permCtrl = interface_cast<IPermissionController>(binder);
+    Vector<String16> packages;
+
+    permCtrl->getPackagesForUid(uid, packages);
+
+    if (packages.isEmpty()) {
+        ALOGE("No packages for calling UID");
+
+    }else {
+        mClientName = packages[0];
+    }
+
     initInternal(dup(fd), true /*isFirstSession*/);
 }
 
@@ -577,7 +615,11 @@ void MPEG4Writer::initInternal(int fd, bool isFirstSession) {
         mSwitchPending = false;
         mIsFileSizeLimitExplicitlyRequested = false;
     }
-
+//MIUI ADD: start MIAUDIO_OZO
+    if(kSupportOZO){
+        mOzoBranding = false;
+    }
+//MIUI ADD: end
     // Verify mFd is seekable
     off64_t off = lseek64(mFd, 0, SEEK_SET);
     if (off < 0) {
@@ -659,6 +701,8 @@ const char *MPEG4Writer::Track::getFourCCForMime(const char *mime) {
             return "mp4a";
         } else if (!strcasecmp(MEDIA_MIMETYPE_AUDIO_MHAS, mime)) {
             return "mhm1";
+        } else if (!strcasecmp(MEDIA_MIMETYPE_AUDIO_FLAC, mime)) {
+            return "fLaC";
         }
     } else if (!strncasecmp(mime, "video/", 6)) {
         if (!strcasecmp(MEDIA_MIMETYPE_VIDEO_MPEG4, mime)) {
@@ -767,7 +811,7 @@ void MPEG4Writer::addDeviceMeta() {
         mMoovExtraSize += sizeof(kMetaKey_Version) + n + 32;
     }
 
-    if (property_get_bool("media.recorder.show_manufacturer_and_model", false)) {
+    if ((property_get_bool("media.recorder.show_manufacturer_and_model", false)) || (!String16("com.android.camera").compare(mClientName))) {
         if (property_get("ro.product.manufacturer", val, NULL)
                 && (n = strlen(val)) > 0) {
             mMetaKeys->setString(kMetaKey_Manufacturer, val, n + 1);
@@ -1546,6 +1590,14 @@ void MPEG4Writer::writeFtypBox(MetaData *param) {
         writeInt32(0);
         writeFourcc("isom");
         writeFourcc("3gp4");
+//MIUI ADD: start MIAUDIO_OZO
+    } else if (kSupportOZO && mOzoBranding) {
+        writeFourcc("nvr1");
+        writeInt32(OZO_MAJOR_VERSION * 65536 + OZO_MINOR_VERSION);
+        writeFourcc("isom");
+        writeFourcc("mp42");
+        writeFourcc("nvr1");
+//MIUI ADD: end
     } else {
         // Only write "heic" as major brand if the client specified HEIF
         // AND we indeed receive some image heic tracks.
@@ -2455,6 +2507,60 @@ void MPEG4Writer::Track::addChunkOffset(off64_t offset) {
     mCo64TableEntries->add(hton64(offset));
 }
 
+//MIUI ADD: HEIF ICC SUPPORT
+void MPEG4Writer::Track::getICCProfileFromExif(MediaBufferBase *buffer)
+{
+    uint32_t totalSize      = 0;
+    uint8_t app1Marker[]    = {0xFF, 0xE1};            //app1
+    uint8_t iccProfMarker[] = {0x49, 0x43, 0x43, 0x5f, 0x50, 0x52, 0x4f, 0x46, 0x49, 0x4c, 0x45};//ICC_PROFILE
+
+    size_t length = buffer->range_length();
+    uint8_t *data = (uint8_t *)buffer->data() + buffer->range_offset();
+
+    if (memcmp(data, app1Marker, sizeof(app1Marker))) {
+        ALOGE("Invalid APP1 marker: %x, %x", data[0], data[1]);
+        return ;
+    }
+    totalSize += sizeof(app1Marker);
+
+    uint16_t app1Size = (static_cast<uint16_t>(data[totalSize]) << 8) + data[totalSize + 1];
+    totalSize += app1Size;
+
+    while(totalSize < length)
+    {
+        if (data[totalSize]   != 0xFF ||
+            data[totalSize+1] <= 0xE1 ||
+            data[totalSize+1]  > 0xEF) {
+
+            ALOGV("Invalid APPn marker: %x, %x", data[totalSize], data[totalSize+1]);
+            totalSize += 1;
+            continue;
+        }
+        totalSize += 2;
+
+        //ICCP Index
+        uint32_t tmpIccPMaker = totalSize + 2;
+
+        uint16_t appnSize = (static_cast<uint16_t>(data[totalSize]) << 8) + data[totalSize + 1];
+        totalSize += appnSize;
+
+        if(!memcmp(&data[tmpIccPMaker], iccProfMarker, sizeof(iccProfMarker)))
+        {
+            /*                                  totalMarkerSize                                +           sizeOfIccProfile
+             * appnSize = [App2SizeMarker(2bytes)+ICCPMarker(12bytes with '\0')+chunk(2bytes)] + [ICCPDataSizeMarker(4bytes)+Data(...)]
+             */
+            uint32_t totalMarkerSize  = 16;
+            uint32_t sizeOfIccProfile = appnSize - totalMarkerSize;
+            uint32_t startPosOfIccProfileData = tmpIccPMaker + totalMarkerSize - 2; 
+            
+            mIccProfile = ABuffer::CreateAsCopy(&data[startPosOfIccProfileData], sizeOfIccProfile);
+
+            break;
+        }
+    }
+}
+//MIUI ADD: end
+
 void MPEG4Writer::Track::addItemOffsetAndSize(off64_t offset, size_t size, bool isExif) {
     CHECK(mIsHeic);
 
@@ -2591,6 +2697,21 @@ void MPEG4Writer::Track::flushItemRefs() {
             }
         }
     }
+    //MIUI ADD: HEIF ICC SUPPORT
+    // update icc profile to image items
+    if (mIccProfile) {
+        uint16_t colrPropIdx = mOwner->addProperty_l({
+            .type = FOURCC('c', 'o', 'l', 'r'),
+            .iccprofile = mIccProfile,
+        });
+        for (uint16_t i = 0; i < mDimgRefs.value.size(); i++) {
+            mOwner->addPropertyForItem(mDimgRefs.value[i], colrPropIdx);
+        }
+        if (mImageItemId > 0) {
+            mOwner->addPropertyForItem(mImageItemId, colrPropIdx);
+        }
+    }
+    //MIUI ADD: end
 }
 
 void MPEG4Writer::Track::setTimeScale() {
@@ -3720,6 +3841,11 @@ status_t MPEG4Writer::Track::threadEntry() {
                 buffer = NULL;
                 continue;
             }
+            //MIUI ADD: HEIF ICC SUPPORT
+            if (mIsHeic && isExif) {
+                getICCProfileFromExif(buffer);
+            }
+            //MIUI ADD: end
         }
         if (!buffer->meta_data().findInt64(kKeySampleFileOffset, &sampleFileOffset)) {
             sampleFileOffset = -1;
@@ -5545,6 +5671,17 @@ void MPEG4Writer::writeIpcoBox() {
                 endBox();
                 break;
             }
+            //MIUI ADD: HEIF ICC SUPPORT
+            case FOURCC('c', 'o', 'l', 'r'):
+            {
+                beginBox("colr");
+                writeInt32(FOURCC('p', 'r', 'o', 'f'));
+                auto &iccprof = mProperties[propIndex].iccprofile;
+                write(iccprof->data(), iccprof->size());
+                endBox();
+                break;
+            }
+            //MIUI ADD: end
             default:
                 ALOGW("Skipping unrecognized property: type 0x%08x",
                         mProperties[propIndex].type);
@@ -5717,6 +5854,12 @@ void MPEG4Writer::addRefs_l(uint16_t itemId, const ItemRefs &refs) {
     it->second.refsList.push_back(refs);
     mHasRefs = true;
 }
+
+//MIUI ADD: HEIF ICC SUPPORT
+void MPEG4Writer::addPropertyForItem(uint16_t itemId, uint16_t propIdx) {
+    mItems[itemId].properties.push_back(propIdx);
+}
+//MIUI ADD: end
 
 /*
  * Geodata is stored according to ISO-6709 standard.

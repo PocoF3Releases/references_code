@@ -83,13 +83,22 @@
 #include <private/android_filesystem_config.h>
 #include <utils/Singleton.h>
 #include <stagefright/AVExtensions.h>
+#include <VideoBoxStub.h>
 
+#include <binder/IPermissionController.h>
+#include <binder/PermissionController.h>
+#include <MiMediaCodecStub.h>
+#include "MediaStub.h"
+
+static const bool kSupportDolbyVision = property_get_bool("ro.video.dolby_vision_omx", false);
 namespace android {
 
 using Status = ::ndk::ScopedAStatus;
 using aidl::android::media::BnResourceManagerClient;
 using aidl::android::media::IResourceManagerClient;
 using aidl::android::media::IResourceManagerService;
+
+uint32_t mediacodecid = 0;
 
 // key for media statistics
 static const char *kCodecKeyName = "codec";
@@ -188,6 +197,8 @@ static const char *kCodecShapingEnhanced = "android.media.mediacodec.shaped";
 
 // XXX suppress until we get our representation right
 static bool kEmitHistogram = false;
+
+#define VPP_CTL "debug.media.vpp.enable"
 
 static int64_t getId(IResourceManagerClient const * client) {
     return (int64_t) client;
@@ -804,6 +815,8 @@ MediaCodec::MediaCodec(
       mFlags(0),
       mStickyError(OK),
       mSoftRenderer(NULL),
+      mPixelProcessor(NULL),
+      mDoviProfile(-1),
       mDomain(DOMAIN_UNKNOWN),
       mWidth(0),
       mHeight(0),
@@ -836,6 +849,15 @@ MediaCodec::MediaCodec(
       mInputBufferCounter(0),
       mGetCodecBase(getCodecBase),
       mGetCodecInfo(getCodecInfo) {
+
+    mId = mediacodecid++;
+    //MIUI ADD: video realtime fps features
+    if (uid == kNoUid) {
+        mUid = AIBinder_getCallingUid();
+    } else {
+        mUid = uid;
+    }
+    //MIUI ADD: end
     mResourceManagerProxy = new ResourceManagerServiceProxy(pid, uid,
             ::ndk::SharedRefBase::make<ResourceManagerClient>(this, pid));
     if (!mGetCodecBase) {
@@ -865,6 +887,35 @@ MediaCodec::MediaCodec(
             return NAME_NOT_FOUND;
         };
     }
+    //MIUI ADD: video realtime fps features
+    mVideoBoxEnabled = false;
+    mVideoBoxHandle = NULL;
+    mDecRealTimeFpsEnabled = false;
+    mFpsFromPlayer = 0;
+    //sometimes first flush then stop
+    mDecRealTimeFpsHandle = NULL;
+    
+    DoviPlayback = false;
+    PermissionController permissionController;
+    Vector<String16> packages;
+    permissionController.getPackagesForUid(mUid, packages);
+    if (packages.isEmpty()) {
+        ALOGE("No packages for calling UID");
+    } else {
+        mClientName = packages[0];
+    }
+    //MIUI ADD: end
+
+    //MIUI ADD FOR ONETRACK RBIS START
+    fHdr = HDR_FLAG_FALSE;
+    memset(&mLastHDRStaticInfo, 0, sizeof(mLastHDRStaticInfo));
+    fBufferIndex = 0;
+    timeAttrSum = 0.0;
+    timeInit = 0;
+    timeAttrHead = 0;
+    timeAttrPrev = 0;
+    frameRateFloatCal = -1.0;
+    //MIUI ADD FOR ONETRACK RBIS END
     initMediametrics();
 }
 
@@ -872,7 +923,36 @@ MediaCodec::~MediaCodec() {
     CHECK_EQ(mState, UNINITIALIZED);
     mResourceManagerProxy->removeClient();
 
+    //MIUI ADD: video box features
+    if (mVideoBoxHandle != NULL) {
+        ((videobox::VideoBoxStub*)mVideoBoxHandle)->releaseVideoBox();
+        delete (videobox::VideoBoxStub*)mVideoBoxHandle;
+        mVideoBoxHandle = NULL;
+    }
+    //MIUI ADD: end
+    //MIUI ADD: video realtime fps features
+    if (mDecRealTimeFpsEnabled && mDecRealTimeFpsHandle) {
+        ((mimediacodec::MiMediaCodecStub*)mDecRealTimeFpsHandle)->ResetSendFpsToDisplay(true, mId);
+    }
+
+    if (DoviPlayback && mDecRealTimeFpsHandle) {
+        ((mimediacodec::MiMediaCodecStub*)mDecRealTimeFpsHandle)->SendDoviPlaybackToDisplay(0);
+    }
+    //MIUI ADD: end
+
+    if (mDecRealTimeFpsHandle) {
+        ((mimediacodec::MiMediaCodecStub*)mDecRealTimeFpsHandle)->DestroyImplInstance();
+        delete (mimediacodec::MiMediaCodecStub*)mDecRealTimeFpsHandle;
+        mDecRealTimeFpsHandle = NULL;
+    }
+
     flushMediametrics();
+
+    if (mVideoInfoImp) {
+        delete mVideoInfoImp;
+        mVideoInfoImp = nullptr;
+    }
+
 }
 
 void MediaCodec::initMediametrics() {
@@ -1569,6 +1649,44 @@ status_t MediaCodec::init(const AString &name, bool nameIsType) {
         mLooper->registerHandler(mCodec);
     }
 
+    //MIUI ADD: video box features
+    char value[PROPERTY_VALUE_MAX];
+    if ((property_get(VPP_CTL, value, "false")) && (!strcmp("1", value)  ||
+            !strcmp("true", value))) {
+        ALOGI("video box enabled in settings");
+        mVideoBoxEnabled = true;
+    }
+    if ((mDomain == DOMAIN_VIDEO) && (((name.find("decoder", 0) > 0) &&
+            ((name.find("qti", 0) > 0) || (name.find("qcom", 0) > 0))) || \
+            ((name.find("DECODER",0) > 0) && (name.find("MTK",0) > 0))) && \
+            (!(name.find("HEIF", 0) > 0)) && (!(name.find("secure", 0) > 0)) && \
+            (!(name.find("HEIF", 0) > 0)) && (!(name.find("secure", 0) > 0)) && mVideoBoxEnabled) {
+        mVideoBoxHandle = new videobox::VideoBoxStub;
+        if (mVideoBoxHandle != NULL) {
+            bool ret = ((videobox::VideoBoxStub*)mVideoBoxHandle)->initVideobox(name,true,mCodec);
+            if (ret) {
+                mVideoBoxEnabled = true;
+                ALOGI("init video box enabled");
+            } else {
+                mVideoBoxEnabled = false;
+                ALOGI("init video box disabled for init not supported");
+            }
+        }
+    } else {
+        ALOGI("init video box disabled for codec not supported");
+        mVideoBoxEnabled = false;
+    }
+    //MIUI ADD: end
+    //MIUI ADD: video realtime fps features
+        if (mDomain == DOMAIN_VIDEO &&
+            (((name.find("decoder", 0) > 0) && ((name.find("qti", 0) > 0) ||
+            (name.find("qcom", 0) > 0))) || ((name.find("DECODER",0) > 0) &&
+                (name.find("MTK",0)  > 0)) || ((name.find("decoder", 0) > 0) &&
+                (name.find("dolby", 0) > 0))) && (!(name.find("HEIF", 0) > 0))) {
+            mDecRealTimeFpsEnabled = true;
+        }
+    //MIUI ADD: end
+
     mLooper->registerHandler(this);
 
     mCodec->setCallback(
@@ -1611,6 +1729,11 @@ status_t MediaCodec::init(const AString &name, bool nameIsType) {
             break;
         }
     }
+
+    if (mDomain == DOMAIN_VIDEO ) {
+        mVideoInfoImp = new VideoInfoImp(mClientName, mInitName);
+    }
+
     return err;
 }
 
@@ -1661,7 +1784,94 @@ status_t MediaCodec::configure(
 
     // TODO: validity check log-session-id: it should be a 32-hex-digit.
     format->findString("log-session-id", &mLogSessionId);
+    //MIUI ADD: video realtime fps features
+    int32_t thumbnailMode = 0;
+    format->findInt32("thumbnail-mode", &thumbnailMode);
+    int32_t heicMode = 0;
+    format->findInt32("vendor.qti-ext-dec-heif-mode.value", &heicMode);
+    int32_t frameMode = 0;
+    format->findInt32("frame-thumbnail-mode", &frameMode);
+    int32_t VideoAnalysisMode = 0;
+    format->findInt32("video-analysis-mode", &VideoAnalysisMode);
+    int32_t maxStringNameSize = 128;
+    char buf[maxStringNameSize];
+    char cParam[maxStringNameSize];
+    sprintf(cParam,"/proc/%d/exe",getpid());
+    auto count = readlink(cParam, buf, maxStringNameSize);
 
+    if (mDecRealTimeFpsEnabled == true) {
+        if ((flags & CONFIGURE_FLAG_ENCODE) || ((count > 0) && (count < maxStringNameSize) &&
+            (!(strncmp(buf,"/system/bin/mediaserver64", maxStringNameSize)) ||
+            !(strncmp(buf,"/system/bin/mediaserver", maxStringNameSize)) ||
+            !(strncmp(buf,"/apex/com.android.media/bin/mediatranscoding", maxStringNameSize))))) {
+            mDecRealTimeFpsEnabled = false;
+        } else {
+            mDecRealTimeFpsEnabled = true;
+        }
+    }
+    if (mDecRealTimeFpsEnabled && (thumbnailMode ==0) && (heicMode ==0) && (frameMode == 0)
+        && (VideoAnalysisMode == 0) && !strstr(String8(mClientName).c_str(), "Cts") &&
+         !strstr(String8(mClientName).c_str(), "cts")) {
+        mDecRealTimeFpsEnabled = true;
+        ALOGI("fps video to display enabled");
+        mDecRealTimeFpsHandle = new mimediacodec::MiMediaCodecStub;
+        if (mDecRealTimeFpsHandle != NULL) {
+            ((mimediacodec::MiMediaCodecStub*)mDecRealTimeFpsHandle)->ResetSendFpsToDisplay(false, mId);
+        }
+
+        int32_t frameRateInt = -1;
+        float frameRateFloat = -1.0;
+        if (!format->findFloat("frame-rate", &frameRateFloat)) {
+            if (!format->findInt32("frame-rate", &frameRateInt)) {
+                frameRateInt = -1;
+            }
+            frameRateFloat = (float)frameRateInt;
+        }
+        if (1 <= frameRateFloat && frameRateFloat <= 960)
+            mFpsFromPlayer = frameRateFloat;
+        ALOGI("The Fps from player is %f  frameRateFloat %f frameRateInt %d",
+            mFpsFromPlayer, frameRateFloat, frameRateInt);
+
+        if (mDecRealTimeFpsEnabled && mDecRealTimeFpsHandle) {
+            ((mimediacodec::MiMediaCodecStub*)mDecRealTimeFpsHandle)->SetFpsFromPlayer(mFpsFromPlayer);
+        }
+        //MIUI ADD FOR ONETRACK RBIS START
+        ALOGI("MediaStub sendFrameRate");
+        MediaStub::sendFrameRate((int)frameRateFloat);
+        //MIUI ADD FOR ONETRACK RBIS END
+
+    } else {
+        mDecRealTimeFpsEnabled = false;
+        ALOGI("fps video to display disabled");
+    }
+    PermissionController permissionController;
+    Vector<String16> packages;
+    permissionController.getPackagesForUid(mUid, packages);
+
+    //notify display that dolby-vision playback
+    AString mime;
+    format->findString("mime", &mime);
+    //MIUI ADD FOR ONETRACK RBIS START
+    ALOGI("MediaStub sendMine");
+    MediaStub::sendMine(mime.c_str());
+    //MIUI ADD FOR ONETRACK RBIS END
+    ALOGD("currery video type %s", mime.c_str());
+    if(!strcmp(mime.c_str(), MEDIA_MIMETYPE_VIDEO_DOLBY_VISION)){
+        int32_t thumbnailMode = 0;
+        format->findInt32("thumbnail-mode", &thumbnailMode);
+        int32_t frameMode = 0;
+        format->findInt32("frame-thumbnail-mode",&frameMode);
+        int32_t VideoAnalysisMode = 0;
+        format->findInt32("video-analysis-mode",&VideoAnalysisMode);
+        //if not thumbnail mode, send to display dolby vision playback
+        if(!(flags & CONFIGURE_FLAG_ENCODE) && !thumbnailMode &&
+            !frameMode && !VideoAnalysisMode && surface){
+            ALOGD("dolby vision not thumbnail mode");
+            DoviPlayback = true;
+            //mimediacodec::MiMediaCodecStub::SendDoviPlaybackToDisplay(1);
+        }
+    }
+    //MIUI ADD: end
     if (mMetricsHandle != 0) {
         int32_t profile = 0;
         if (format->findInt32("profile", &profile)) {
@@ -1675,6 +1885,14 @@ status_t MediaCodec::configure(
                               (flags & CONFIGURE_FLAG_ENCODE) ? 1 : 0);
 
         mediametrics_setCString(mMetricsHandle, kCodecLogSessionId, mLogSessionId.c_str());
+        //MIUI ADD FOR ONETRACK RBIS START
+        ALOGI("MediaStub sendDolbyVision");
+        MediaStub::sendDolbyVision(mime.c_str());
+        if(!packages.isEmpty()){
+            ALOGI("MediaStub sendPackageName");
+            MediaStub::sendPackageName(String8(packages[0]).string());
+        }
+        //MIUI ADD FOR ONETRACK RBIS END
     }
 
     if (mDomain == DOMAIN_VIDEO || mDomain == DOMAIN_IMAGE) {
@@ -1683,6 +1901,26 @@ status_t MediaCodec::configure(
         if (!format->findInt32("rotation-degrees", &mRotationDegrees)) {
             mRotationDegrees = 0;
         }
+        //MIUI ADD FOR ONETRACK RBIS START
+        ALOGI("MediaStub sendWidth/sendHeight");
+        MediaStub::sendWidth(mWidth);
+        MediaStub::sendHeight(mHeight);
+        //MIUI ADD FOR ONETRACK RBIS END
+
+        //MIUI ADD: video box features
+        if (mVideoBoxEnabled && (mDomain == DOMAIN_VIDEO)) {
+            mVideoBoxEnabled = ((videobox::VideoBoxStub*)mVideoBoxHandle)->configVideobox(format);
+            if (mVideoBoxEnabled) {
+                ALOGI("config video box enabled");
+            } else {
+                mVideoBoxEnabled = false;
+                ALOGI("config video box disabled");
+            }
+        } else {
+            mVideoBoxEnabled = false;
+            ALOGI("configure : init video box disabled");
+        }
+        //MIUI ADD: end
 
         if (mMetricsHandle != 0) {
             mediametrics_setInt32(mMetricsHandle, kCodecWidth, mWidth);
@@ -1805,9 +2043,78 @@ status_t MediaCodec::configure(
 
     msg->setMessage("format", format);
     msg->setInt32("flags", flags);
-    msg->setObject("surface", surface);
+    if (!kSupportDolbyVision) {
+        msg->setObject("surface", surface);
+    } else {
+        bool isDolbyVisionPlayback = false;
+        AString mime;
+        if (format->findString("mime", &mime)) {
+            ALOGV("%s mime type %s", __FUNCTION__, mime.c_str());
+        } else {
+            ALOGV("%s mime not found", __FUNCTION__);
+        }
+
+        int32_t rpuAssoc = 0;
+        format->findInt32("rpuAssoc", &rpuAssoc);
+
+        int32_t profile = -1;
+        if (format->findInt32("profile", &profile)) {
+            ALOGV("MediaCodec got profile: %d", profile);
+            mDoviProfile = profile;
+        } else {
+            ALOGV("%s profile not found", __FUNCTION__);
+        }
+
+        bool isDoVi = mime.startsWithIgnoreCase(MEDIA_MIMETYPE_VIDEO_DOLBY_VISION);
+
+        if (mDomain == DOMAIN_VIDEO && surface != NULL && (isDoVi)) {
+            sp<AMessage> initMsg = new AMessage();
+            initMsg->setInt32("profile", profile);
+            initMsg->setInt32("isProtected", crypto != NULL);
+            initMsg->setInt32("rpuAssoc", rpuAssoc);
+            initMsg->setObject("surface", surface);
+            initMsg->setInt32("isDoVi", isDoVi);
+
+            mPixelProcessor = PixelProcessing::instantiate(initMsg);
+            if (mPixelProcessor != NULL) {
+                ALOGV("%s pixelprocessing input surface ptr %d", __FUNCTION__, surface != NULL ? 1 : 0);
+                sp<Surface> dolbySurface = mPixelProcessor->getSurface();
+                msg->setObject("surface", dolbySurface);
+                // notify MediaCodec from PixelProcessor
+                mPixelProcessor->setNotificationMessage(new AMessage(kWhatConfigure, this));
+                ppConfigure = new AMessage();
+
+                ppConfigure->setObject("surface", surface);
+                // this may be overridden by the decoder.
+                // decoder reports takes priority
+                ppConfigure->setInt32("height", mHeight);
+                ppConfigure->setInt32("width", mWidth);
+                isDolbyVisionPlayback = true;
+                //mBufferChannel->setDoViPixelProcessor(mPixelProcessor.get());
+            } else {
+                ALOGE("%s: unable to instantiate pixelprocessing component", __FUNCTION__);
+                reset();
+                return EINVAL;
+            }
+        }
+        if (!isDolbyVisionPlayback) {
+            msg->setObject("surface", surface);
+        }
+    }
+
     if (flags & CONFIGURE_FLAG_ENCODE) {
         msg->setInt32("encoder", 1);
+        //MIUI ADD: wechat optimize encoder bitrate
+        int32_t bitrate = 0;
+        if (mDomain == DOMAIN_VIDEO && format->findInt32("bitrate", &bitrate)) {
+            if(!String16("com.tencent.mm").compare(mClientName)){
+                if(bitrate>=1200000 && bitrate<=3600000){
+                    bitrate = 3600000;
+                    format->setInt32("bitrate", bitrate);
+                }
+            }
+        }
+        //MIUI ADD: end
     }
 
     if (crypto != NULL || descrambler != NULL) {
@@ -1867,6 +2174,24 @@ status_t MediaCodec::configure(
         }
     }
 
+    if (kSupportDolbyVision && mPixelProcessor != NULL &&
+        err == OK /*A check for mime and err is enough here*/) {
+        int outputFormat;
+        mOutputFormat->findInt32("color-format", &outputFormat);
+
+        float frameRateFloat;
+        int frameRateInt;
+        if (!format->findFloat("frame-rate", &frameRateFloat)) {
+            if (!format->findInt32("frame-rate", &frameRateInt)) {
+                frameRateInt = -1;
+            }
+            frameRateFloat = static_cast<float>(frameRateInt);
+        }
+        ppConfigure->setFloat("frame-rate", frameRateFloat);
+
+        ALOGV("called-o : output format : %d W: %d , H: %d, FPS: %f",
+           outputFormat, mWidth, mHeight, frameRateFloat);
+     }
     return err;
 }
 
@@ -2477,12 +2802,25 @@ status_t MediaCodec::start() {
             break;
         }
     }
+    //MIUI ADD: video realtime fps features
+    if (DoviPlayback && mDecRealTimeFpsHandle) {
+        //if dolby vision playback notify display
+        ((mimediacodec::MiMediaCodecStub*)mDecRealTimeFpsHandle)->SendDoviPlaybackToDisplay(1);
+    }
+    //MIUI ADD: end
     return err;
 }
 
 status_t MediaCodec::stop() {
     sp<AMessage> msg = new AMessage(kWhatStop, this);
+    //MIUI ADD: video realtime fps features
+    if (mDecRealTimeFpsEnabled && mDecRealTimeFpsHandle)
+        ((mimediacodec::MiMediaCodecStub*)mDecRealTimeFpsHandle)->ResetSendFpsToDisplay(true, mId);
 
+    if (DoviPlayback && mDecRealTimeFpsHandle) {
+        ((mimediacodec::MiMediaCodecStub*)mDecRealTimeFpsHandle)->SendDoviPlaybackToDisplay(0);
+    }
+    //MIUI ADD: end
     sp<AMessage> response;
     return PostAndAwaitResponse(msg, &response);
 }
@@ -2515,6 +2853,11 @@ status_t MediaCodec::reclaim(bool force) {
 status_t MediaCodec::release() {
     sp<AMessage> msg = new AMessage(kWhatRelease, this);
     sp<AMessage> response;
+    //MIUI ADD: video realtime fps features
+    if (DoviPlayback && mDecRealTimeFpsHandle) {
+        ((mimediacodec::MiMediaCodecStub*)mDecRealTimeFpsHandle)->SendDoviPlaybackToDisplay(0);
+    }
+    //MIUI ADD: end
     return PostAndAwaitResponse(msg, &response);
 }
 
@@ -2577,6 +2920,15 @@ status_t MediaCodec::queueInputBuffer(
     msg->setInt64("timeUs", presentationTimeUs);
     msg->setInt32("flags", flags);
     msg->setPointer("errorDetailMsg", errorDetailMsg);
+
+    if (kSupportDolbyVision) {
+        ALOGV("TSS:: queueing input buffer of size:%d for TS: %llu", (int)size,
+           (long long)presentationTimeUs);
+    }
+    
+    if (mDomain == DOMAIN_VIDEO  && mVideoInfoImp) {
+        mVideoInfoImp->printInputBufferInterver(presentationTimeUs);
+    }
 
     sp<AMessage> response;
     return PostAndAwaitResponse(msg, &response);
@@ -2736,6 +3088,10 @@ status_t MediaCodec::renderOutputBufferAndRelease(size_t index) {
     msg->setSize("index", index);
     msg->setInt32("render", true);
 
+    if (mDomain == DOMAIN_VIDEO  && mVideoInfoImp) {
+        mVideoInfoImp->printRenderBufferInterver(0);
+    }
+
     sp<AMessage> response;
     return PostAndAwaitResponse(msg, &response);
 }
@@ -2745,6 +3101,10 @@ status_t MediaCodec::renderOutputBufferAndRelease(size_t index, int64_t timestam
     msg->setSize("index", index);
     msg->setInt32("render", true);
     msg->setInt64("timestampNs", timestampNs);
+
+    if (mDomain == DOMAIN_VIDEO  && mVideoInfoImp) {
+        mVideoInfoImp->printRenderBufferInterver(timestampNs / 1000);
+    }
 
     sp<AMessage> response;
     return PostAndAwaitResponse(msg, &response);
@@ -2938,7 +3298,10 @@ status_t MediaCodec::getBufferAndFormat(
 
 status_t MediaCodec::flush() {
     sp<AMessage> msg = new AMessage(kWhatFlush, this);
-
+    //MIUI ADD: video realtime fps features
+    if (mDecRealTimeFpsEnabled && mDecRealTimeFpsHandle)
+        ((mimediacodec::MiMediaCodecStub*)mDecRealTimeFpsHandle)->ResetSendFpsToDisplay(true, mId);
+    //MIUI ADD: end
     sp<AMessage> response;
     return PostAndAwaitResponse(msg, &response);
 }
@@ -3138,6 +3501,14 @@ bool MediaCodec::handleDequeueOutputBuffer(const sp<AReplyToken> &replyID, bool 
         response->setInt32("flags", flags);
 
         statsBufferReceived(timeUs, buffer);
+
+        DataType type;
+        type = mFlags & kFlagIsEncoder ? DATA_TYPE_RAW : DATA_TYPE_YUV;
+        if (mDomain == DOMAIN_VIDEO  && mVideoInfoImp) {
+            mVideoInfoImp->printOutputBufferInterver(timeUs);
+            mVideoInfoImp->dumpVideoData(false /* input */, type, buffer->data(),
+                                                buffer->size(), mWidth, mHeight);
+        }
 
         response->postReply(replyID);
     }
@@ -3768,6 +4139,7 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
 
                 case kWhatReleaseCompleted:
                 {
+                    bool isEncoder = mFlags & kFlagIsEncoder;
                     if (mState != RELEASING) {
                         ALOGW("Received kWhatReleaseCompleted in state %d/%s",
                               mState, stateString(mState).c_str());
@@ -3786,9 +4158,41 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                     mResourceManagerProxy->removeClient();
                     mReleaseSurface.reset();
 
+                    if (kSupportDolbyVision && mPixelProcessor != NULL) {
+                        mPixelProcessor->stop();
+                    }
+
                     if (mReplyID != nullptr) {
                         postPendingRepliesAndDeferredMessages("kWhatReleaseCompleted");
                     }
+                    //MIUI ADD FOR ONETRACK RBIS START
+                    if(mHdrDateMsg != NULL){
+                        if (mHdrDateMsg->contains("hdr-static-info")) {
+                            HDRStaticInfo info;
+                            if (ColorUtils::getHDRStaticInfoFromFormat(mHdrDateMsg, &info)
+                                    && memcmp(&mLastHDRStaticInfo, &info, sizeof(info))) {
+                                fHdr = HDR_FLAG_TRUE;
+                            }
+                        }
+                        sp<ABuffer> hdr10PlusInfo;
+                        if (mHdrDateMsg->findBuffer("hdr10-plus-info", &hdr10PlusInfo)){
+                            if(hdr10PlusInfo != nullptr && hdr10PlusInfo->size() > 0
+                                    && hdr10PlusInfo != mLastHdr10PlusBuffer) {
+                                fHdr = HDR_FLAG_TRUE;
+                            }
+                        }
+                    }
+                    if (mMetricsHandle != 0){
+                        ALOGI("MediaStub sendHdrInfo/sendFrameRateFloatCal/updateFrcAieAisState");
+                        MediaStub::sendHdrInfo(fHdr);
+                        MediaStub::sendFrameRateFloatCal((int)frameRateFloatCal);
+                        MediaStub::updateFrcAieAisState();
+                    }
+                    if (mDomain == DOMAIN_VIDEO && !isEncoder){
+                        ALOGI("MediaStub sendVideoPlayData");
+                        MediaStub::sendVideoPlayData();
+                    }
+                    //MIUI ADD FOR ONETRACK RBIS END
                     if (mAsyncReleaseCompleteNotification != nullptr) {
                         flushMediametrics();
                         mAsyncReleaseCompleteNotification->post();
@@ -4031,6 +4435,9 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                     } else if (obj == NULL) {
                         // do not support unsetting surface
                         err = BAD_VALUE;
+                    } else if (kSupportDolbyVision && mPixelProcessor != NULL) {
+                        ppConfigure->setObject("surface", surface);
+                        break;
                     } else {
                         err = connectToSurface(surface);
                         if (err == ALREADY_EXISTS) {
@@ -4130,6 +4537,9 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
             setState(STARTING);
 
             mCodec->initiateStart();
+            if (kSupportDolbyVision && mPixelProcessor != NULL) {
+                mPixelProcessor->start();
+            }
             break;
         }
 
@@ -4563,6 +4973,9 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
             setState(FLUSHING);
 
             mCodec->signalFlush();
+            if (kSupportDolbyVision && mPixelProcessor != NULL) {
+                mPixelProcessor->signalFlush();
+            }
             returnBuffersToCodec();
             TunnelPeekState previousState = mTunnelPeekState;
             if (previousState != TunnelPeekState::kLegacyMode) {
@@ -4595,6 +5008,10 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
             }
 
             sp<AMessage> response = new AMessage;
+            if (kSupportDolbyVision && 
+                msg->what() == kWhatGetOutputFormat && mDoviProfile != -1) {
+                format->setInt32("dovi-profile", mDoviProfile);
+            }
             response->setMessage("format", format);
             response->postReply(replyID);
             break;
@@ -4703,9 +5120,17 @@ void MediaCodec::handleOutputFormatChangeIfNeeded(const sp<MediaCodecBuffer> &bu
     mOutputFormat = format;
     updateHDRFormatMetric();
     mapFormat(mComponentName, format, nullptr, true);
-    ALOGV("[%s] output format changed to: %s",
+    int usage;
+    if (!kSupportDolbyVision) {
+        ALOGV("[%s] output format changed to: %s",
             mComponentName.c_str(), mOutputFormat->debugString(4).c_str());
-
+    } else {
+        mOutputFormat->findInt32("usage", &usage);
+        ALOGV("[%s] output format changed to: %s , usage : %d ",
+                    mComponentName.c_str(),
+                    mOutputFormat->debugString(4).c_str(), usage);
+    }
+    
     if (mSoftRenderer == NULL &&
             mSurface != NULL &&
             (mFlags & kFlagUsesSoftwareRenderer)) {
@@ -4747,7 +5172,15 @@ void MediaCodec::handleOutputFormatChangeIfNeeded(const sp<MediaCodecBuffer> &bu
         }
     }
 
+    mHdrDateMsg = mOutputFormat;
     requestCpuBoostIfNeeded();
+
+    // Pixel processor reconfig
+    if (kSupportDolbyVision && mPixelProcessor != NULL) {
+        ppConfigure->setMessage("output-format", mOutputFormat);
+        ppConfigure->setInt32("usage", usage);
+        mPixelProcessor->setClientSurface(ppConfigure);
+    }
 
     if (mFlags & kFlagIsEncoder) {
         // Before we announce the format change we should
@@ -4991,6 +5424,12 @@ size_t MediaCodec::updateBuffers(
     }
     mAvailPortBuffers[portIndex].push_back(index);
 
+    //MIUI ADD: video box features
+    if (mVideoBoxEnabled && (mDomain == DOMAIN_VIDEO) && (portIndex == kPortIndexOutput)) {
+        ((videobox::VideoBoxStub*)mVideoBoxHandle)->readVideoBox(portIndex,buffer);
+    }
+    //MIUI ADD: end
+
     return index;
 }
 
@@ -5135,6 +5574,12 @@ status_t MediaCodec::onQueueInputBuffer(const sp<AMessage> &msg) {
         buffer->meta()->setInt32("csd", true);
     }
 
+    if (kSupportDolbyVision && mPixelProcessor != NULL) {
+        //mBufferChannel->setDoviRpuFrameTimeUs(size, timeUs);
+        uint8_t *ptr = info->mData->data();
+        mPixelProcessor->parseRPU(ptr + offset, size, timeUs);
+    }
+
     if (mTunneled) {
         TunnelPeekState previousState = mTunnelPeekState;
         switch(mTunnelPeekState){
@@ -5188,6 +5633,14 @@ status_t MediaCodec::onQueueInputBuffer(const sp<AMessage> &msg) {
             ALOGW("Log queueSecureInputBuffer error: %d", err);
         }
     } else {
+
+        DataType type;
+        type = mFlags & kFlagIsEncoder ? DATA_TYPE_YUV : DATA_TYPE_RAW;
+        if (mDomain == DOMAIN_VIDEO  && mVideoInfoImp) {
+            mVideoInfoImp->dumpVideoData(true /* input */, type, buffer->data(),
+                                                buffer->size(), mWidth, mHeight);
+        }
+
         err = mBufferChannel->queueInputBuffer(buffer);
         if (err != OK) {
             mediametrics_setInt32(mMetricsHandle, kCodecQueueInputBufferError, err);
@@ -5204,6 +5657,17 @@ status_t MediaCodec::onQueueInputBuffer(const sp<AMessage> &msg) {
         statsBufferSent(timeUs, buffer);
     }
 
+    //MIUI ADD: video box features
+    if (mVideoBoxEnabled && (mDomain == DOMAIN_VIDEO)) {
+        ((videobox::VideoBoxStub*)mVideoBoxHandle)->getRealtimeFramerate(msg);
+        msg->setInt32("frcStatus", ((videobox::VideoBoxStub*)mVideoBoxHandle)->isFrcEnable());
+    }
+    //MIUI ADD: end
+    //MIUI ADD: video realtime fps features
+    if (mDecRealTimeFpsEnabled && mDomain == DOMAIN_VIDEO && mDecRealTimeFpsHandle) {
+        ((mimediacodec::MiMediaCodecStub*)mDecRealTimeFpsHandle)->VideoToDisplayRealtimeFramerate(msg, mId);
+    }
+    //MIUI ADD: end
     return err;
 }
 
@@ -5266,6 +5730,45 @@ status_t MediaCodec::onReleaseOutputBuffer(const sp<AMessage> &msg) {
         info->mData.clear();
     }
 
+    //MIUI ADD FOR ONETRACK RBIS START
+    if(buffer->size() != 0
+            && mDomain == DOMAIN_VIDEO
+            && frameRateFloatCal == -1.0){
+        int64_t mediaTimeUs = -1;
+        buffer->meta()->findInt64("timeUs", &mediaTimeUs);
+        if(fBufferIndex == 0) {
+            if(mediaTimeUs > 0){
+                timeInit = mediaTimeUs;
+                timeAttrHead = mediaTimeUs;
+                timeAttrSum = 0.0;
+                timeAttrPrev = mediaTimeUs;
+                fBufferIndex++;
+            }
+        }else{
+            if(mediaTimeUs >0
+                    && (mediaTimeUs - timeAttrPrev) < 100000
+                    && (mediaTimeUs - timeAttrPrev) > 8000){
+                timeAttrSum += 1000000.0 / (mediaTimeUs - timeAttrPrev);
+                timeAttrPrev = mediaTimeUs;
+                fBufferIndex++;
+            }else{
+                fBufferIndex = 0;
+                timeAttrSum = 0.0;
+                timeAttrHead = mediaTimeUs;
+                timeAttrPrev = mediaTimeUs;
+                fBufferIndex++;
+            }
+            int32_t eosValue = 0;
+            buffer->meta()->findInt32("eos", &eosValue);
+            if((((mediaTimeUs - timeAttrHead) > 2000000)
+                    || (eosValue && ((mediaTimeUs - timeInit) > 2000000)))
+                    && fBufferIndex > 1){
+                frameRateFloatCal = timeAttrSum / (fBufferIndex - 1);
+            }
+        }
+    }
+    //MIUI ADD FOR ONETRACK RBIS END
+
     if (render && buffer->size() != 0) {
         int64_t mediaTimeUs = -1;
         buffer->meta()->findInt64("timeUs", &mediaTimeUs);
@@ -5275,6 +5778,10 @@ status_t MediaCodec::onReleaseOutputBuffer(const sp<AMessage> &msg) {
             // use media timestamp if client did not request a specific render timestamp
             ALOGV("using buffer PTS of %lld", (long long)mediaTimeUs);
             renderTimeNs = mediaTimeUs * 1000;
+        }
+
+        if (kSupportDolbyVision && mPixelProcessor != NULL) {
+            mPixelProcessor->updateTsMap(mediaTimeUs, renderTimeNs);
         }
 
         if (mSoftRenderer != NULL) {
@@ -5468,6 +5975,13 @@ void MediaCodec::onOutputBufferAvailable() {
 
         statsBufferReceived(timeUs, buffer);
 
+        DataType type;
+        type = mFlags & kFlagIsEncoder ? DATA_TYPE_RAW : DATA_TYPE_YUV;
+        if (mDomain == DOMAIN_VIDEO  && mVideoInfoImp) {
+            mVideoInfoImp->printOutputBufferInterver(timeUs);
+            mVideoInfoImp->dumpVideoData(false /* input */, type, buffer->data(),
+                                                buffer->size(), mWidth, mHeight);
+        }
         msg->post();
     }
 }

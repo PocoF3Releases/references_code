@@ -326,7 +326,7 @@ media_status_t AMRSource::read(
         return AMEDIA_ERROR_END_OF_STREAM;
     }
 
-    if (header & 0x83) {
+    if ((header & 0x83) && (header != 0x0D)) {
         // Padding bits must be 0.
 
         ALOGE("padding bits must be 0, header is 0x%02x", header);

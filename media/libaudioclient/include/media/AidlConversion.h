@@ -86,6 +86,9 @@ ConversionResult<int32_t> legacy2aidl_audio_io_handle_t_int32_t(audio_io_handle_
 ConversionResult<audio_port_handle_t> aidl2legacy_int32_t_audio_port_handle_t(int32_t aidl);
 ConversionResult<int32_t> legacy2aidl_audio_port_handle_t_int32_t(audio_port_handle_t legacy);
 
+ConversionResult<audio_app_type_f> aidl2legacy_int32_t_audio_app_type_f(int32_t aidl);
+ConversionResult<int32_t> legacy2aidl_audio_app_type_f_int32_t(audio_app_type_f legacy);
+
 ConversionResult<audio_patch_handle_t> aidl2legacy_int32_t_audio_patch_handle_t(int32_t aidl);
 ConversionResult<int32_t> legacy2aidl_audio_patch_handle_t_int32_t(audio_patch_handle_t legacy);
 

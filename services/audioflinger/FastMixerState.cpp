@@ -15,7 +15,7 @@
  */
 
 #define LOG_TAG "FastMixerState"
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
 
 #include <cutils/properties.h>
 #include "FastMixerState.h"

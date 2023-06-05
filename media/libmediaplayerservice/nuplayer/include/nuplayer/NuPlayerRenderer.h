@@ -202,6 +202,7 @@ protected:
     int32_t mVideoRenderingStartGeneration;
     int32_t mAudioRenderingStartGeneration;
     bool mRenderingDataDelivered;
+    bool mVideoPrerollMesSync;
 
     int64_t mNextAudioClockUpdateTimeUs;
     // the media timestamp of last audio sample right before EOS.
@@ -312,6 +313,10 @@ protected:
 private:
     bool mNeedVideoClearAnchor;
     bool mIsSeekonPause;
+    uint64_t mTotalRenderedFrameNum;
+    uint64_t mTotalDropedFrameNum;
+    uint64_t mContinueslyDropFrameNum;
+    uint64_t mMaxContinueslyDropedFrameNum;
     float mVideoRenderFps;
 };
 

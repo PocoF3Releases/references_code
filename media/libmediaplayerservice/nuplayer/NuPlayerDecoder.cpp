@@ -44,7 +44,14 @@
 #include <media/stagefright/SurfaceUtils.h>
 #include <mpeg2ts/ATSParser.h>
 #include <gui/Surface.h>
+//MIUI ADD: start MIAUDIO_OZO
+#include <MediaStub.h>
+//MIUI ADD: end
+#include <media/stagefright/MediaCodecList.h>
 
+static const bool kSupportOZO = property_get_bool("ro.vendor.audio.zoom.support", false );
+static const bool kSupportDolbyVisionOMX = property_get_bool("ro.video.dolby_vision_omx", false);
+static const bool kSupportDolbyVisionC2 = property_get_bool("ro.video.dolby_vision_c2", false);
 namespace android {
 
 static float kDisplayRefreshingRate = 60.f; // TODO: get this from the display
@@ -106,6 +113,11 @@ NuPlayer::Decoder::~Decoder() {
         mCodec->release();
     }
     releaseAndResetMediaBuffers();
+//MIUI ADD: start MIAUDIO_OZO
+    if (kSupportOZO && mOzoPlayCtrl) {
+        MediaStub::destroyOzoPlayCtrl( mOzoPlayCtrl );
+    }
+//MIUI ADD: end
 }
 
 sp<AMessage> NuPlayer::Decoder::getStats() {
@@ -159,7 +171,11 @@ void NuPlayer::Decoder::onMessageReceived(const sp<AMessage> &msg) {
                 {
                     int32_t index;
                     CHECK(msg->findInt32("index", &index));
-
+//MIUI ADD: start MIAUDIO_OZO
+                    if(kSupportOZO){
+                        MediaStub::ozoPlayCtrlSignal(mCodec, mOzoPlayCtrl);
+                    }
+//MIUI ADD: end
                     handleAnInputBuffer(index);
                     break;
                 }
@@ -298,16 +314,26 @@ void NuPlayer::Decoder::onConfigure(const sp<AMessage> &format) {
 
     mIsAudio = !strncasecmp("audio/", mime.c_str(), 6);
     mIsVideoAVC = !strcasecmp(MEDIA_MIMETYPE_VIDEO_AVC, mime.c_str());
-
+//MIUI ADD: start MIAUDIO_OZO
+    if (kSupportOZO && mIsAudio)
+        MediaStub::tryOzoAudioConfigureImpl(format, mime, mOzoPlayCtrl);
+//MIUI ADD: end
     mComponentName = mime;
     mComponentName.append(" decoder");
     ALOGV("[%s] onConfigure (surface=%p)", mComponentName.c_str(), mSurface.get());
 
-    mCodec = AVUtils::get()->createCustomComponentByName(mCodecLooper, mime.c_str(), false /* encoder */, format);
-    if (mCodec == NULL) {
-    mCodec = MediaCodec::CreateByType(
-            mCodecLooper, mime.c_str(), false /* encoder */, NULL /* err */, mPid, mUid, format);
+    // Workaround to make AVC and HEVC coexist
+    if ((kSupportDolbyVisionOMX || kSupportDolbyVisionC2)
+            && !strcmp(mime.c_str(), MEDIA_MIMETYPE_VIDEO_DOLBY_VISION)) {
+        dolbyVisionDecoderOnConfigure(mime, format);
+    } else {
+        mCodec = AVUtils::get()->createCustomComponentByName(mCodecLooper, mime.c_str(), false /* encoder */, format);
+        if (mCodec == NULL) {
+            mCodec = MediaCodec::CreateByType(
+                    mCodecLooper, mime.c_str(), false /* encoder */, NULL /* err */, mPid, mUid, format);
+        }
     }
+
     int32_t secure = 0;
     if (format->findInt32("secure", &secure) && secure != 0) {
         if (mCodec != NULL) {
@@ -1367,6 +1393,49 @@ void NuPlayer::Decoder::notifyResumeCompleteIfNecessary() {
         notify->post();
     }
 }
+
+// DLB_VISION begin
+void NuPlayer::Decoder::dolbyVisionDecoderOnConfigure(const AString &mime,
+                const sp<AMessage> &format) {
+    ALOGV("dolby vision decoder onConfigure");
+    Vector<AString> matchingCodecs;
+    MediaCodecList::findMatchingCodecs(mime.c_str(),
+            false,  // createEncoder
+            0,      // flags
+            &matchingCodecs);
+    int codecProfile = -1;
+    format->findInt32("profile", &codecProfile);
+
+    Vector<AString> dolbyCodecs;
+    sp<IMediaCodecList> mcl = MediaCodecList::getInstance();
+    if (mcl.get() != NULL) {
+        for (size_t i = 0; i < matchingCodecs.size(); ++i) {
+            AString codecName = matchingCodecs[i].c_str();
+            // OMX_VIDEO_DolbyVisionProfileDvavSe (512)
+            if (codecName.endsWithIgnoreCase("hevc") &&
+                    codecProfile < 512) {
+                dolbyCodecs.push_back(matchingCodecs[i]);
+                break;
+            } else if (codecName.endsWithIgnoreCase("avc") &&
+                    codecProfile == 512) {
+                dolbyCodecs.push_back(matchingCodecs[i]);
+                break;
+            } else if (codecName.find("avc-hevc") >= 0 &&
+                    codecProfile <= 512 && kSupportDolbyVisionC2) {
+                dolbyCodecs.push_back(matchingCodecs[i]);
+                break;
+            }
+        }
+    }
+
+    if (dolbyCodecs.size() > 0) {
+        mComponentName = dolbyCodecs[0];
+        ALOGI("[%s] creating dolby decoder", mComponentName.c_str());
+        mCodec = MediaCodec::CreateByComponentName(
+            mCodecLooper, mComponentName.c_str(), NULL /* err */, mPid, mUid);
+    }
+}
+// DLB_VISION end
 
 }  // namespace android
 

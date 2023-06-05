@@ -15,7 +15,8 @@
  */
 
 #define LOG_TAG "FastCapture"
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
+#define LOG_NDEBUG_ASSERT 0
 
 #define ATRACE_TAG ATRACE_TAG_AUDIO
 
@@ -105,9 +106,11 @@ void FastCapture::onStateChange()
         } else {
             mFormat = mInputSource->format();
             mSampleRate = Format_sampleRate(mFormat);
-#if !LOG_NDEBUG
+#if !LOG_NDEBUG && LOG_NDEBUG_ASSERT
             unsigned channelCount = Format_channelCount(mFormat);
+#if LOG_NDEBUG_ASSERT
             ALOG_ASSERT(channelCount >= 1 && channelCount <= FCC_LIMIT);
+#endif
 #endif
         }
         dumpState->mSampleRate = mSampleRate;
@@ -123,7 +126,9 @@ void FastCapture::onStateChange()
 
     // input source and pipe sink must be compatible
     if (eitherChanged && mInputSource != NULL && mPipeSink != NULL) {
+#if LOG_NDEBUG_ASSERT
         ALOG_ASSERT(Format_isEqual(mFormat, mPipeSink->format()));
+#endif
     }
 
     if ((!Format_isEqual(mFormat, previousFormat)) || (frameCount != previous->mFrameCount)) {
@@ -179,8 +184,10 @@ void FastCapture::onWork()
     }
 
     if ((command & FastCaptureState::READ) /*&& isWarm*/) {
+#if LOG_NDEBUG_ASSERT
         ALOG_ASSERT(mInputSource != NULL);
         ALOG_ASSERT(mReadBuffer != NULL);
+#endif
         dumpState->mReadSequence++;
         ATRACE_BEGIN("read");
         ssize_t framesRead = mInputSource->read(mReadBuffer, frameCount);
@@ -201,8 +208,10 @@ void FastCapture::onWork()
     }
 
     if (command & FastCaptureState::WRITE) {
+#if LOG_NDEBUG_ASSERT
         ALOG_ASSERT(mPipeSink != NULL);
         ALOG_ASSERT(mReadBuffer != NULL);
+#endif
         if (mReadBufferState < 0) {
             memset(mReadBuffer, 0, frameCount * Format_frameSize(mFormat));
             mReadBufferState = frameCount;

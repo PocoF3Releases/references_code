@@ -740,6 +740,10 @@ status_t NuMediaExtractor::readSampleData(const sp<ABuffer> &buffer) {
         (const uint8_t *)it->mBuffer->data()
             + it->mBuffer->range_offset();
 
+    if((buffer->data() == NULL)||src == NULL) {
+        return -ENOMEM;
+    }
+
     memcpy((uint8_t *)buffer->data(), src, it->mBuffer->range_length());
 
     status_t err = OK;

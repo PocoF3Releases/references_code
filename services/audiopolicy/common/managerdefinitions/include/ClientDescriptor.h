@@ -34,6 +34,7 @@
 #include <Volume.h>
 #include "AudioPatch.h"
 #include "EffectDescriptor.h"
+#include <utils/String8.h>
 
 namespace android {
 
@@ -87,6 +88,29 @@ public:
                 mPreferredDeviceId != AUDIO_PORT_HANDLE_NONE && (!activeOnly || mActive);
     }
 
+    void setAppName(String8 appname) {
+        if (appname.size() > 0) {
+            mClientAppName = appname;
+        } else {
+            mClientAppName = String8();
+        }
+    };
+
+    String8 getClientAppName() {
+        return mClientAppName;
+    };
+    /* store app type here: start */
+    /*
+     * this mAppMask contains one app mask, not more
+     */
+    void setAppMask(audio_app_type_f mask) {
+        mAppMask |= (int32_t)mask;
+    }
+    int32_t getAppMask() {
+        return mAppMask;
+    }
+    /* store app type here: end */
+
 private:
     const audio_port_handle_t mPortId;  // unique Id for this client
     const uid_t mUid;                     // client UID
@@ -96,6 +120,10 @@ private:
           audio_port_handle_t mPreferredDeviceId;  // selected input device port ID
           bool mActive;
           bool mPreferredDeviceForExclusiveUse = false;
+          String8 mClientAppName;
+    /* store app type here: start */
+    int32_t mAppMask = (int32_t)APP_TYPE_NULL;
+    /* store app type here: end */
 };
 
 class TrackClientDescriptor: public ClientDescriptor

@@ -78,7 +78,9 @@ void AudioSource::set(
    mNoMoreFramesToRead = false;
   ALOGV("sampleRate: %u, outSampleRate: %u, channelCount: %u",
         sampleRate, outSampleRate, channelCount);
-  CHECK(channelCount == 1 || channelCount == 2 || channelCount == 6);
+  // channelCound == 3 for audiozoom
+  CHECK(channelCount == 1 || channelCount == 2 ||
+        channelCount == 3 || channelCount == 6);
   CHECK(sampleRate > 0);
 
   bool bAggregate = AVUtils::get()->isAudioSourceAggregate(attr, channelCount);

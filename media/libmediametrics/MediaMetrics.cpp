@@ -92,6 +92,12 @@ void mediametrics_setCString(mediametrics_handle_t handle, attr_t attr,
     if (item != NULL) item->setCString(attr, value);
 }
 
+void mediametrics_setFloat(mediametrics_handle_t handle, attr_t attr,
+                                 float value) {
+    Item *item = (Item *) handle;
+    if (item != NULL) item->setFloat(attr, value);
+}
+
 // fused get/add/set; if attr wasn't there, it's a simple set.
 //
 

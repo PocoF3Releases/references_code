@@ -18,6 +18,11 @@
 #define ANDROID_AUDIOTRACK_H
 
 #include <binder/IMemory.h>
+// MIUI ADD: START
+#include <binder/IServiceManager.h>
+#include <binder/IInterface.h>
+#include <binder/Parcel.h>
+// END
 #include <cutils/sched_policy.h>
 #include <media/AudioSystem.h>
 #include <media/AudioTimestamp.h>
@@ -34,6 +39,7 @@
 #include "android/media/BnAudioTrackCallback.h"
 #include "android/media/IAudioTrack.h"
 #include "android/media/IAudioTrackCallback.h"
+#include "Mi3DAudioMapping.h"
 
 namespace android {
 
@@ -44,6 +50,7 @@ using content::AttributionSourceState;
 struct audio_track_cblk_t;
 class AudioTrackClientProxy;
 class StaticAudioTrackClientProxy;
+class Mi3DAudioMapping;
 
 // ----------------------------------------------------------------------------
 
@@ -1206,6 +1213,7 @@ public:
             void setAudioTrackCallback(const sp<media::IAudioTrackCallback>& callback) {
                 mAudioTrackCallback->setAudioTrackCallback(callback);
             }
+	    bool isLongTimeZeroData(const void *buffer, int size);
 
  protected:
     /* copying audio tracks is not allowed */
@@ -1307,6 +1315,11 @@ public:
 
             void     createDummyAudioSessionForBluetooth();
 
+//MIUI ADD: start MIAUDIO_3D_PLAY
+            void     initMi3DAudioMapping();
+            void     releaseMi3DAudioMapping();
+//MIUI ADD: end
+
     // Next 4 fields may be changed if IAudioTrack is re-created, but always != 0
     sp<media::IAudioTrack>  mAudioTrack;
     sp<IMemory>             mCblkMemory;
@@ -1344,6 +1357,7 @@ public:
     audio_stream_type_t     mStreamType = AUDIO_STREAM_DEFAULT;
     uint32_t                mChannelCount;
     audio_channel_mask_t    mChannelMask;
+    uint32_t                mChannelCount_start;
     sp<IMemory>             mSharedBuffer;
     transfer_type           mTransfer;
     audio_offload_info_t    mOffloadInfoCopy;
@@ -1517,6 +1531,17 @@ public:
 
     int64_t                mPauseTimeRealUs;
 
+    int64_t                mMuteTimeMs;
+    int64_t                mMuteTimeSec;
+    int64_t                mFineTimeMs;
+    int64_t                mFineTimeSec;
+    int64_t                mSmallTimeMs;
+    int64_t                mSmallTimeSec;
+    int64_t                mMuteKillMs;
+    int64_t                mNowTimeMs;
+    int64_t                mBeforeTimeMs;
+    int64_t                mActiveTimeMs;
+    int64_t                mStartTimeMs;
 private:
     class DeathNotifier : public IBinder::DeathRecipient {
     public:
@@ -1574,6 +1599,31 @@ private:
         wp<media::IAudioTrackCallback> mCallback;
     };
     sp<AudioTrackCallback> mAudioTrackCallback;
+
+    int32_t  muteFrameCnt = 0;
+    bool mIsWhiteListChecked = false;
+    bool mIsWhiteListPackage = false;
+    bool isHeadsetPlugIn(audio_port_handle_t deviceId);
+    bool isWhiteListPackage();
+
+public:
+// MIAUDIO_3D_PLAY begin
+    Mi3DAudioMapping* mMi3DAudioMapping;
+    int enableValue;
+    uint32_t channelCountStart() { return mChannelCount_start; }
+// MIAUDIO_3D_PLAY end
+
+    //get package name in audioTrack_callBack_pullFromBuffQueue function
+    String16 getPackagenameInMcbf();
+
+private:
+    //PackageName of AudioTrack
+    String16 ClientName;
+    // MIUI ADD: START
+    sp<IBinder> mProcessManager;
+    void reportTrackStatus(int uid, int pid, int sessionId, bool isMuted);
+    bool mMuteReported = false;
+    // END
 };
 
 }; // namespace android

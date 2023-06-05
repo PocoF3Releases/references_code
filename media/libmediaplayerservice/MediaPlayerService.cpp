@@ -89,6 +89,8 @@
 static const int kDumpLockRetries = 50;
 static const int kDumpLockSleepUs = 20000;
 
+static const bool kSupport3DPlay = property_get_bool("ro.audio.3d_play", false );
+
 namespace {
 using android::media::Metadata;
 using android::status_t;
@@ -1844,6 +1846,8 @@ MediaPlayerService::AudioOutput::~AudioOutput()
 {
     close();
     free(mAttributes);
+    ALOGD("delete mCallbackData at ~AudioOutput");
+    mCallbackData.clear();
 }
 
 //static
@@ -2068,6 +2072,7 @@ void MediaPlayerService::AudioOutput::deleteRecycledTrack_l()
 
         mRecycledTrack.clear();
         close_l();
+        ALOGD("delete mCallbackData at deleteRecycledTrack_l()");
         mCallbackData.clear();
     }
 }
@@ -2322,6 +2327,17 @@ status_t MediaPlayerService::AudioOutput::open(
     mFlags = flags;
     mMsecsPerFrame = 1E3f / (mPlaybackRate.mSpeed * sampleRate);
     mFrameSize = t->frameSize();
+
+    //MIUI ADD: start MIAUDIO_3D_PLAY
+    if ((channelCount == 6)&&kSupport3DPlay) {
+        ALOGE("%s: 3daudio MediaPlayerService enter 1 ,mFrameSize = %zu, channelCount = %d,format = 0x%x",
+                        __func__, mFrameSize,channelCount,format);
+        mFrameSize = channelCount * audio_bytes_per_sample(format);
+        ALOGE("%s: 3daudio MediaPlayerService enter 2 ,mFrameSize = %zu, channelCount = %d,format = 0x%x",
+                        __func__, mFrameSize,channelCount,format);
+    }
+    //MIUI ADD: end
+
     mTrack = t;
 
     return updateTrack();

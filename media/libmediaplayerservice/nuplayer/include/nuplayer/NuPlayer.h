@@ -185,6 +185,7 @@ protected:
     bool mOffloadAudio;
     sp<DecoderBase> mAudioDecoder;
     Mutex mDecoderLock;  // guard |mAudioDecoder| and |mVideoDecoder|.
+    Mutex mRendererLock;  // guard |mRenderer|.
     sp<CCDecoder> mCCDecoder;
     sp<Renderer> mRenderer;
     sp<ALooper> mRendererLooper;

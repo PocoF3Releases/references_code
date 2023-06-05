@@ -33,6 +33,9 @@
 #include <android/hardware/ICamera.h>
 #include <media/MediaProfiles.h>
 #include <media/mediarecorder.h>
+#ifdef __XIAOMI_CAMERA__
+#include "xm/CameraStub.h"
+#endif
 
 namespace android {
 namespace camera2 {
@@ -966,7 +969,9 @@ status_t Parameters::initialize(CameraDeviceBase *device) {
     videoBufferMode = hardware::ICamera::VIDEO_BUFFER_MODE_DATA_CALLBACK_YUV;
     playShutterSound = true;
     enableFaceDetect = false;
-
+#ifdef __XIAOMI_CAMERA__
+    enablePrivacyCamera = CameraStub::isSupportPrivacyCamera(info);
+#endif
     enableFocusMoveMessages = false;
     afTriggerCounter = 1;
     afStateCounter = 0;
@@ -2379,10 +2384,15 @@ status_t Parameters::updateRequest(CameraMetadata *request) const {
     res = request->update(ANDROID_CONTROL_VIDEO_STABILIZATION_MODE,
             &reqVstabMode, 1);
     if (res != OK) return res;
-
+#ifdef __XIAOMI_CAMERA__
+    uint8_t reqFaceDetectMode = enablePrivacyCamera ? fastInfo.bestFaceDetectMode : enableFaceDetect ?
+            fastInfo.bestFaceDetectMode :
+            (uint8_t)ANDROID_STATISTICS_FACE_DETECT_MODE_OFF;
+#else
     uint8_t reqFaceDetectMode = enableFaceDetect ?
             fastInfo.bestFaceDetectMode :
             (uint8_t)ANDROID_STATISTICS_FACE_DETECT_MODE_OFF;
+#endif
     res = request->update(ANDROID_STATISTICS_FACE_DETECT_MODE,
             &reqFaceDetectMode, 1);
     if (res != OK) return res;

@@ -30,7 +30,7 @@ class TimeCheck {
     using OnTimerFunc = std::function<void(bool /* timeout */, float /* elapsedMs */ )>;
 
     // The default timeout is chosen to be less than system server watchdog timeout
-    static constexpr uint32_t kDefaultTimeOutMs = 5000;
+    static constexpr uint32_t kDefaultTimeOutMs = 14000;
     static uint32_t sTimeOutMs;
 
     /**

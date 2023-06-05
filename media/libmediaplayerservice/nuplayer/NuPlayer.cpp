@@ -58,11 +58,14 @@
 
 #include <gui/IGraphicBufferProducer.h>
 #include <gui/Surface.h>
+#include <cutils/properties.h>
 
 
 #include "ESDS.h"
 #include <media/stagefright/Utils.h>
 #include "mediaplayerservice/AVNuExtensions.h"
+
+static const bool kSupportOZO = property_get_bool("ro.vendor.audio.zoom.support", false );
 
 namespace android {
 
@@ -1687,11 +1690,24 @@ void NuPlayer::onStart(int64_t startPositionUs, MediaPlayerSeekMode mode) {
     mRendererLooper->start(false, false, ANDROID_PRIORITY_AUDIO);
     mRendererLooper->registerHandler(mRenderer);
 
-    status_t err = mRenderer->setPlaybackSettings(mPlaybackSettings);
-    if (err != OK) {
+    //game speed
+    status_t m_err;
+    if(property_get_bool("debug.game.video.support",0) && \
+       property_get_bool("debug.game.video.speed",0) && \
+       property_get_bool("debug.game.video.boot",0)) {
+        ALOGI("game enters the acceleration state...");
+        AudioPlaybackRate mTencentPlaybackSetting = mPlaybackSettings;
+        mTencentPlaybackSetting.mSpeed = (int)3*mPlaybackSettings.mSpeed;
+        ALOGI("mTencentPlaybackSetting.mSpeed is %d",mTencentPlaybackSetting.mSpeed);
+        m_err = mRenderer->setPlaybackSettings(mTencentPlaybackSetting);
+    } else {
+        m_err = mRenderer->setPlaybackSettings(mPlaybackSettings);
+    }
+    //game speed end
+    if (m_err != OK) {
         mSource->stop();
         mSourceStarted = false;
-        notifyListener(MEDIA_ERROR, MEDIA_ERROR_UNKNOWN, err);
+        notifyListener(MEDIA_ERROR, MEDIA_ERROR_UNKNOWN, m_err);
         return;
     }
 
@@ -1898,6 +1914,7 @@ void NuPlayer::tryOpenAudioSinkForOffload(
 }
 
 void NuPlayer::closeAudioSink() {
+    Mutex::Autolock autoLock(mRendererLock);
     if (mRenderer != NULL) {
         mRenderer->closeAudioSink();
     }
@@ -2059,6 +2076,7 @@ status_t NuPlayer::instantiateDecoder(
             format->setFloat("vendor.qti-ext-dec-output-render-frame-rate.value",
                     mMaxOutputFrameRate);
         }
+        format->setInt32("android._video-scaling", mVideoScalingMode);
     }
 
     Mutex::Autolock autoLock(mDecoderLock);
@@ -2104,6 +2122,10 @@ status_t NuPlayer::instantiateDecoder(
             }
         }
     }
+//MIUI ADD: start MIAUDIO_OZO
+    if (kSupportOZO && mAudioSink != NULL)
+        format->setInt32("audiosession-id", mAudioSink->getSessionId());
+//MIUI ADD: end
     (*decoder)->init();
 
     // Modular DRM
@@ -2493,7 +2515,9 @@ void NuPlayer::performReset() {
         mRendererLooper->stop();
         mRendererLooper.clear();
     }
+    mRendererLock.lock();
     mRenderer.clear();
+    mRendererLock.unlock();
     ++mRendererGeneration;
 
     if (mSource != NULL) {

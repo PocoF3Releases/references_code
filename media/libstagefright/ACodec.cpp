@@ -64,9 +64,19 @@
 #include "include/SharedMemoryBuffer.h"
 #include <media/stagefright/omx/OMXUtils.h>
 
-#include <stagefright/AVExtensions.h>
+// MIUI ADD: DOLBY_ENABLE
+#include "DolbyACodecExtImpl.h"
+#include <mediautils/FeatureManager.h>
+// MIUI END
 
+#include <stagefright/AVExtensions.h>
+#include <cutils/properties.h>
+
+#define GDLBVISION_MIMES_INDEX_HEVC 0
+#define GDLBVISION_MIMES_INDEX_AVC 1
 #define QTI_FLAC_DECODER
+
+static const bool kSupportDolbyVision = property_get_bool("ro.video.dolby_vision_omx", false);
 namespace android {
 
 typedef hardware::media::omx::V1_0::IGraphicBufferSource HGraphicBufferSource;
@@ -82,6 +92,23 @@ namespace {
 constexpr char TUNNEL_PEEK_KEY[] = "android._trigger-tunnel-peek";
 constexpr char TUNNEL_PEEK_SET_LEGACY_KEY[] = "android._tunnel-peek-set-legacy";
 
+// Workaround for when there is no seperate dolby vision decoder
+const char * gDVMimes[] {
+               "video/hevc",
+               "video/avc"
+             };
+
+}
+
+// Workaround for when there is no seperate dolby vision decoder
+static inline const char *resolveDolbyVision(AString compName) {
+    const char *dv_mime = gDVMimes[GDLBVISION_MIMES_INDEX_HEVC];
+    if (compName.endsWithIgnoreCase("hevc") || compName.endsWithIgnoreCase("hevc.secure")) {
+        dv_mime = gDVMimes[GDLBVISION_MIMES_INDEX_HEVC];
+    } else {
+        dv_mime = gDVMimes[GDLBVISION_MIMES_INDEX_AVC];
+    }
+    return dv_mime;
 }
 
 // OMX errors are directly mapped into status_t range if
@@ -1734,6 +1761,10 @@ status_t ACodec::setComponentRole(
     if (role == NULL) {
         return BAD_VALUE;
     }
+    // Workaround for when there is no seperate dolby vision decoder
+    if (kSupportDolbyVision && !strcmp(mime, MEDIA_MIMETYPE_VIDEO_DOLBY_VISION)) {
+        role = GetComponentRole(isEncoder, resolveDolbyVision(mComponentName));
+    }
     status_t err = SetComponentRole(mOMXNode, role);
     if (err != OK) {
         ALOGW("[%s] Failed to set standard component role '%s'.",
@@ -3120,6 +3151,17 @@ status_t ACodec::setupAC4Codec(
         return INVALID_OPERATION;
     }
 
+    // MIUI ADD: DOLBY_AC4_SPLIT_SEC
+    if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_AC4_SPLIT_SEC)) {
+        DlbGenClass1* pDlbGenClass1 = new DlbGenClass1();
+        bool res = pDlbGenClass1->check();
+        delete pDlbGenClass1;
+        if (!res) {
+            return OK;    // Security check fails but still returns OK
+        }
+    }
+    // MIUI END
+
     OMX_AUDIO_PARAM_ANDROID_AC4TYPE def;
     InitOMXParams(&def);
     def.nPortIndex = kPortIndexInput;
@@ -3133,6 +3175,53 @@ status_t ACodec::setupAC4Codec(
 
     def.nChannels = numChannels;
     def.nSampleRate = sampleRate;
+
+    // MIUI ADD: DOLBY_AC4_SPLIT_SEC
+    if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_AC4_SPLIT_SEC)) {
+        OMX_AUDIO_PARAM_ANDROID_AC4TBL tbl;
+        InitTblOMXParams(&tbl);
+
+        TableXInit *A_OBJ = new TableXInit(AC4_TABLE_SEC_FRS_CODE,
+                AC4_TABLE_SEC_FRS_MASK_VAL);
+
+        TableXInit *B_OBJ = new TableXInit(AC4_TABLE_SEC_MDD_MAX_FRAM,
+                AC4_TABLE_SEC_MMF_MASK_VAL);
+
+        TableXInit *C_OBJ = new TableXInit(AC4_TABLE_SEC_MDD_MAX_INST,
+                AC4_TABLE_SEC_MMI_MASK_VAL);
+
+        A_OBJ->init();
+        B_OBJ->init();
+        C_OBJ->init();
+
+        tbl.seedA = A_OBJ->getSeed();
+        tbl.seedB = B_OBJ->getSeed();
+        tbl.seedC = C_OBJ->getSeed();
+
+        tbl.sizeA = A_OBJ->getSize();
+        tbl.sizeB = B_OBJ->getSize();
+        tbl.sizeC = C_OBJ->getSize();
+
+        tbl.idA = A_OBJ->getTableID();
+        tbl.idB = B_OBJ->getTableID();
+        tbl.idC = C_OBJ->getTableID();
+
+        tbl.maskA = A_OBJ->getMaskVal();
+        tbl.maskB = B_OBJ->getMaskVal();
+        tbl.maskC = C_OBJ->getMaskVal();
+
+        memcpy (tbl.bufferA, A_OBJ->getBuffer(), LUT_BUFFER_SIZE);
+        memcpy (tbl.bufferB, B_OBJ->getBuffer(), TABLE_B_C_U8_SZ);
+        memcpy (tbl.bufferC, C_OBJ->getBuffer(), TABLE_B_C_U8_SZ);
+
+        mOMXNode->setParameter(
+                (OMX_INDEXTYPE)OMX_IndexParamAudioAndroidAc4Tbl, &tbl, sizeof(tbl));
+
+        delete A_OBJ;
+        delete B_OBJ;
+        delete C_OBJ;
+    }
+    // MIUI END
 
     return mOMXNode->setParameter(
             (OMX_INDEXTYPE)OMX_IndexParamAudioAndroidAc4, &def, sizeof(def));
@@ -3520,7 +3609,8 @@ static const struct VideoCodingMapEntry {
     { MEDIA_MIMETYPE_VIDEO_MPEG2, OMX_VIDEO_CodingMPEG2 },
     { MEDIA_MIMETYPE_VIDEO_VP8, OMX_VIDEO_CodingVP8 },
     { MEDIA_MIMETYPE_VIDEO_VP9, OMX_VIDEO_CodingVP9 },
-    { MEDIA_MIMETYPE_VIDEO_DOLBY_VISION, OMX_VIDEO_CodingDolbyVision },
+    { MEDIA_MIMETYPE_VIDEO_DOLBY_VISION, kSupportDolbyVision ?
+             OMX_VIDEO_CodingHEVC : OMX_VIDEO_CodingDolbyVision },
     { MEDIA_MIMETYPE_IMAGE_ANDROID_HEIC, OMX_VIDEO_CodingImageHEIC },
     { MEDIA_MIMETYPE_VIDEO_AV1, OMX_VIDEO_CodingAV1 },
 };
@@ -3533,6 +3623,27 @@ status_t ACodec::GetVideoCodingTypeFromMime(
         if (!strcasecmp(mime, kVideoCodingMapEntry[i].mMime)) {
             *codingType = kVideoCodingMapEntry[i].mVideoCodingType;
             return OK;
+        }
+    }
+
+    *codingType = OMX_VIDEO_CodingUnused;
+
+    return ERROR_UNSUPPORTED;
+}
+
+// Workaround to make AVC and HEVC coexist when there is no seperate dolby vision decoder
+static status_t GetVideoCodingTypeFromMime_DolbyVision(
+    const char *mime, AString compName, OMX_VIDEO_CODINGTYPE *codingType) {
+    if (!strcasecmp(mime, MEDIA_MIMETYPE_VIDEO_DOLBY_VISION)) {
+        char *dv_mime = nullptr;
+        dv_mime = (char *)resolveDolbyVision(compName);
+        for (size_t i = 0;
+             i < sizeof(kVideoCodingMapEntry) / sizeof(kVideoCodingMapEntry[0]);
+             ++i) {
+            if (!strcasecmp(dv_mime, kVideoCodingMapEntry[i].mMime)) {
+                *codingType = kVideoCodingMapEntry[i].mVideoCodingType;
+                return OK;
+            }
         }
     }
 
@@ -3590,7 +3701,13 @@ status_t ACodec::setupVideoDecoder(
     }
 
     OMX_VIDEO_CODINGTYPE compressionFormat;
-    status_t err = GetVideoCodingTypeFromMime(mime, &compressionFormat);
+    status_t err;
+    if (kSupportDolbyVision && !strcasecmp(mime, MEDIA_MIMETYPE_VIDEO_DOLBY_VISION)) {
+        err = GetVideoCodingTypeFromMime_DolbyVision(mime, mComponentName,
+                                                     &compressionFormat);
+    } else {
+        err = GetVideoCodingTypeFromMime(mime, &compressionFormat);
+    }
 
     if (err != OK) {
         return err;
@@ -4136,7 +4253,12 @@ status_t ACodec::setupVideoEncoder(
     /* Output port configuration */
 
     OMX_VIDEO_CODINGTYPE compressionFormat;
-    err = GetVideoCodingTypeFromMime(mime, &compressionFormat);
+    // Workaround to make AVC and HEVC coexist when there is no seperate dolby vision decoder
+    if(kSupportDolbyVision && !strcasecmp(mime,MEDIA_MIMETYPE_VIDEO_DOLBY_VISION)) {
+        err = GetVideoCodingTypeFromMime_DolbyVision(mime, mComponentName, &compressionFormat);
+    } else {
+        err = GetVideoCodingTypeFromMime(mime, &compressionFormat);
+    }
 
     if (err != OK) {
         return err;
@@ -9128,6 +9250,12 @@ status_t ACodec::queryCapabilities(
         return BAD_VALUE;
     }
 
+    // Workaround for when there is no seperate dolby vision decoder
+    if (kSupportDolbyVision && !strcmp(mime, MEDIA_MIMETYPE_VIDEO_DOLBY_VISION)) {
+        AString cName = name;
+        role = GetComponentRole(isEncoder, resolveDolbyVision(cName));
+    }
+
     OMXClient client;
     status_t err = client.connect(owner);
     if (err != OK) {
@@ -9167,6 +9295,36 @@ status_t ACodec::queryCapabilities(
             if (err != OK) {
                 break;
             }
+
+            if (kSupportDolbyVision) {
+                // Workaround for when there is no seperate dolby vision decoder.
+                // This section must be removed if the implementation supports Dolby
+                // Vision decoder as separate OMX component. The supported profile
+                // and level information should be exposed as part of that component
+                AString cName = name;
+                AString cMime = mime;
+                if (cMime.startsWithIgnoreCase(MEDIA_MIMETYPE_VIDEO_DOLBY_VISION)) {
+                    if (cName.endsWithIgnoreCase("hevc") || cName.endsWithIgnoreCase("hevc.secure")) {
+                        param.eProfile  = OMX_VIDEO_DolbyVisionProfileDvheStn;
+                        param.eLevel    = OMX_VIDEO_DolbyVisionLevelFhd30;
+                        caps->addProfileLevel(param.eProfile, param.eLevel);
+                        param.eProfile  = OMX_VIDEO_DolbyVisionProfileDvheDtr;
+                        param.eLevel    = OMX_VIDEO_DolbyVisionLevelFhd30;
+                        caps->addProfileLevel(param.eProfile, param.eLevel);
+                        param.eProfile  = OMX_VIDEO_DolbyVisionProfileDvheSt;
+                        param.eLevel    = OMX_VIDEO_DolbyVisionLevelFhd30;
+                        caps->addProfileLevel(param.eProfile, param.eLevel);
+                    } else if (cName.endsWithIgnoreCase("avc") ||
+                                cName.endsWithIgnoreCase("avc.secure")) {
+                        param.eProfile = OMX_VIDEO_DolbyVisionProfileDvavSe;
+                        param.eLevel   = OMX_VIDEO_DolbyVisionLevelFhd60;
+                        caps->addProfileLevel(param.eProfile, param.eLevel);
+                    }
+                    ALOGV("%s DOLBY_VISION profile %d level %d", __FUNCTION__, param.eProfile, param.eLevel);
+                    break;
+                }
+            }
+
             caps->addProfileLevel(param.eProfile, param.eLevel);
 
             // AVC components may not list the constrained profiles explicitly, but

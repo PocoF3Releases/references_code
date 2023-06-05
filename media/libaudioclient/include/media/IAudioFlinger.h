@@ -233,7 +233,7 @@ public:
     // mic mute/state
     virtual     status_t    setMicMute(bool state) = 0;
     virtual     bool        getMicMute() const = 0;
-    virtual     void        setRecordSilenced(audio_port_handle_t portId, bool silenced) = 0;
+    virtual     void        setRecordSilenced(audio_port_handle_t portId, audio_app_type_f appType, bool silenced) = 0;
 
     virtual     status_t    setParameters(audio_io_handle_t ioHandle,
                                     const String8& keyValuePairs) = 0;
@@ -360,6 +360,12 @@ public:
     virtual int32_t getAAudioHardwareBurstMinUsec() = 0;
 
     virtual status_t setDeviceConnectedState(const struct audio_port_v7 *port, bool connected) = 0;
+
+    // MIUI ADD: START
+    virtual status_t pauseAudioTracks(uid_t uid, pid_t pid) = 0;
+
+    virtual status_t resumeAudioTracks(uid_t uid, pid_t pid) = 0;
+    // END
 };
 
 /**
@@ -396,7 +402,7 @@ public:
     status_t setMode(audio_mode_t mode) override;
     status_t setMicMute(bool state) override;
     bool getMicMute() const override;
-    void setRecordSilenced(audio_port_handle_t portId, bool silenced) override;
+    void setRecordSilenced(audio_port_handle_t portId, audio_app_type_f appType, bool silenced) override;
     status_t setParameters(audio_io_handle_t ioHandle,
                            const String8& keyValuePairs) override;
     String8 getParameters(audio_io_handle_t ioHandle, const String8& keys)
@@ -462,6 +468,10 @@ public:
     int32_t getAAudioMixerBurstCount() override;
     int32_t getAAudioHardwareBurstMinUsec() override;
     status_t setDeviceConnectedState(const struct audio_port_v7 *port, bool connected) override;
+    // MIUI ADD: START
+    status_t pauseAudioTracks(uid_t uid, pid_t pid) override;
+    status_t resumeAudioTracks(uid_t uid, pid_t pid) override;
+    // END
 
 private:
     const sp<media::IAudioFlingerService> mDelegate;
@@ -551,6 +561,10 @@ public:
             GET_AAUDIO_MIXER_BURST_COUNT = media::BnAudioFlingerService::TRANSACTION_getAAudioMixerBurstCount,
             GET_AAUDIO_HARDWARE_BURST_MIN_USEC = media::BnAudioFlingerService::TRANSACTION_getAAudioHardwareBurstMinUsec,
             SET_DEVICE_CONNECTED_STATE = media::BnAudioFlingerService::TRANSACTION_setDeviceConnectedState,
+            // MIUI ADD: START
+            PAUSE_AUDIO_TRACKS = media::BnAudioFlingerService::TRANSACTION_pauseAudioTracks,
+            RESUME_AUDIO_TRACKS = media::BnAudioFlingerService::TRANSACTION_resumeAudioTracks,
+            // END
         };
 
     protected:
@@ -612,7 +626,7 @@ public:
     Status setMode(media::audio::common::AudioMode mode) override;
     Status setMicMute(bool state) override;
     Status getMicMute(bool* _aidl_return) override;
-    Status setRecordSilenced(int32_t portId, bool silenced) override;
+    Status setRecordSilenced(int32_t portId, int32_t appType, bool silenced) override;
     Status setParameters(int32_t ioHandle, const std::string& keyValuePairs) override;
     Status
     getParameters(int32_t ioHandle, const std::string& keys, std::string* _aidl_return) override;
@@ -672,6 +686,10 @@ public:
     Status getAAudioMixerBurstCount(int32_t* _aidl_return) override;
     Status getAAudioHardwareBurstMinUsec(int32_t* _aidl_return) override;
     Status setDeviceConnectedState(const media::AudioPort& port, bool connected) override;
+    // MIUI ADD: START
+    Status pauseAudioTracks(int32_t uid, pid_t pid) override;
+    Status resumeAudioTracks(int32_t uid, pid_t pid) override;
+    // END
 
 private:
     const sp<AudioFlingerServerAdapter::Delegate> mDelegate;

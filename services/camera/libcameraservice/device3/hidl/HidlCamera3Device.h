@@ -17,6 +17,9 @@
 #ifndef ANDROID_SERVERS_HIDLCAMERA3DEVICE_H
 #define ANDROID_SERVERS_HIDLCAMERA3DEVICE_H
 
+#ifdef __XIAOMI_CAMERA__
+#include <android/hardware/camera/device/3.7/ICameraDeviceSession.h>
+#endif
 #include "../Camera3Device.h"
 #include "HidlCamera3OutputUtils.h"
 
@@ -88,6 +91,11 @@ class HidlCamera3Device :
             /*out*/ sp<CameraOfflineSessionBase>* session) override;
 
     using RequestMetadataQueue = hardware::MessageQueue<uint8_t, hardware::kSynchronizedReadWrite>;
+
+#ifdef __XIAOMI_CAMERA__
+    camera3::HidlCaptureOutputStates getCaptureOutputStates(bool enableJank, sp<HidlCamera3Device> parent);
+    using Camera3Device::CaptureRequest;
+#endif
 
     class HidlHalInterface : public Camera3Device::HalInterface {
      public:
@@ -226,6 +234,11 @@ class HidlCamera3Device :
 
     virtual sp<Camera3DeviceInjectionMethods>
             createCamera3DeviceInjectionMethods(wp<Camera3Device>) override;
+
+#ifdef __XIAOMI_CAMERA__
+    virtual bool initJankStub(wp<Camera3Device> parent, const CameraMetadata& sessionParams) override;
+    virtual void cloneRequestStub(sp<CaptureRequest> dstReq, sp<CaptureRequest> srcReq) override;
+#endif
 
     // FMQ to write result on. Must be guarded by mProcessCaptureResultLock.
     std::unique_ptr<ResultMetadataQueue> mResultMetadataQueue;

@@ -15,8 +15,8 @@
  */
 
 #define LOG_TAG "APM::AudioOutputDescriptor"
-//#define LOG_NDEBUG 0
-
+#define LOG_NDEBUG 0
+#define LOG_NDEBUG_ASSERT 0
 #include <android-base/stringprintf.h>
 
 #include <AudioPolicyInterface.h>
@@ -435,7 +435,9 @@ void SwAudioOutputDescriptor::toAudioPortConfig(
                                                  const struct audio_port_config *srcConfig) const
 {
 
+#if LOG_NDEBUG_ASSERT
     ALOG_ASSERT(!isDuplicated(), "toAudioPortConfig() called on duplicated output %d", mIoHandle);
+#endif
     AudioOutputDescriptor::toAudioPortConfig(dstConfig, srcConfig);
 
     dstConfig->ext.mix.handle = mIoHandle;
@@ -443,7 +445,9 @@ void SwAudioOutputDescriptor::toAudioPortConfig(
 
 void SwAudioOutputDescriptor::toAudioPort(struct audio_port_v7 *port) const
 {
+#if LOG_NDEBUG_ASSERT
     ALOG_ASSERT(!isDuplicated(), "toAudioPort() called on duplicated output %d", mIoHandle);
+#endif
 
     AudioOutputDescriptor::toAudioPort(port);
 

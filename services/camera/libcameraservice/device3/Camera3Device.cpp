@@ -86,6 +86,8 @@
 #include <android/hardware/camera/device/3.7/ICameraInjectionSession.h>
 #include <android/hardware/camera2/ICameraDeviceUser.h>
 
+#include <string.h>
+
 #include "utils/CameraTraces.h"
 #include "mediautils/SchedulingPolicyService.h"
 #include "device3/Camera3Device.h"
@@ -101,6 +103,19 @@
 
 #include <algorithm>
 #include <tuple>
+
+#ifdef __XIAOMI_CAMERA__
+#include "xm/CameraStub.h"
+#endif
+
+#ifdef __XIAOMI_CAMERA_PERF__
+#include "xm/CameraPerf.h"
+#endif
+
+#ifdef __XIAOMI_CAMERA__
+#define CAMERA_STATE_FOLD 0x4
+#define CAMERA_STATE_UNFOLD 0x0
+#endif
 
 using namespace android::camera3;
 using namespace android::hardware::camera;
@@ -139,6 +154,11 @@ Camera3Device::~Camera3Device()
     ATRACE_CALL();
     ALOGV("%s: Tearing down for camera id %s", __FUNCTION__, mId.string());
     disconnectImpl();
+#ifdef __XIAOMI_CAMERA__
+    if (mPricacyCamera != nullptr) {
+        delete(mPricacyCamera);
+    }
+#endif
 }
 
 const String8& Camera3Device::getId() const {
@@ -146,6 +166,12 @@ const String8& Camera3Device::getId() const {
 }
 
 status_t Camera3Device::initializeCommonLocked() {
+
+#ifdef __XIAOMI_CAMERA__
+    ATRACE_CALL();
+    mFoldStatus = getScreenFoldStatus();
+    ALOGV("%s, %d, The display current foled state %d", __FUNCTION__, __LINE__, static_cast<int>(mFoldStatus));
+#endif
 
     /** Start watchdog thread */
     mCameraServiceWatchdog = new CameraServiceWatchdog();
@@ -273,7 +299,7 @@ status_t Camera3Device::disconnect() {
 
 status_t Camera3Device::disconnectImpl() {
     ATRACE_CALL();
-    ALOGI("%s: E", __FUNCTION__);
+    ALOGI("%s: Camera: %s E", __FUNCTION__, mId.string());
 
     status_t res = OK;
     std::vector<wp<Camera3StreamInterface>> streams;
@@ -312,6 +338,12 @@ status_t Camera3Device::disconnectImpl() {
                 mRequestThread->requestExit();
             }
 
+#ifdef __XIAOMI_CAMERA__
+            if(mEnableJank) {
+                CameraStub::setJankStates(STATES_JANKEXIT);
+            }
+#endif
+
             streams.reserve(mOutputStreams.size() + (mInputStream != nullptr ? 1 : 0));
             for (size_t i = 0; i < mOutputStreams.size(); i++) {
                 streams.push_back(mOutputStreams[i]);
@@ -331,6 +363,13 @@ status_t Camera3Device::disconnectImpl() {
         // to other deadlocks
         mRequestThread->join();
     }
+
+#ifdef __XIAOMI_CAMERA__
+    if(mEnableJank) {
+        CameraStub::setJankStates(STATES_JANKJOIN);
+    }
+#endif
+
     {
         Mutex::Autolock il(mInterfaceLock);
         if (mStatusTracker != NULL) {
@@ -352,6 +391,7 @@ status_t Camera3Device::disconnectImpl() {
 
         // Call close without internal mutex held, as the HAL close may need to
         // wait on assorted callbacks,etc, to complete before it can return.
+        ALOGI("CameraServiceWatchdog watch close process");
         mCameraServiceWatchdog->WATCH(interface->close());
 
         flushInflightRequests();
@@ -760,7 +800,16 @@ status_t Camera3Device::convertMetadataListToRequestListLocked(
     std::list<const SurfaceMap>::const_iterator surfaceMapIt = surfaceMaps.begin();
     for (; metadataIt != metadataList.end() && surfaceMapIt != surfaceMaps.end();
             ++metadataIt, ++surfaceMapIt) {
+#ifdef __XIAOMI_CAMERA__
+        sp<CaptureRequest> previewRequest =  new CaptureRequest();
+        int pluginCount = CameraStub::getPluginRequestCount(metadataIt->begin()->metadata, mDeviceInfo);
+        mIsPluginBurstRequest = pluginCount > 0 ? true : false;
+        sp<CaptureRequest> newRequest = setUpRequestLocked(*metadataIt, *surfaceMapIt, previewRequest);
+        ALOGV("%s: pluginCount %d, mIsPluginBurstRequest %d" ,
+                                __FUNCTION__, pluginCount, mIsPluginBurstRequest);
+#else
         sp<CaptureRequest> newRequest = setUpRequestLocked(*metadataIt, *surfaceMapIt);
+#endif
         if (newRequest == 0) {
             CLOGE("Can't create capture request");
             return BAD_VALUE;
@@ -768,9 +817,12 @@ status_t Camera3Device::convertMetadataListToRequestListLocked(
 
         newRequest->mRepeating = repeating;
         newRequest->mRequestTimeNs = requestTimeNs;
-
+#ifdef __XIAOMI_CAMERA__
         // Setup burst Id and request Id
+        newRequest->mResultExtras.burstId = burstId;
+#else
         newRequest->mResultExtras.burstId = burstId++;
+#endif
         auto requestIdEntry = metadataIt->begin()->metadata.find(ANDROID_REQUEST_ID);
         if (requestIdEntry.count == 0) {
             CLOGE("RequestID does not exist in metadata");
@@ -778,6 +830,16 @@ status_t Camera3Device::convertMetadataListToRequestListLocked(
         }
         newRequest->mResultExtras.requestId = requestIdEntry.data.i32[0];
 
+#ifdef __XIAOMI_CAMERA__
+        if(mIsPluginBurstRequest) {
+            cloneRequestStub(previewRequest, newRequest);
+            if(mEnableJank) pluginCount++;
+            for(int i = 0; i < pluginCount; i++) {
+                requestList->push_back(previewRequest);
+            }
+        }
+        burstId++;
+#endif
         requestList->push_back(newRequest);
 
         ALOGV("%s: requestId = %" PRId32, __FUNCTION__, newRequest->mResultExtras.requestId);
@@ -856,6 +918,11 @@ status_t Camera3Device::submitRequestsHelper(
         return res;
     }
 
+#ifdef __XIAOMI_CAMERA__
+    sp<CaptureRequest> captureRequest = *(requestList.begin());
+    int shrinkMode = CameraStub::getShrinkMode(captureRequest->mSettingsList.begin()->metadata);
+#endif
+
     if (repeating) {
         res = mRequestThread->setRepeatingRequests(requestList, lastFrameNumber);
     } else {
@@ -875,6 +942,16 @@ status_t Camera3Device::submitRequestsHelper(
         return BAD_VALUE;
     }
 
+#ifdef __XIAOMI_CAMERA__
+    if (shrinkMode > 0) {
+        auto streamIds = mOutputStreams.getStreamIds();
+        for (size_t i = 0; i < streamIds.size(); i++) {
+            bool isActiveStream = captureRequest->mOutputSurfaces.find(streamIds[i]) !=
+                                    captureRequest->mOutputSurfaces.end();
+            CameraStub::detachBuffer(mOutputStreams[i], shrinkMode, isActiveStream);
+        }
+    }
+#endif
     return res;
 }
 
@@ -907,7 +984,11 @@ status_t Camera3Device::setStreamingRequestList(
 }
 
 sp<Camera3Device::CaptureRequest> Camera3Device::setUpRequestLocked(
-        const PhysicalCameraSettingsList &request, const SurfaceMap &surfaceMap) {
+        const PhysicalCameraSettingsList &request, const SurfaceMap &surfaceMap
+#ifdef __XIAOMI_CAMERA__
+        , /*out*/sp<Camera3Device::CaptureRequest>  preRequest
+#endif
+) {
     status_t res;
 
     if (mStatus == STATUS_UNCONFIGURED || mNeedConfig) {
@@ -925,8 +1006,11 @@ sp<Camera3Device::CaptureRequest> Camera3Device::setUpRequestLocked(
             return NULL;
         }
     }
-
+#ifdef __XIAOMI_CAMERA__
+    sp<CaptureRequest>  newRequest = createCaptureRequest(request, surfaceMap, preRequest);
+#else
     sp<CaptureRequest> newRequest = createCaptureRequest(request, surfaceMap);
+#endif
     return newRequest;
 }
 
@@ -1368,6 +1452,10 @@ status_t Camera3Device::configureStreams(const CameraMetadata& sessionParams, in
     ATRACE_CALL();
     ALOGV("%s: E", __FUNCTION__);
 
+#ifdef __XIAOMI_CAMERA_PERF__
+    TEMP_THREAD_HIGHER_PRIORITY();
+#endif
+
     Mutex::Autolock il(mInterfaceLock);
     Mutex::Autolock l(mLock);
 
@@ -1379,12 +1467,58 @@ status_t Camera3Device::configureStreams(const CameraMetadata& sessionParams, in
             (!mRequestTemplateCache[mLastTemplateId].isEmpty())) {
         ALOGV("%s: Speculative session param configuration with template id: %d", __func__,
                 mLastTemplateId);
+#ifdef __XIAOMI_CAMERA__
+        CameraStub::updateSessionParams(mRequestTemplateCache[mLastTemplateId]);
+#endif
         return filterParamsAndConfigureLocked(mRequestTemplateCache[mLastTemplateId],
                 operatingMode);
     }
 
+#ifdef __XIAOMI_CAMERA__
+    CameraMetadata& metadata = const_cast<CameraMetadata&>(sessionParams);
+    CameraStub::updateSessionParams(metadata);
+#endif
     return filterParamsAndConfigureLocked(sessionParams, operatingMode);
 }
+
+#ifdef __XIAOMI_CAMERA__
+ScreenFoldState Camera3Device::getScreenFoldStatus()
+{
+    ScreenFoldState foldState = ScreenFoldState::Undefined;
+    uint64_t currentFoldState = CameraProviderManager::getCameraFoldState();
+    camera_metadata_entry facing = mDeviceInfo.find(ANDROID_LENS_FACING);
+
+    ALOGV("%s: Current Fold state: 0x%" PRIx64, __func__,
+                currentFoldState);
+
+    if ((facing.count == 1) &&
+        (facing.data.u8[0] == ANDROID_LENS_FACING_FRONT))
+    {
+        if (currentFoldState == CAMERA_STATE_FOLD)
+        {
+            foldState = ScreenFoldState::Fold;
+        }
+        else if (currentFoldState == CAMERA_STATE_UNFOLD)
+        {
+            foldState = ScreenFoldState::UnFold;
+        }
+    }
+    ALOGV("%s: Current ScreenFoldState: %d", __func__,
+                static_cast<int>(foldState));
+
+    return foldState;
+}
+
+ScreenFoldState Camera3Device::getPreviousFoldStatus()
+{
+    return mFoldStatus;
+}
+
+void Camera3Device::setFoldStatus(ScreenFoldState status)
+{
+    mFoldStatus = status;
+}
+#endif
 
 status_t Camera3Device::filterParamsAndConfigureLocked(const CameraMetadata& sessionParams,
         int operatingMode) {
@@ -1460,6 +1594,9 @@ status_t Camera3Device::createDefaultRequest(camera_request_template_t templateI
         if (!mRequestTemplateCache[templateId].isEmpty()) {
             *request = mRequestTemplateCache[templateId];
             mLastTemplateId = templateId;
+#ifdef __XIAOMI_CAMERA__
+            CameraStub::createCustomDefaultRequest(*request);
+#endif
             return OK;
         }
     }
@@ -1502,6 +1639,9 @@ status_t Camera3Device::createDefaultRequest(camera_request_template_t templateI
         *request = mRequestTemplateCache[templateId];
         mLastTemplateId = templateId;
     }
+#ifdef __XIAOMI_CAMERA__
+    CameraStub::createCustomDefaultRequest(*request);
+#endif
     return OK;
 }
 
@@ -1780,7 +1920,7 @@ status_t Camera3Device::triggerPrecaptureMetering(uint32_t id) {
 
 status_t Camera3Device::flush(int64_t *frameNumber) {
     ATRACE_CALL();
-    ALOGV("%s: Camera %s: Flushing all requests", __FUNCTION__, mId.string());
+    ALOGI("%s: Camera %s: Flushing all requests", __FUNCTION__, mId.string());
     Mutex::Autolock il(mInterfaceLock);
 
     {
@@ -1800,6 +1940,14 @@ status_t Camera3Device::flush(int64_t *frameNumber) {
 
     // Calculate expected duration for flush with additional buffer time in ms for watchdog
     uint64_t maxExpectedDuration = (getExpectedInFlightDuration() + kBaseGetBufferWait) / 1e6;
+    ALOGI("%s: mExpectedInflightDuration=%" PRIu64", maxExpectedDuration=%" PRIu64", InflightDuration=%" PRIu64,
+            __FUNCTION__, getExpectedInFlightDuration()+kBaseGetBufferWait,
+            maxExpectedDuration, kMinInflightDuration + kBaseGetBufferWait);
+#ifdef __XIAOMI_CAMERA__
+    //UPGR8475T-5251 UPGRDX1T-2274 fix test_LongExposure_30S_Capture_50_Times_0 fail
+    if (maxExpectedDuration < (kMinInflightDuration + kBaseGetBufferWait) / 1e6)
+        maxExpectedDuration = (kMinInflightDuration + kBaseGetBufferWait) / 1e6;
+#endif
     status_t res = mCameraServiceWatchdog->WATCH_CUSTOM_TIMER(mRequestThread->flush(),
             maxExpectedDuration / kCycleLengthMs, kCycleLengthMs);
 
@@ -2102,7 +2250,11 @@ status_t Camera3Device::dropStreamBuffers(bool dropping, int streamId) {
  */
 
 sp<Camera3Device::CaptureRequest> Camera3Device::createCaptureRequest(
-        const PhysicalCameraSettingsList &request, const SurfaceMap &surfaceMap) {
+        const PhysicalCameraSettingsList &request, const SurfaceMap &surfaceMap
+#ifdef __XIAOMI_CAMERA__
+        , /*out*/sp<Camera3Device::CaptureRequest>  preRequest
+#endif
+) {
     ATRACE_CALL();
 
     sp<CaptureRequest> newRequest = new CaptureRequest();
@@ -2139,7 +2291,10 @@ sp<Camera3Device::CaptureRequest> Camera3Device::createCaptureRequest(
         CLOGE("Zero output streams specified!");
         return NULL;
     }
-
+#ifdef __XIAOMI_CAMERA__
+    bool isContainYUVStream = false;
+    bool isContainPreviewStream = false;
+#endif
     for (size_t i = 0; i < streams.count; i++) {
         sp<Camera3OutputStreamInterface> stream = mOutputStreams.get(streams.data.i32[i]);
         if (stream == nullptr) {
@@ -2170,9 +2325,22 @@ sp<Camera3Device::CaptureRequest> Camera3Device::createCaptureRequest(
             CLOGE("Request references an output stream that's being prepared!");
             return NULL;
         }
-
+#ifdef __XIAOMI_CAMERA__
+        if(mIsPluginBurstRequest) {
+            if(HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED == stream->getFormat()) {
+                preRequest->mOutputStreams.push(stream);
+                isContainPreviewStream = true;
+                if(mEnableJank) continue;
+            } else if(HAL_PIXEL_FORMAT_YCBCR_420_888 == stream->getFormat()) {
+                isContainYUVStream = true;
+            }
+        }
+#endif
         newRequest->mOutputStreams.push(stream);
     }
+#ifdef __XIAOMI_CAMERA__
+    mIsPluginBurstRequest = mIsPluginBurstRequest && isContainYUVStream && isContainPreviewStream;
+#endif
     newRequest->mSettingsList.begin()->metadata.erase(ANDROID_REQUEST_OUTPUT_STREAMS);
     newRequest->mBatchSize = 1;
 
@@ -2333,7 +2501,16 @@ status_t Camera3Device::configureStreamsLocked(int operatingMode,
         const CameraMetadata& sessionParams, bool notifyRequestThread) {
     ATRACE_CALL();
     status_t res;
-
+#ifdef __XIAOMI_CAMERA__
+    if (mInputStream == NULL) {
+        CameraStub::resetFrameInfo();
+        mEnableJank = initJankStub(this, sessionParams);
+        if(mEnableJank) {
+            CameraStub::setJankStates(STATES_JANKRESET);
+            CameraStub::setJankStates(STATES_JANKRUN);
+        }
+    }
+#endif
     if (mStatus != STATUS_UNCONFIGURED && mStatus != STATUS_CONFIGURED) {
         CLOGE("Not idle");
         return INVALID_OPERATION;
@@ -2476,6 +2653,13 @@ status_t Camera3Device::configureStreamsLocked(int operatingMode,
 
     const camera_metadata_t *sessionBuffer = sessionParams.getAndLock();
     res = mInterface->configureStreams(sessionBuffer, &config, bufferSizes);
+
+#ifdef __XIAOMI_CAMERA__
+    if (res == OK && mEnableJank) {
+        CameraStub::configMaxBuffer(config);
+    }
+#endif
+
     sessionParams.unlock(sessionBuffer);
 
     if (res == BAD_VALUE) {
@@ -2612,6 +2796,11 @@ status_t Camera3Device::configureStreamsLocked(int operatingMode,
         mInjectionMethods->storeInjectionConfig(config, bufferSizes);
     }
 
+#ifdef __XIAOMI_CAMERA__
+    // report data to onetrack for camera sdk
+    CameraStub::reportSdkConfigureStreams(mId,&config,sessionParams);
+#endif
+
     return OK;
 }
 
@@ -2739,6 +2928,9 @@ status_t Camera3Device::registerInFlight(uint32_t frameNumber,
         const std::set<std::set<String8>>& physicalCameraIds,
         bool isStillCapture, bool isZslCapture, bool rotateAndCropAuto,
         const std::set<std::string>& cameraIdsWithZoom,
+#ifdef __XIAOMI_CAMERA__
+        bool isPluginBurstReq,
+#endif
         const SurfaceMap& outputSurfaces, nsecs_t requestTimeNs) {
     ATRACE_CALL();
     std::lock_guard<std::mutex> l(mInFlightLock);
@@ -2746,7 +2938,11 @@ status_t Camera3Device::registerInFlight(uint32_t frameNumber,
     ssize_t res;
     res = mInFlightMap.add(frameNumber, InFlightRequest(numBuffers, resultExtras, hasInput,
             hasAppCallback, minExpectedDuration, maxExpectedDuration, physicalCameraIds,
-            isStillCapture, isZslCapture, rotateAndCropAuto, cameraIdsWithZoom, requestTimeNs,
+            isStillCapture, isZslCapture,
+#ifdef __XIAOMI_CAMERA__
+            isPluginBurstReq,
+#endif
+            rotateAndCropAuto, cameraIdsWithZoom, requestTimeNs,
             outputSurfaces));
     if (res < 0) return res;
 
@@ -3220,6 +3416,10 @@ status_t Camera3Device::RequestThread::waitUntilRequestProcessed(
 }
 
 void Camera3Device::RequestThread::requestExit() {
+#ifdef __XIAOMI_CAMERA__
+    Mutex::Autolock l(mRequestLock);
+#endif
+
     // Call parent to set up shutdown
     Thread::requestExit();
     // The exit from any possible waits
@@ -3269,6 +3469,12 @@ bool Camera3Device::RequestThread::sendRequestsBatch() {
         requests[i] = &mNextRequests.editItemAt(i).halRequest;
         ATRACE_ASYNC_BEGIN("frame capture", mNextRequests[i].halRequest.frame_number);
     }
+
+#ifdef __XIAOMI_CAMERA__
+    if(requests[0]->settings != nullptr){
+        CameraStub::reportSdkRequest(requests[0]);
+    }
+#endif
 
     res = mInterface->processBatchCaptureRequests(requests, &numRequestProcessed);
 
@@ -3447,6 +3653,72 @@ bool Camera3Device::RequestThread::updateSessionParameters(const CameraMetadata&
             updatesDetected = true;
         }
     }
+#ifdef __XIAOMI_CAMERA__
+    mIsFoldStatusChanged = false;
+    sp<Camera3Device> parent = mParent.promote();
+    if (parent != nullptr)
+    {
+        ScreenFoldState currentFoldStatus = parent->getScreenFoldStatus();
+        ScreenFoldState previousFoldStatus = parent->getPreviousFoldStatus();
+        if (currentFoldStatus != previousFoldStatus &&
+            currentFoldStatus != ScreenFoldState::Undefined &&
+            previousFoldStatus != ScreenFoldState::Undefined) {
+            mIsFoldStatusChanged = true;
+            ALOGV("%s, %d, Need to do reconfigure", __FUNCTION__, __LINE__);
+        }
+        else {
+            mIsFoldStatusChanged = false;
+            ALOGV("%s, %d, No need to do reconfigure", __FUNCTION__, __LINE__);
+        }
+
+        parent->setFoldStatus(currentFoldStatus);
+    }
+    {
+        sp<VendorTagDescriptor> vTags =
+            VendorTagDescriptor::getGlobalVendorTagDescriptor();
+        if ((nullptr == vTags.get() || 0 >= vTags->getTagCount())) {
+            sp<VendorTagDescriptorCache> cache =
+            VendorTagDescriptorCache::getGlobalVendorTagCache();
+            if (cache.get()) {
+                const camera_metadata_t *metaBuffer = mLatestSessionParams.getAndLock();
+                metadata_vendor_id_t vendorId = get_camera_metadata_vendor_id(metaBuffer);
+                mLatestSessionParams.unlock(metaBuffer);
+                cache->getVendorTagDescriptor(vendorId, &vTags);
+            }
+        }
+
+        char tagName[] = "com.xiaomi.sessionparams.clientName";
+        char miAppName[] = "com.android.camera";
+        uint32_t tag = 0;
+        status_t result = mLatestSessionParams.getTagFromName(tagName, vTags.get(), &tag);
+        camera_metadata_entry_t e;
+        bool isValidTag = false;
+        if (result == OK) {
+            e = mLatestSessionParams.find(tag);
+            if(e.count) {
+                isValidTag = true;
+                ALOGV("%s %d [DEBUG] clientname %s", __FUNCTION__, __LINE__, e.data.u8);
+            }
+        }
+        if (isValidTag && !strcmp(miAppName, (const char *)e.data.u8)) {
+            ALOGV("%s %d Mi app not set fold", __FUNCTION__, __LINE__);
+        } else {
+            ALOGV("%s %d Not Mi app set fold", __FUNCTION__, __LINE__);
+            updatesDetected = mIsFoldStatusChanged || updatesDetected;
+        }
+    }
+
+    // After camera access is disabled,  camera App exits abnormally
+    if (updatesDetected) {
+        SensorPrivacyManager sensorPrivacyManager;
+        bool isToggleSensorPrivacyEnabled = sensorPrivacyManager.isToggleSensorPrivacyEnabled(
+                SensorPrivacyManager::TOGGLE_SENSOR_CAMERA);
+        if (isToggleSensorPrivacyEnabled) {
+            updatesDetected = false;
+            ALOGD("%s [DEBUG] camera access is disabled, prohibit reconfigure", __FUNCTION__);
+        }
+    }
+#endif
 
     bool reconfigureRequired;
     if (updatesDetected) {
@@ -3493,6 +3765,7 @@ bool Camera3Device::RequestThread::threadLoop() {
     //  or a single request from streaming or burst. In either case the first element
     //  should contain the latest camera settings that we need to check for any session
     //  parameter updates.
+    sp<Camera3Device> parent = mParent.promote();
     if (updateSessionParameters(mNextRequests[0].captureRequest->mSettingsList.begin()->metadata)) {
         res = OK;
 
@@ -3508,7 +3781,9 @@ bool Camera3Device::RequestThread::threadLoop() {
         }
 
         if (res == OK) {
+#ifndef __XIAOMI_CAMERA__
             sp<Camera3Device> parent = mParent.promote();
+#endif
             if (parent != nullptr) {
                 mReconfigured |= parent->reconfigureCamera(mLatestSessionParams, mStatusId);
             }
@@ -3532,9 +3807,27 @@ bool Camera3Device::RequestThread::threadLoop() {
         cleanUpFailedRequests(/*sendRequestError*/ true);
         // Check if any stream is abandoned.
         checkAndStopRepeatingRequest();
+#ifdef __XIAOMI_CAMERA__
+        // Inform waitUntilRequestProcessed thread of a new request ID
+        {
+            Mutex::Autolock al(mLatestRequestMutex);
+
+            mLatestRequestId = latestRequestId;
+            mLatestRequestSignal.signal();
+        }
+#endif
         return true;
     } else if (res != OK) {
         cleanUpFailedRequests(/*sendRequestError*/ false);
+#ifdef __XIAOMI_CAMERA__
+        // Inform waitUntilRequestProcessed thread of a new request ID
+        {
+            Mutex::Autolock al(mLatestRequestMutex);
+
+            mLatestRequestId = latestRequestId;
+            mLatestRequestSignal.signal();
+        }
+#endif
         return false;
     }
 
@@ -3562,7 +3855,9 @@ bool Camera3Device::RequestThread::threadLoop() {
     ALOGVV("%s: %d: submitting %zu requests in a batch.", __FUNCTION__, __LINE__,
             mNextRequests.size());
 
+#ifndef __XIAOMI_CAMERA__
     sp<Camera3Device> parent = mParent.promote();
+#endif
     if (parent != nullptr) {
         parent->mRequestBufferSM.onSubmittingRequest();
     }
@@ -3656,6 +3951,9 @@ status_t Camera3Device::RequestThread::prepareHalRequests() {
              * Insert a fake trigger ID if a trigger is set but no trigger ID is
              */
             res = addFakeTriggerIds(captureRequest);
+#ifdef __XIAOMI_CAMERA__
+            res = CameraStub::repeatAddFakeTriggerIds(res, captureRequest->mSettingsList.begin()->metadata);
+#endif
             if (res != OK) {
                 SET_ERR("RequestThread: Unable to insert fake trigger IDs "
                         "(capture request %d, HAL device: %s (%d)",
@@ -3793,6 +4091,11 @@ status_t Camera3Device::RequestThread::prepareHalRequests() {
             ALOGVV("%s: Request settings are REUSED",
                    __FUNCTION__);
         }
+#ifdef __XIAOMI_CAMERA__
+        if (!newRequest && mIsFoldStatusChanged) {
+            halRequest->settings = captureRequest->mSettingsList.begin()->metadata.getAndLock();
+        }
+#endif
 
         if (captureRequest->mSettingsList.size() > 1) {
             halRequest->num_physcam_settings = captureRequest->mSettingsList.size() - 1;
@@ -3974,6 +4277,9 @@ status_t Camera3Device::RequestThread::prepareHalRequests() {
                 /*max*/expectedDurationRange.second,
                 requestedPhysicalCameras, isStillCapture, isZslCapture,
                 captureRequest->mRotateAndCropAuto, mPrevCameraIdsWithZoom,
+#ifdef __XIAOMI_CAMERA__
+                parent->getPluginBurstRequestStatus(),
+#endif
                 (mUseHalBufManager) ? uniqueSurfaceIdMap :
                                       SurfaceMap{}, captureRequest->mRequestTimeNs);
         ALOGVV("%s: registered in flight requestId = %" PRId32 ", frameNumber = %" PRId64
@@ -4312,7 +4618,11 @@ sp<Camera3Device::CaptureRequest>
             break;
         }
 
+#ifdef __XIAOMI_CAMERA__
+        if (!mRequestClearing && !exitPending()) {
+#else
         if (!mRequestClearing) {
+#endif
             res = mRequestSignal.waitRelative(mRequestLock, kRequestTimeout);
         }
 
@@ -4553,7 +4863,7 @@ status_t Camera3Device::RequestThread::insertTriggers(
             return res;
         }
 
-        ALOGV("%s: Mixed in trigger %s, value %d", __FUNCTION__,
+        ALOGD("%s: Mixed in trigger %s, value %d", __FUNCTION__,
               trigger.getTagName(),
               trigger.entryValue);
     }

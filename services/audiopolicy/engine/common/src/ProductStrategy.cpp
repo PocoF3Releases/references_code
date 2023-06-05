@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "APM::AudioPolicyEngine/ProductStrategy"
-//#define LOG_NDEBUG 0
+#define LOG_TAG "APM::AudioPolicyEngine::ProductStrategy"
+#define LOG_NDEBUG 0
+#define LOG_NDEBUG_ASSERT 0
 
 #include "ProductStrategy.h"
 
@@ -305,7 +306,9 @@ volume_group_t ProductStrategyMap::getDefaultVolumeGroup() const
 void ProductStrategyMap::initialize()
 {
     mDefaultStrategy = getDefault();
+#if LOG_NDEBUG_ASSERT
     ALOG_ASSERT(mDefaultStrategy != PRODUCT_STRATEGY_NONE, "No default product strategy found");
+#endif
 }
 
 void ProductStrategyMap::dump(String8 *dst, int spaces) const

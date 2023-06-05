@@ -145,4 +145,7 @@ enum AudioEncoding {
 
 }  // namespace android
 
+//#ifdef MIAUDIO_OZO
+#define MEDIA_MIMETYPE_AUDIO_OZOAUDIO "audio/ozoaudio"
+//#endif
 #endif  // MEDIA_DEFS_H_

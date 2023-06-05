@@ -277,7 +277,17 @@ public:
         }
         return false;
     }
-
+    /* store app type here: start */
+    /* one more apps can use same AudioInputDescriptor,
+     * So this mAppMask contains more app mask.
+     */
+    void setAppMask(audio_app_type_f mask) {
+        mAppMask |= mask;
+    }
+    int32_t getAppMask() {
+        return mAppMask;
+    }
+    /* store app type here: end */
     TrackClientVector clientsList(bool activeOnly = false,
                                   product_strategy_t strategy = PRODUCT_STRATEGY_NONE,
                                   bool preferredDeviceOnly = false) const;
@@ -329,6 +339,9 @@ protected:
     RoutingActivities mRoutingActivities; /**< track routing activity on this ouput.*/
 
     VolumeActivities mVolumeActivities; /**< track volume activity on this ouput.*/
+    /* store app type here: start */
+    int32_t mAppMask = (int32_t)APP_TYPE_NULL;
+    /* store app type here: end */
 };
 
 // Audio output driven by a software mixer in audio flinger.

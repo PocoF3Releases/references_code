@@ -17,7 +17,8 @@
 
 
 #define LOG_TAG "AudioFlinger"
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
+#define LOG_NDEBUG_ASSERT 0
 
 // Define AUDIO_ARRAYS_STATIC_CHECK to check all audio arrays are correct
 #define AUDIO_ARRAYS_STATIC_CHECK 1
@@ -83,11 +84,13 @@
 #include <mediautils/ServiceUtilities.h>
 #include <mediautils/TimeCheck.h>
 #include <private/android_filesystem_config.h>
+#include "AudioFlingerStub.h"
 
 //#define BUFLOG_NDEBUG 0
 #include <BufLog.h>
 
 #include "TypedLogger.h"
+#include "CloudCtrlFwk.h"
 
 // ----------------------------------------------------------------------------
 
@@ -104,6 +107,11 @@
 #define ALOGVV(a...) do { } while(0)
 #endif
 
+// AUDIO ADD
+#include <mediautils/FeatureManager.h>
+// MIUI ADD: DOLBY_ENABLE
+#include "EffectDapController_impl.h"
+
 namespace android {
 
 #define MAX_AAUDIO_PROPERTY_DEVICE_HAL_VERSION 7.1
@@ -119,6 +127,18 @@ static const char kHardwareLockedString[] = "Hardware lock is taken\n";
 static const char kClientLockedString[] = "Client lock is taken\n";
 static const char kNoEffectsFactory[] = "Effects Factory is absent\n";
 
+// MIUI ADD: DOLBY_ENABLE
+static constexpr const effect_uuid_t EFFECT_SL_IID_MISOUND =
+            { 0xf46b26a0, 0xdddd, 0x11db, 0x8afd, {0x00, 0x02, 0xa5, 0xd5, 0xc5, 0x1b} };
+static const int MISOUND_PARAM_BYPASS_NEXT_OFF = 22;
+// MIUI END
+
+// AudioCpuSched start
+static uint32_t cpus = 0;
+static uint32_t audioCpuSet = 0;
+static bool onlyFast = true;
+static int64_t isAudioCpuSchedEnabled = 0;
+// AudioCpuSched end
 
 nsecs_t AudioFlinger::mStandbyTimeInNsecs = kDefaultStandbyTimeInNsecs;
 
@@ -301,12 +321,21 @@ void AudioFlinger::instantiate() {
     sm->addService(String16(IAudioFlinger::DEFAULT_SERVICE_NAME),
                    new AudioFlingerServerAdapter(new AudioFlinger()), false,
                    IServiceManager::DUMP_FLAG_PRIORITY_DEFAULT);
+    // AudioCpuSched start
+    cpus = property_get_int32("vendor.audio.cpu.sched.cpus", 8 /* default_value */);
+    audioCpuSet = property_get_int32("vendor.audio.cpu.sched.cpuset.af", 0xff /* default_value */);
+    onlyFast = property_get_bool("vendor.audio.cpu.sched.onlyfast", true /* default_value */);
+    isAudioCpuSchedEnabled = property_get_int64("vendor.audio.cpu.sched", 0 /* default_value */);
+    ALOGD("[APM]%s() cpus=%d, audioCpuSet=%x, onlyfast=%d isAudioCpuSchedEnabled=0x%x",
+                    __func__, cpus, audioCpuSet, onlyFast, (int)isAudioCpuSchedEnabled);
+    // AudioCpuSched end
 }
 
 AudioFlinger::AudioFlinger()
     : mMediaLogNotifier(new AudioFlinger::MediaLogNotifier()),
       mPrimaryHardwareDev(NULL),
       mAudioHwDevs(NULL),
+      mPrimaryThread(NULL),
       mHardwareStatus(AUDIO_HW_IDLE),
       mMasterVolume(1.0f),
       mMasterMute(false),
@@ -351,6 +380,7 @@ AudioFlinger::AudioFlinger()
                 MemoryHeapBase::READ_ONLY);
         (void) pthread_once(&sMediaLogOnce, sMediaLogInit);
     }
+    mbFadeFeatureOn = property_get_bool("ro.vendor.audio.feature.fade",false);
 
     // reset battery stats.
     // if the audio service has crashed, battery stats could be left
@@ -369,6 +399,12 @@ AudioFlinger::AudioFlinger()
     mediametrics::LogItem(mMetricsId)
         .set(AMEDIAMETRICS_PROP_EVENT, AMEDIAMETRICS_PROP_EVENT_VALUE_CTOR)
         .record();
+
+    // MIUI ADD: DOLBY_ENABLE
+    if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE)){
+        EffectDapController::mInstance = new EffectDapController(this);
+    }
+    // MIUI END
 }
 
 void AudioFlinger::onFirstRef()
@@ -490,7 +526,21 @@ status_t AudioFlinger::setDeviceConnectedState(const struct audio_port_v7 *port,
     mHardwareStatus = AUDIO_HW_IDLE;
     return final_result;
 }
+// MIUI ADD: START
+status_t AudioFlinger::pauseAudioTracks(uid_t uid, pid_t pid) {
+    for (size_t i = 0; i < mPlaybackThreads.size(); i++) {
+        mPlaybackThreads.valueAt(i)->pauseAudioTracks(uid, pid);
+    }
+    return NO_ERROR;
+}
 
+status_t AudioFlinger::resumeAudioTracks(uid_t uid, pid_t pid) {
+    for (size_t i = 0; i < mPlaybackThreads.size(); i++) {
+        mPlaybackThreads.valueAt(i)->resumeAudioTracks(uid, pid);
+    }
+    return NO_ERROR;
+}
+// END
 // getDefaultVibratorInfo_l must be called with AudioFlinger lock held.
 std::optional<media::AudioVibratorInfo> AudioFlinger::getDefaultVibratorInfo_l() {
     if (mAudioVibratorInfos.empty()) {
@@ -501,6 +551,14 @@ std::optional<media::AudioVibratorInfo> AudioFlinger::getDefaultVibratorInfo_l()
 
 AudioFlinger::~AudioFlinger()
 {
+    // MIUI ADD: DOLBY_ENABLE
+    if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE)){
+        delete EffectDapController::mInstance;
+        EffectDapController::mInstance = NULL;
+        FeatureManager::destoryInstance();
+    }
+    // MIUI END
+
     while (!mRecordThreads.isEmpty()) {
         // closeInput_nonvirtual() will remove specified entry from mRecordThreads
         closeInput_nonvirtual(mRecordThreads.keyAt(0));
@@ -1154,6 +1212,19 @@ status_t AudioFlinger::createTrack(const media::CreateTrackRequest& _input,
         output.afLatencyMs = thread->latency();
         output.portId = portId;
 
+        // AudioCpuSched start
+        if ((isAudioCpuSchedEnabled & AUDIO_SCHED_AF) && lStatus == NO_ERROR) {
+            if (!onlyFast) { // all tracks
+                thread->reScheduleCpu(audioCpuSet, cpus);
+            } else { // only fast
+                if (output.flags & (AUDIO_OUTPUT_FLAG_FAST | (AUDIO_OUTPUT_FLAG_RAW | AUDIO_OUTPUT_FLAG_PRIMARY))) {
+                    // audiogame_cpuset_cgroup(callingPid);
+                    thread->reScheduleCpu(audioCpuSet, cpus);
+                }
+            }
+        }
+        // AudioCpuSched end
+
         if (lStatus == NO_ERROR) {
             // Connect secondary outputs. Failure on a secondary output must not imped the primary
             // Any secondary output setup failure will lead to a desync between the AP and AF until
@@ -1210,6 +1281,7 @@ status_t AudioFlinger::createTrack(const media::CreateTrackRequest& _input,
     if (effectThreadId != AUDIO_IO_HANDLE_NONE) {
         AudioSystem::moveEffectsToIo(effectIds, effectThreadId);
     }
+    track->setFadeFeatureOn(mbFadeFeatureOn);
 
     output.audioTrack = new TrackHandle(track);
     _output = VALUE_OR_FATAL(output.toAidl());
@@ -1452,16 +1524,16 @@ bool AudioFlinger::getMicMute() const
     return (ret == NO_ERROR) && state;
 }
 
-void AudioFlinger::setRecordSilenced(audio_port_handle_t portId, bool silenced)
+void AudioFlinger::setRecordSilenced(audio_port_handle_t portId, audio_app_type_f appType, bool silenced)
 {
-    ALOGV("AudioFlinger::setRecordSilenced(portId:%d, silenced:%d)", portId, silenced);
+    ALOGV("AudioFlinger::setRecordSilenced(portId:%d, silenced:%d, appType:%d)", portId, silenced, appType);
 
     AutoMutex lock(mLock);
     for (size_t i = 0; i < mRecordThreads.size(); i++) {
-        mRecordThreads[i]->setRecordSilenced(portId, silenced);
+        mRecordThreads[i]->setRecordSilenced(portId, appType, silenced);
     }
     for (size_t i = 0; i < mMmapThreads.size(); i++) {
-        mMmapThreads[i]->setRecordSilenced(portId, silenced);
+        mMmapThreads[i]->setRecordSilenced(portId, appType, silenced);
     }
 }
 
@@ -1594,7 +1666,9 @@ status_t AudioFlinger::setStreamMute(audio_stream_type_t stream, bool muted)
     if (status != NO_ERROR) {
         return status;
     }
+#if LOG_NDEBUG_ASSERT
     ALOG_ASSERT(stream != AUDIO_STREAM_PATCH, "attempt to mute AUDIO_STREAM_PATCH");
+#endif
 
     if (uint32_t(stream) == AUDIO_STREAM_ENFORCED_AUDIBLE) {
         ALOGE("setStreamMute() invalid stream %d", stream);
@@ -1747,7 +1821,7 @@ status_t AudioFlinger::setParameters(audio_io_handle_t ioHandle, const String8& 
             IPCThreadState::self()->getCallingPid(), IPCThreadState::self()->getCallingUid());
 
     // check calling permissions
-    if (!settingsAllowed()) {
+    if (!settingsAllowed() && keyValuePairs.find("routecast=") == std::string::npos) {
         return PERMISSION_DENIED;
     }
 
@@ -1756,11 +1830,30 @@ status_t AudioFlinger::setParameters(audio_io_handle_t ioHandle, const String8& 
 
     ALOGV("%s: filtered keyvalue %s", __func__, filteredKeyValuePairs.string());
 
+    //AudioCloudCtrl load XML if data_fwk_map is empty
+    if(AudioCloudCtrl::CloudCtrlFwk::isSupportCloudCtrl&&AudioCloudCtrl::CloudCtrlFwk::data_fwk_map.empty()){
+        String8 cloud_ctrl_data = getParameters(AUDIO_IO_HANDLE_NONE, String8("audio_cloud_ctrl_init_fwk"));
+        if(cloud_ctrl_data.isEmpty() || cloud_ctrl_data.length() < 10)
+            AudioCloudCtrl::CloudCtrlFwk::isSupportCloudCtrl = false;
+        ALOGD("AudioCloudControl: init getParameters %s", cloud_ctrl_data.c_str());
+        AudioCloudCtrl::CloudCtrlFwk::CloudCtrlParser(cloud_ctrl_data.c_str());
+    }
+
     // AUDIO_IO_HANDLE_NONE means the parameters are global to the audio hardware interface
     if (ioHandle == AUDIO_IO_HANDLE_NONE) {
         Mutex::Autolock _l(mLock);
         // result will remain NO_INIT if no audio device is present
         status_t final_result = NO_INIT;
+
+        //MIUI ADD: start MIPERF_PRELOAD_MUTE
+        if (AudioFlingerStub::checkAndUpdatePreloadProcessVolume(keyValuePairs))
+            return NO_ERROR;
+        //MIUI ADD: end
+
+	//MIUI ADD: start MIAUDIO_VOICE_CHANGE
+        AudioFlingerStub::setGameParameters(filteredKeyValuePairs,mRecordThreads);
+        //MIUI ADD: end
+
         {
             AutoMutex lock(mHardwareLock);
             mHardwareStatus = AUDIO_HW_SET_PARAMETER;
@@ -1794,7 +1887,34 @@ status_t AudioFlinger::setParameters(audio_io_handle_t ioHandle, const String8& 
                 AudioFlinger::mScreenState = ((AudioFlinger::mScreenState & ~1) + 2) | isOff;
             }
         }
+
+        // set system property for misound
+        String8 propertyValue;
+        if (param.get(String8("persist.audio.button_jack.profile"), propertyValue) == NO_ERROR) {
+            property_set("persist.audio.button_jack.profile", propertyValue.c_str());
+            return OK;
+        }
+        if (param.get(String8("persist.audio.button_jack.switch"), propertyValue) == NO_ERROR) {
+            property_set("persist.audio.button_jack.switch", propertyValue.c_str());
+            return OK;
+        }
+
+        //Update cloudcontrol data after hal updated xml
+        if(keyValuePairs.find("audiocloudctrl_")!=std::string::npos){
+          AudioFlingerStub::updateCloudCtrlData(keyValuePairs);
+        }
+
         return final_result;
+    }
+    AudioParameter param = AudioParameter(filteredKeyValuePairs);
+    int old_handle;
+    int new_handle;
+    if (param.getInt(String8("remove_track"), old_handle) == NO_ERROR){
+        ALOGD("mi para old %d",old_handle);
+        if(param.getInt(String8("add_track"),new_handle) == NO_ERROR){
+        ALOGD("mi para new %d",new_handle);
+        replaceTrack(ioHandle,old_handle,new_handle);
+        }
     }
 
     // hold a strong ref on thread in case closeOutput() or closeInput() is called
@@ -1836,6 +1956,20 @@ String8 AudioFlinger::getParameters(audio_io_handle_t ioHandle, const String8& k
     if (ioHandle == AUDIO_IO_HANDLE_NONE) {
         String8 out_s8;
 
+//MIUI ADD: start MIAUDIO_SPITAL_AUDIO
+        out_s8 = AudioFlingerStub::getSpatialDevice(keys);
+        if(out_s8 != ""){
+            return out_s8;
+        }
+//MIUI ADD: end
+//MIUI ADD: start MIAUDIO_AUDIOCLOUDCTRL
+        if(keys.find("get_audiocloud_") != std::string::npos){
+            out_s8.append(AudioCloudCtrl::CloudCtrlFwk::getValues(keys.string()));
+            if(out_s8 != "" && out_s8 != " "){
+                return out_s8;
+            }
+        }
+//MIUI ADD: end
         AutoMutex lock(mHardwareLock);
         for (size_t i = 0; i < mAudioHwDevs.size(); i++) {
             String8 s;
@@ -2098,7 +2232,9 @@ sp<AudioFlinger::ThreadBase> AudioFlinger::getEffectThread_l(audio_session_t ses
 
     for (size_t i = 0; i < mPlaybackThreads.size(); i++) {
         if (mPlaybackThreads.valueAt(i)->getEffect(sessionId, effectId) != 0) {
+#if LOG_NDEBUG_ASSERT
             ALOG_ASSERT(thread == 0);
+#endif
             thread = mPlaybackThreads.valueAt(i);
         }
     }
@@ -2107,7 +2243,9 @@ sp<AudioFlinger::ThreadBase> AudioFlinger::getEffectThread_l(audio_session_t ses
     }
     for (size_t i = 0; i < mRecordThreads.size(); i++) {
         if (mRecordThreads.valueAt(i)->getEffect(sessionId, effectId) != 0) {
+#if LOG_NDEBUG_ASSERT
             ALOG_ASSERT(thread == 0);
+#endif
             thread = mRecordThreads.valueAt(i);
         }
     }
@@ -2116,7 +2254,9 @@ sp<AudioFlinger::ThreadBase> AudioFlinger::getEffectThread_l(audio_session_t ses
     }
     for (size_t i = 0; i < mMmapThreads.size(); i++) {
         if (mMmapThreads.valueAt(i)->getEffect(sessionId, effectId) != 0) {
+#if LOG_NDEBUG_ASSERT
             ALOG_ASSERT(thread == 0);
+#endif
             thread = mMmapThreads.valueAt(i);
         }
     }
@@ -2166,6 +2306,7 @@ void AudioFlinger::NotificationClient::binderDied(const wp<IBinder>& who __unuse
 {
     sp<NotificationClient> keep(this);
     mAudioFlinger->removeNotificationClient(mPid);
+    LOG_EVENT_STRING(30200, String8::format("%d&%d&%d&%d", mPid, mUid, 0, -1).string());
 }
 
 // ----------------------------------------------------------------------------
@@ -2320,6 +2461,12 @@ status_t AudioFlinger::createRecord(const media::CreateRecordRequest& _input,
                                                   callingPid, adjAttributionSource, &output.flags,
                                                   input.clientInfo.clientTid,
                                                   &lStatus, portId, input.maxSharedAudioHistoryMs);
+	//MIUI ADD: start MIAUDIO_VOICE_CHANGE
+        String8 keyValuePair;
+        AudioFlingerStub::getGameMode(keyValuePair);
+        thread->setParameters(keyValuePair);
+        //MIUI ADD: end
+
         LOG_ALWAYS_FATAL_IF((lStatus == NO_ERROR) && (recordTrack == 0));
 
         // lStatus == BAD_TYPE means FAST flag was rejected: request a new input from
@@ -2858,8 +3005,17 @@ status_t AudioFlinger::openOutput(const media::OpenOutputRequest& request,
 
     Mutex::Autolock _l(mLock);
 
-    sp<ThreadBase> thread = openOutput_l(module, &output, &halConfig,
-            &mixerConfig, deviceType, address, flags);
+    sp<ThreadBase> thread = NULL;
+//MIUI ADD: start MIAUDIO_VEHICLE_VOIP_TX
+    if((flags & AUDIO_OUTPUT_FLAG_CAR_VOIP_RX) != 0) {
+        String8 s = String8("vehicle_display");
+        const String8 addr = String8(s.c_str());
+        ALOGD("openOutput() set car display address");
+        thread = openOutput_l(module, &output, &halConfig,&mixerConfig, deviceType, addr, flags); 
+    } else {
+        thread = openOutput_l(module, &output, &halConfig,&mixerConfig, deviceType, address, flags); 
+    }
+//MIUI ADD: end
     if (thread != 0) {
         if ((flags & AUDIO_OUTPUT_FLAG_MMAP_NOIRQ) == 0) {
             PlaybackThread *playbackThread = (PlaybackThread *)thread.get();
@@ -2871,6 +3027,10 @@ status_t AudioFlinger::openOutput(const media::OpenOutputRequest& request,
             // the first primary output opened designates the primary hw device if no HW module
             // named "primary" was already loaded.
             AutoMutex lock(mHardwareLock);
+            //MIUI MODIFICATION
+            if (flags & AUDIO_OUTPUT_FLAG_PRIMARY) {
+                mPrimaryThread = playbackThread;
+            }
             if ((mPrimaryHardwareDev == nullptr) && (flags & AUDIO_OUTPUT_FLAG_PRIMARY)) {
                 ALOGI("Using module %d as the primary audio interface", module);
                 mPrimaryHardwareDev = playbackThread->getOutput()->audioHwDev;
@@ -2915,6 +3075,21 @@ audio_io_handle_t AudioFlinger::openDuplicateOutput(audio_io_handle_t output1,
     // notify client processes of the new output creation
     thread->ioConfigChanged(AUDIO_OUTPUT_OPENED);
     return id;
+}
+
+status_t AudioFlinger::replaceTrack(audio_io_handle_t dup_io, audio_io_handle_t old_io,
+                                   audio_io_handle_t new_io)
+{
+    sp<PlaybackThread> playbackThread = checkPlaybackThread_l(dup_io);
+    sp<PlaybackThread> oldThread = checkPlaybackThread_l(old_io);
+    sp<PlaybackThread> newThread = checkPlaybackThread_l(new_io);
+    if(playbackThread->isDuplicating()){
+       DuplicatingThread *dupThread = (DuplicatingThread *)playbackThread.get();
+       dupThread->removeOutputTrack((MixerThread *)oldThread.get());
+       dupThread->addOutputTrack((MixerThread *)newThread.get());
+       ALOGD("mi replace sub %d to %d in %d",(int)old_io,(int)new_io,(int)dup_io);
+    }
+    return NO_ERROR;
 }
 
 status_t AudioFlinger::closeOutput(audio_io_handle_t output)
@@ -2986,7 +3161,9 @@ status_t AudioFlinger::closeOutput_nonvirtual(audio_io_handle_t output)
         ALOGD("mmapThread exit()");
         mmapThread->exit();
         AudioStreamOut *out = mmapThread->clearOutput();
+#if LOG_NDEBUG_ASSERT
         ALOG_ASSERT(out != NULL, "out shouldn't be NULL");
+#endif
         // from now on thread->mOutput is NULL
         delete out;
     }
@@ -2996,7 +3173,9 @@ status_t AudioFlinger::closeOutput_nonvirtual(audio_io_handle_t output)
 void AudioFlinger::closeOutputFinish(const sp<PlaybackThread>& thread)
 {
     AudioStreamOut *out = thread->clearOutput();
-    ALOG_ASSERT(out != NULL, "out shouldn't be NULL");
+#if LOG_NDEBUG_ASSERT
+        ALOG_ASSERT(out != NULL, "out shouldn't be NULL");
+#endif
     // from now on thread->mOutput is NULL
     delete out;
 }
@@ -3239,7 +3418,9 @@ status_t AudioFlinger::closeInput_nonvirtual(audio_io_handle_t input)
     } else if (mmapThread != 0) {
         mmapThread->exit();
         AudioStreamIn *in = mmapThread->clearInput();
+#if LOG_NDEBUG_ASSERT
         ALOG_ASSERT(in != NULL, "in shouldn't be NULL");
+#endif
         // from now on thread->mInput is NULL
         delete in;
     }
@@ -3250,7 +3431,9 @@ void AudioFlinger::closeInputFinish(const sp<RecordThread>& thread)
 {
     thread->exit();
     AudioStreamIn *in = thread->clearInput();
-    ALOG_ASSERT(in != NULL, "in shouldn't be NULL");
+#if LOG_NDEBUG_ASSERT
+        ALOG_ASSERT(in != NULL, "in shouldn't be NULL");
+#endif
     // from now on thread->mInput is NULL
     delete in;
 }
@@ -3451,6 +3634,14 @@ std::vector<sp<AudioFlinger::EffectModule>> AudioFlinger::purgeStaleEffects_l() 
 // dumpToThreadLog_l() must be called with AudioFlinger::mLock held
 void AudioFlinger::dumpToThreadLog_l(const sp<ThreadBase> &thread)
 {
+    /**TODO:
+    **  Fix FdToString poll timeout
+    **  then delete blow:
+    **/
+    ALOGW("dumpToThreadLog_l return !!!");
+    return;
+    /**TODO: END**/
+
     constexpr int THREAD_DUMP_TIMEOUT_MS = 2;
     audio_utils::FdToString fdToString("- ", THREAD_DUMP_TIMEOUT_MS);
     const int fd = fdToString.fd();
@@ -3547,7 +3738,9 @@ audio_unique_id_t AudioFlinger::nextUniqueId(audio_unique_id_use_t use)
         // The cast allows wraparound from max positive to min negative instead of abort
         uint32_t base = (uint32_t) atomic_fetch_add_explicit(&mNextUniqueIds[use],
                 (uint_fast32_t) AUDIO_UNIQUE_ID_USE_MAX, memory_order_acq_rel);
+#if LOG_NDEBUG_ASSERT
         ALOG_ASSERT(audio_unique_id_get_use(base) == AUDIO_UNIQUE_ID_USE_UNSPECIFIED);
+#endif
         // allow wrap by skipping 0 and -1 for session ids
         if (!(base == 0 || base == (~0u & ~AUDIO_UNIQUE_ID_USE_MASK))) {
             ALOGW_IF(retry != 0, "unique ID overflow for use %d", use);
@@ -3565,17 +3758,7 @@ AudioFlinger::PlaybackThread *AudioFlinger::primaryPlaybackThread_l() const
     if (mPrimaryHardwareDev == nullptr) {
         return nullptr;
     }
-    for (size_t i = 0; i < mPlaybackThreads.size(); i++) {
-        PlaybackThread *thread = mPlaybackThreads.valueAt(i).get();
-        if(thread->isDuplicating()) {
-            continue;
-        }
-        AudioStreamOut *output = thread->getOutput();
-        if (output != NULL && output->audioHwDev == mPrimaryHardwareDev) {
-            return thread;
-        }
-    }
-    return nullptr;
+    return mPrimaryThread ? mPrimaryThread.get() : nullptr;
 }
 
 DeviceTypeSet AudioFlinger::primaryOutputDevice_l() const
@@ -3660,10 +3843,25 @@ void AudioFlinger::updateSecondaryOutputsForTrack_l(
 
         using namespace std::chrono_literals;
         auto inChannelMask = audio_channel_mask_out_to_in(track->channelMask());
+        // MIUI ADD: DOLBY_ENABLE
+        audio_channel_mask_t patchTrackChannelMask = track->channelMask();
+        audio_format_t trackFormat = track->format();
+        if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE)) {
+            if (track->channelMask() == AUDIO_CHANNEL_OUT_5POINT1POINT2 ||
+                track->channelMask() == AUDIO_CHANNEL_OUT_7POINT1 ||
+                track->channelMask() == AUDIO_CHANNEL_OUT_7POINT1POINT4) {
+                // This is a workaround method. Current Android System doesn't support 5.1.2/7.1/7.1.4 capture.
+                // Downmix the output PCM to 2.0 so that screen record app can work normally.
+                inChannelMask = AUDIO_CHANNEL_IN_STEREO;
+                patchTrackChannelMask = AUDIO_CHANNEL_OUT_STEREO;
+                trackFormat = AUDIO_FORMAT_PCM_FLOAT;
+            }
+        }
+        // MIUI END
         sp patchRecord = new RecordThread::PatchRecord(nullptr /* thread */,
                                                        track->sampleRate(),
                                                        inChannelMask,
-                                                       track->format(),
+                                                       trackFormat /* DOLBY_ENABLE */,
                                                        frameCount,
                                                        nullptr /* buffer */,
                                                        (size_t)0 /* bufferSize */,
@@ -3683,8 +3881,8 @@ void AudioFlinger::updateSecondaryOutputsForTrack_l(
         sp patchTrack = new PlaybackThread::PatchTrack(secondaryThread,
                                                        track->streamType(),
                                                        track->sampleRate(),
-                                                       track->channelMask(),
-                                                       track->format(),
+                                                       patchTrackChannelMask /* DOLBY_ENABLE */,
+                                                       trackFormat /* DOLBY_ENABLE */,
                                                        frameCount,
                                                        patchRecord->buffer(),
                                                        patchRecord->bufferSize(),
@@ -4198,6 +4396,10 @@ void AudioFlinger::setEffectSuspended(int effectId,
     }
     Mutex::Autolock _sl(thread->mLock);
     sp<EffectModule> effect = thread->getEffect_l(sessionId, effectId);
+    if (effect == nullptr) {
+        ALOGD("%s(), return: sessionId = %d, effectId = %d", __func__, sessionId, effectId);
+        return;
+    }
     thread->setEffectSuspended_l(&effect->desc().type, suspended, sessionId);
 }
 
@@ -4240,6 +4442,27 @@ status_t AudioFlinger::moveEffectChain_l(audio_session_t sessionId,
     status_t status = NO_ERROR;
     std::string errorString;
     while (effect != nullptr) {
+        // MIUI ADD: DOLBY_ENABLE
+        if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE)) {
+            if (EffectDapController::instance()->isDapEffect(effect) && effect->isOffloadable() && effect->isEnabled()) {
+                EffectDapController::instance()->skipHardBypass();
+            }
+        }
+
+        if ((memcmp(&effect->desc().type, &EFFECT_SL_IID_MISOUND, sizeof(effect_uuid_t)) == 0) &&
+            effect->isOffloadable() && effect->isEnabled()) {
+            std::vector<uint8_t> request(sizeof(effect_param_t) + 2 * sizeof(int32_t));
+            effect_param_t *param = (effect_param_t*) request.data();
+            param->psize = sizeof(int32_t);
+            param->vsize = sizeof(int32_t);
+            *(int32_t*)param->data = MISOUND_PARAM_BYPASS_NEXT_OFF;
+            *((int32_t*)param->data + 1) = 1;
+            // Create a buffer to hold reply data
+            std::vector<uint8_t> response;
+            // Send the command to effect
+            effect->command(EFFECT_CMD_SET_PARAM, request, sizeof(int32_t), &response);
+        }
+        // MIUI END
         srcThread->removeEffect_l(effect);
         removed.add(effect);
         status = dstThread->addEffect_l(effect);
@@ -4410,6 +4633,12 @@ status_t AudioFlinger::putOrphanEffectChain_l(const sp<AudioFlinger::EffectChain
         return ALREADY_EXISTS;
     }
     mOrphanEffectChains.add(session, chain);
+
+    for (size_t i = 0; i < chain->mEffects.size(); i++) {
+        ALOGD("putOrphanEffectChain removeEffectFromHal");
+        chain->mEffects[i]->removeEffectFromHal_l();
+    }
+
     return NO_ERROR;
 }
 

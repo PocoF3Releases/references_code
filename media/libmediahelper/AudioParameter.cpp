@@ -32,6 +32,9 @@ const char * const AudioParameter::keyChannels = AUDIO_PARAMETER_STREAM_CHANNELS
 const char * const AudioParameter::keyFrameCount = AUDIO_PARAMETER_STREAM_FRAME_COUNT;
 const char * const AudioParameter::keyInputSource = AUDIO_PARAMETER_STREAM_INPUT_SOURCE;
 const char * const AudioParameter::keyScreenState = AUDIO_PARAMETER_KEY_SCREEN_STATE;
+//MIUI ADD: MIAUDIO_MULTI_ROUTE
+const char * const AudioParameter::keyAudioRouteCast = AUDIO_PARAMETER_KEY_AUDIOROUTECAST;
+
 const char * const AudioParameter::keyBtNrec = AUDIO_PARAMETER_KEY_BT_NREC;
 const char * const AudioParameter::keyHwAvSync = AUDIO_PARAMETER_HW_AV_SYNC;
 const char * const AudioParameter::keyPresentationId = AUDIO_PARAMETER_STREAM_PRESENTATION_ID;

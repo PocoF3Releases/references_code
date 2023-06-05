@@ -157,6 +157,9 @@ struct Parameters {
     int32_t videoBufferMode;
     bool playShutterSound;
     bool enableFaceDetect;
+#ifdef __XIAOMI_CAMERA__
+    bool enablePrivacyCamera;
+#endif
 
     bool enableFocusMoveMessages;
     int afTriggerCounter;

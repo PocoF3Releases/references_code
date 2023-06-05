@@ -49,6 +49,10 @@
 
 #include "system/camera_metadata.h"
 
+#ifdef __XIAOMI_CAMERA__
+#include "xm/CameraStub.h"
+#endif
+
 using namespace android::camera3;
 using namespace android::hardware::camera;
 
@@ -154,6 +158,18 @@ void insertResultLocked(CaptureOutputStates& states, CaptureResult *result, uint
         set_camera_metadata_vendor_id(pmeta, states.vendorTagId);
         physicalMetadata.mPhysicalCameraMetadata.unlock(pmeta);
     }
+
+#ifdef __XIAOMI_CAMERA__
+    ssize_t idx = states.inflightMap.indexOfKey(frameNumber);
+    InFlightRequest &r = states.inflightMap.editValueAt(idx);
+    bool isShouldCallback = (!r.pluginBurstReq) ||
+                (r.pluginBurstReq && r.zslCapture && r.stillCapture && !r.hasInputBuffer);
+    if(!isShouldCallback) {
+        ALOGV("%s: Frame %d, it is a plugin burst request, not need send result",
+                __FUNCTION__, frameNumber);
+        return;
+    }
+#endif
 
     // Valid result, insert into queue
     std::list<CaptureResult>::iterator queuedResult =
@@ -634,9 +650,19 @@ void processCaptureResult(CaptureOutputStates& states, const camera_capture_resu
         request.pendingOutputBuffers.appendArray(result->output_buffers,
                 result->num_output_buffers);
         if (shutterTimestamp != 0) {
-            returnAndRemovePendingOutputBuffers(
-                states.useHalBufManager, states.listener,
-                request, states.sessionStatsBuilder);
+#ifdef __XIAOMI_CAMERA__
+            if (!CameraStub::postInFlightRequestIfReadyLocked(states, idx)) {
+#endif
+                returnAndRemovePendingOutputBuffers(
+                    states.useHalBufManager, states.listener,
+                    request, states.sessionStatsBuilder
+#ifdef __XIAOMI_CAMERA__
+                    , states.privacyCamera
+#endif
+                    );
+#ifdef __XIAOMI_CAMERA__
+            }
+#endif
         }
 
         if (result->result != NULL && !isPartialResult) {
@@ -659,7 +685,14 @@ void processCaptureResult(CaptureOutputStates& states, const camera_capture_resu
                     request.physicalMetadatas);
             }
         }
-        removeInFlightRequestIfReadyLocked(states, idx);
+
+#ifdef __XIAOMI_CAMERA__
+        if(!CameraStub::postInFlightRequestIfReadyLocked(states, idx)){
+#endif
+            removeInFlightRequestIfReadyLocked(states, idx);
+#ifdef __XIAOMI_CAMERA__
+        }
+#endif
     } // scope for states.inFlightLock
 
     if (result->input_buffer != NULL) {
@@ -690,7 +723,11 @@ void returnOutputBuffers(
         nsecs_t requestTimeNs, SessionStatsBuilder& sessionStatsBuilder,
         bool timestampIncreasing, const SurfaceMap& outputSurfaces,
         const CaptureResultExtras &inResultExtras,
-        ERROR_BUF_STRATEGY errorBufStrategy, int32_t transform) {
+        ERROR_BUF_STRATEGY errorBufStrategy, int32_t transform
+#ifdef __XIAOMI_CAMERA__
+        , IPrivacyCamera *privacyCamera
+#endif
+        ) {
 
     for (size_t i = 0; i < numBuffers; i++)
     {
@@ -725,6 +762,12 @@ void returnOutputBuffers(
 
         const auto& it = outputSurfaces.find(streamId);
         status_t res = OK;
+
+#ifdef __XIAOMI_CAMERA__
+        if(privacyCamera != nullptr) {
+            privacyCamera->handleOutputBuffers(outputBuffers[i].buffer);
+        }
+#endif
 
         // Do not return the buffer if the buffer status is error, and the error
         // buffer strategy is CACHE.
@@ -784,7 +827,11 @@ void returnOutputBuffers(
 
 void returnAndRemovePendingOutputBuffers(bool useHalBufManager,
         sp<NotificationListener> listener, InFlightRequest& request,
-        SessionStatsBuilder& sessionStatsBuilder) {
+        SessionStatsBuilder& sessionStatsBuilder
+#ifdef __XIAOMI_CAMERA__
+        , IPrivacyCamera *privacyCamera
+#endif
+        ) {
     bool timestampIncreasing =
             !((request.zslCapture && request.stillCapture) || request.hasInputBuffer);
     returnOutputBuffers(useHalBufManager, listener,
@@ -793,7 +840,11 @@ void returnAndRemovePendingOutputBuffers(bool useHalBufManager,
             request.shutterTimestamp, request.shutterReadoutTimestamp,
             /*requested*/true, request.requestTimeNs, sessionStatsBuilder, timestampIncreasing,
             request.outputSurfaces, request.resultExtras,
-            request.errorBufStrategy, request.transform);
+            request.errorBufStrategy, request.transform
+#ifdef __XIAOMI_CAMERA__
+            , privacyCamera
+#endif
+            );
 
     // Remove error buffers that are not cached.
     for (auto iter = request.pendingOutputBuffers.begin();
@@ -872,7 +923,19 @@ void notifyShutter(CaptureOutputStates& states, const camera_shutter_msg_t &msg)
                             states.lastCompletedReprocessFrameNumber;
                     r.resultExtras.lastCompletedZslFrameNumber =
                             states.lastCompletedZslFrameNumber;
+#ifdef __XIAOMI_CAMERA__
+                    bool isShouldNotifyShutter = (!r.pluginBurstReq) ||
+                        (r.pluginBurstReq && r.zslCapture && r.stillCapture && !r.hasInputBuffer);
+                    if(isShouldNotifyShutter) {
+                        states.listener->notifyShutter(r.resultExtras, msg.timestamp);
+                    } else {
+                        ALOGV("%s: Frame %d, timestamp %" PRId64
+                            ", it is a plugin burst request, not need notifyshutter",
+                             __FUNCTION__, msg.frame_number, msg.timestamp);
+                    }
+#else
                     states.listener->notifyShutter(r.resultExtras, msg.timestamp);
+#endif
                 }
                 // send pending result and buffers
                 sendCaptureResult(states,
@@ -884,7 +947,14 @@ void notifyShutter(CaptureOutputStates& states, const camera_shutter_msg_t &msg)
             returnAndRemovePendingOutputBuffers(
                     states.useHalBufManager, states.listener, r, states.sessionStatsBuilder);
 
-            removeInFlightRequestIfReadyLocked(states, idx);
+#ifdef __XIAOMI_CAMERA__
+            if(!CameraStub::postInFlightRequestIfReadyLocked(states, idx)){
+#endif
+                removeInFlightRequestIfReadyLocked(states, idx);
+#ifdef __XIAOMI_CAMERA__
+            }
+#endif
+
         }
     }
     if (idx < 0) {

@@ -23,6 +23,8 @@
 #include <binder/IServiceManager.h>
 #include <hidl/HidlTransportSupport.h>
 #include <utils/Log.h>
+#include "vndksupport/linker.h"
+#include <dlfcn.h>
 #include "RegisterExtensions.h"
 
 #include <MediaPlayerService.h>
@@ -40,6 +42,13 @@ int main(int argc __unused, char **argv __unused)
     MediaPlayerService::instantiate();
     ResourceManagerService::instantiate();
     registerExtensions();
+
+    // pre dlopen can improve dlopen next time. We do not to close dlhandler by designed.
+    void* dlhandler = android_load_sphal_library("/vendor/lib64/hw/android.hardware.graphics.mapper@4.0-impl-qti-display.so", RTLD_NOW | RTLD_LOCAL);
+    if (dlhandler == NULL) {
+        ALOGI("dlopen, /vendor/lib64/hw/android.hardware.graphics.mapper@4.0-impl-qti-display.so failed! errno = %d", errno);
+    }
+
     ::android::hardware::configureRpcThreadpool(16, false);
     ProcessState::self()->startThreadPool();
     IPCThreadState::self()->joinThreadPool();

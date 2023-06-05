@@ -23,6 +23,9 @@
 #include <camera_metadata_hidden.h>
 
 #include "device3/ZoomRatioMapper.h"
+#ifdef __XIAOMI_CAMERA__
+#include "xm/CameraStub.h"
+#endif
 #include <utils/SessionConfigurationUtilsHidl.h>
 #include <utils/Trace.h>
 
@@ -47,6 +50,10 @@ using HalDeviceStatusType = android::hardware::camera::common::V1_0::CameraDevic
 
 using hardware::camera::provider::V2_5::DeviceState;
 using hardware::ICameraService;
+
+#ifdef __XIAOMI_CAMERA__
+CameraMetadata android::HidlProviderInfo::gCameraCharacteristics;
+#endif
 
 status_t HidlProviderInfo::mapToStatusT(const Status& s)  {
     switch(s) {
@@ -450,6 +457,10 @@ void HidlProviderInfo::serviceDied(uint64_t cookie,
                 __FUNCTION__, cookie, mId);
     }
     mManager->removeProvider(mProviderInstance);
+#ifdef __XIAOMI_CAMERA__
+    extern int32_t gCameraProviderPid;
+    gCameraProviderPid = 0;
+#endif
 }
 
 std::unique_ptr<CameraProviderManager::ProviderInfo::DeviceInfo>
@@ -748,7 +759,14 @@ HidlProviderInfo::HidlDeviceInfo3::HidlDeviceInfo3(
             }
         }
     }
-
+#ifdef __XIAOMI_CAMERA__
+    // for J18
+    mLockStatus = false;
+    if (CameraStub::checkSensorFloder(&mCameraCharacteristics, &gCameraCharacteristics, &mRWLock) == true) {
+       mLockStatus = true;
+       ALOGD("%s:successfully entered checkSensorFloder,mLockStatus:%d",__FUNCTION__,mLockStatus);
+    }
+#endif
     if (!kEnableLazyHal) {
         // Save HAL reference indefinitely
         mSavedInterface = interface;

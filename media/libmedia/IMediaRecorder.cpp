@@ -70,7 +70,11 @@ enum {
     SET_PREFERRED_MICROPHONE_DIRECTION,
     SET_PREFERRED_MICROPHONE_FIELD_DIMENSION,
     SET_PRIVACY_SENSITIVE,
-    GET_PRIVACY_SENSITIVE
+    GET_PRIVACY_SENSITIVE,
+//MIUI ADD: start MIAUDIO_OZO
+    SET_OZORUNTIMEPARAMETERS,
+    SET_OZOTUNE_FILE_FD,
+//MIUI ADD: end
 };
 
 class BpMediaRecorder: public BpInterface<IMediaRecorder>
@@ -232,6 +236,17 @@ public:
         return reply.readInt32();
     }
 
+//MIUI ADD: start MIAUDIO_OZO
+    status_t setOzoAudioTuneFile(int fd) {
+        ALOGV("setOzoAudioTuneFile(%d)", fd);
+        Parcel data, reply;
+        data.writeInterfaceToken(IMediaRecorder::getInterfaceDescriptor());
+        data.writeFileDescriptor(fd);
+        remote()->transact(SET_OZOTUNE_FILE_FD, data, &reply);
+        return reply.readInt32();
+    }
+//MIUI ADD: end
+
     status_t setVideoSize(int width, int height)
     {
         ALOGV("setVideoSize(%dx%d)", width, height);
@@ -262,6 +277,18 @@ public:
         remote()->transact(SET_PARAMETERS, data, &reply);
         return reply.readInt32();
     }
+
+//MIUI ADD: start MIAUDIO_OZO
+    status_t setOzoRunTimeParameters(const String8& params)
+    {
+        ALOGV("setOzoRunTimeParameters(%s)", params.string());
+        Parcel data, reply;
+        data.writeInterfaceToken(IMediaRecorder::getInterfaceDescriptor());
+        data.writeString8(params);
+        remote()->transact(SET_OZORUNTIMEPARAMETERS, data, &reply);
+        return reply.readInt32();
+    }
+//MIUI ADD: end
 
     status_t setListener(const sp<IMediaRecorderClient>& listener)
     {
@@ -643,6 +670,16 @@ status_t BnMediaRecorder::onTransact(
             ::close(fd);
             return NO_ERROR;
         } break;
+//MIUI ADD: start MIAUDIO_OZO
+        case SET_OZOTUNE_FILE_FD: {
+            ALOGV("SET_OZOTUNE_FILE_FD");
+            CHECK_INTERFACE(IMediaRecorder, data, reply);
+            int fd = dup(data.readFileDescriptor());
+            reply->writeInt32(setOzoAudioTuneFile(fd));
+            ::close(fd);
+            return NO_ERROR;
+        } break;
+//MIUI ADD: end
         case SET_VIDEO_SIZE: {
             ALOGV("SET_VIDEO_SIZE");
             CHECK_INTERFACE(IMediaRecorder, data, reply);
@@ -664,6 +701,14 @@ status_t BnMediaRecorder::onTransact(
             reply->writeInt32(setParameters(data.readString8()));
             return NO_ERROR;
         } break;
+//MIUI ADD: start MIAUDIO_OZO
+        case SET_OZORUNTIMEPARAMETERS: {
+            ALOGV("SET_OZORUNTIMEPARAMETERS");
+            CHECK_INTERFACE(IMediaRecorder, data, reply);
+            reply->writeInt32(setOzoRunTimeParameters(data.readString8()));
+            return NO_ERROR;
+        } break;
+//MIUI ADD: end
         case SET_LISTENER: {
             ALOGV("SET_LISTENER");
             CHECK_INTERFACE(IMediaRecorder, data, reply);

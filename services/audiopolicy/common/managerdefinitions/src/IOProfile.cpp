@@ -15,7 +15,8 @@
  */
 
 #define LOG_TAG "APM::IOProfile"
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
+#define LOG_NDEBUG_ASSERT 0
 
 #include <system/audio.h>
 #include "IOProfile.h"
@@ -41,7 +42,9 @@ bool IOProfile::isCompatibleProfile(const DeviceVector &devices,
             getType() == AUDIO_PORT_TYPE_MIX && getRole() == AUDIO_PORT_ROLE_SOURCE;
     const bool isRecordThread =
             getType() == AUDIO_PORT_TYPE_MIX && getRole() == AUDIO_PORT_ROLE_SINK;
+#if LOG_NDEBUG_ASSERT
     ALOG_ASSERT(isPlaybackThread != isRecordThread);
+#endif
 
     if (!devices.isEmpty()) {
         if (!mSupportedDevices.containsAllDevices(devices)) {

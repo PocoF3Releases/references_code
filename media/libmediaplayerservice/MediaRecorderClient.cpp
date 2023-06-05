@@ -121,8 +121,10 @@ status_t MediaRecorderClient::setVideoSource(int vs)
 status_t MediaRecorderClient::setAudioSource(int as)
 {
     ALOGV("setAudioSource(%d)", as);
-    if (as < AUDIO_SOURCE_DEFAULT
-            || (as >= AUDIO_SOURCE_CNT && as != AUDIO_SOURCE_FM_TUNER)) {
+    if (as < AUDIO_SOURCE_DEFAULT ||
+        (as >= AUDIO_SOURCE_CNT && as != AUDIO_SOURCE_FM_TUNER
+        && as != AUDIO_SOURCE_VOIP_UPLINK && as != AUDIO_SOURCE_VOIP_DOWNLINK
+        && as != AUDIO_SOURCE_VOIP_CALL)) {
         ALOGE("Invalid audio source: %d", as);
         return BAD_VALUE;
     }
@@ -224,6 +226,19 @@ status_t MediaRecorderClient::setNextOutputFile(int fd)
     return mRecorder->setNextOutputFile(fd);
 }
 
+//MIUI ADD: start MIAUDIO_OZO
+status_t MediaRecorderClient::setOzoAudioTuneFile(int fd)
+{
+    ALOGV("setOzoAudioTuneFile(%d)", fd);
+    Mutex::Autolock lock(mLock);
+    if (mRecorder == NULL) {
+        ALOGE("recorder is not initialized");
+        return NO_INIT;
+    }
+    return mRecorder->setOzoAudioTuneFile(fd);
+}
+//MIUI ADD: end
+
 status_t MediaRecorderClient::setVideoSize(int width, int height)
 {
     ALOGV("setVideoSize(%dx%d)", width, height);
@@ -255,6 +270,18 @@ status_t MediaRecorderClient::setParameters(const String8& params) {
     }
     return mRecorder->setParameters(params);
 }
+
+//MIUI ADD: start MIAUDIO_OZO
+status_t MediaRecorderClient::setOzoRunTimeParameters(const String8& params) {
+    ALOGV("setOzoRunTimeParameters(%s)", params.string());
+    Mutex::Autolock lock(mLock);
+    if (mRecorder == NULL) {
+        ALOGE("recorder is not initialized");
+        return NO_INIT;
+    }
+    return mRecorder->setOzoRunTimeParameters(params);
+}
+//MIUI ADD: end
 
 status_t MediaRecorderClient::prepare()
 {

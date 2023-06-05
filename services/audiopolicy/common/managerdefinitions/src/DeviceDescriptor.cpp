@@ -15,7 +15,7 @@
  */
 
 #define LOG_TAG "APM::Devices"
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
 
 #include <set>
 
@@ -268,6 +268,12 @@ int DeviceVector::do_compare(const void* lhs, const void* rhs) const {
     ret = compare_type(rdevice->getId(), ldevice->getId());
     if (ret != 0)
         return ret;
+
+    // Sort by address, for devices of same type and no Id
+    ret = compare_type(rdevice->address(), ldevice->address());
+    if (ret != 0)
+        return ret;
+
     // fallback to default sort using pointer address
     return SortedVector::do_compare(lhs, rhs);
 }

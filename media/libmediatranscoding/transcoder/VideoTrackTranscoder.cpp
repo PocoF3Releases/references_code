@@ -23,6 +23,8 @@
 #include <media/VideoTrackTranscoder.h>
 #include <sys/prctl.h>
 
+#define VPP_PLATFORM_CHIPSET "debug.media.video.chipset"
+
 using namespace AMediaFormatUtils;
 
 namespace android {
@@ -185,6 +187,7 @@ VideoTrackTranscoder::~VideoTrackTranscoder() {
     if (mSurface != nullptr) {
         ANativeWindow_release(mSurface);
     }
+    base::SetProperty("debug.media.transcoding.filter_plugin_enable", "0");
 }
 
 // Search the default operating rate based on resolution.
@@ -307,7 +310,10 @@ media_status_t VideoTrackTranscoder::configureDestinationFormat(
         LOG(ERROR) << "Source MIME type is required for transcoding.";
         return AMEDIA_ERROR_INVALID_PARAMETER;
     }
-
+    int platFormValue = base::GetIntProperty( VPP_PLATFORM_CHIPSET,0);
+    if(platFormValue < 6) {
+        base::SetProperty("debug.media.transcoding.filter_plugin_enable", "1");
+    }
     if (__builtin_available(android __TRANSCODING_MIN_API__, *)) {
         mDecoder = AMediaCodec_createDecoderByTypeForClient(sourceMime, mPid, mUid);
     } else {

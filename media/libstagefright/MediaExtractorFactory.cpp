@@ -97,7 +97,7 @@ sp<IMediaExtractor> MediaExtractorFactory::CreateFromService(
         ex = ret != nullptr ? new MediaExtractorCUnwrapper(ret) : nullptr;
     }
 
-    ALOGV("Created an extractor '%s' with confidence %.2f",
+    ALOGD("Created an extractor '%s' with confidence %.2f",
          ex != nullptr ? ex->name() : "<null>", confidence);
 
     return CreateIMediaExtractorFromMediaExtractor(ex, source, plugin);

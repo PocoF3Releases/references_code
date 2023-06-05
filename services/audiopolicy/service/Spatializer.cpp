@@ -36,6 +36,7 @@
 #include <media/ShmemCompat.h>
 #include <mediautils/ServiceUtilities.h>
 #include <utils/Thread.h>
+#include <cutils/properties.h>
 
 #include "Spatializer.h"
 
@@ -215,6 +216,27 @@ sp<Spatializer> Spatializer::create(SpatializerPolicyCallback *callback) {
             "%s getDescriptors() returned no error but empty list", __func__);
 
     // TODO: get supported spatialization modes from FX engine or descriptor
+    int idxMiSpatializer = -1;
+    int idxDolbySpatializer = -1;
+    for(int i = 0; i < descriptors.size(); i++) {
+        if(strcmp("Xiaomi Bsp Audio", descriptors[i].implementor) == 0) {
+            idxMiSpatializer = i;
+            ALOGD("find Xiaomi Spatializer: %d", idxMiSpatializer);
+        } else if(strcmp("Dolby Laboratories", descriptors[i].implementor) == 0) {
+            idxDolbySpatializer = i;
+            ALOGD("find Dolby Spatializer: %d", idxDolbySpatializer);
+        }
+    }
+
+    bool useXiaomiSpatializer = property_get_bool("sys.audio.useXiaomiSpatializer", false);
+    if (useXiaomiSpatializer && idxMiSpatializer != -1) {
+        descriptors[0] = descriptors[idxMiSpatializer];
+    } else if (idxDolbySpatializer != -1) {
+        descriptors[0] = descriptors[idxDolbySpatializer];
+    } else {
+        ALOGE("%s no spatializer effect can be available", __func__);
+    }
+
     sp<EffectHalInterface> effect;
     status = effectsFactoryHal->createEffect(&descriptors[0].uuid, AUDIO_SESSION_OUTPUT_STAGE,
             AUDIO_IO_HANDLE_NONE, AUDIO_PORT_HANDLE_NONE, &effect);

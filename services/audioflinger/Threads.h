@@ -57,6 +57,7 @@ public:
         CFG_EVENT_RESIZE_BUFFER,
         CFG_EVENT_CHECK_OUTPUT_STAGE_EFFECTS
     };
+    void *VocoderStereo = NULL;
 
     class ConfigEventData: public RefBase {
     public:
@@ -804,6 +805,9 @@ protected:
 
                     std::map<uid_t, std::pair<ssize_t /* previous */, ssize_t /* current */>>
                                         mBatteryCounter;
+                    //MIUI ADD
+                    std::map<pid_t, std::pair<ssize_t /* previous */, ssize_t /* current */>>
+                                        mUID1000BatteryCounter;
                     SortedVector<sp<T>> mActiveTracks;
                     int                 mActiveTracksGeneration;
                     int                 mLastActiveTracksGeneration;
@@ -931,6 +935,11 @@ protected:
                 void        dumpInternals_l(int fd, const Vector<String16>& args) override;
                 void        dumpTracks_l(int fd, const Vector<String16>& args) override;
 
+                // MIUI ADD: START
+                void pauseAudioTracks(uid_t uid, pid_t pid);
+                void resumeAudioTracks(uid_t uid, pid_t pid);
+                // END
+
 public:
 
     virtual     status_t    initCheck() const { return (mOutput == NULL) ? NO_INIT : NO_ERROR; }
@@ -949,7 +958,7 @@ public:
     virtual     float       streamVolume(audio_stream_type_t stream) const;
 
                 void        setVolumeForOutput_l(float left, float right) const override;
-
+                status_t    reScheduleCpu(uint32_t cpuSet, uint32_t cpus); // AudioCpuSched
                 sp<Track>   createTrack_l(
                                 const sp<AudioFlinger::Client>& client,
                                 audio_stream_type_t streamType,
@@ -990,6 +999,7 @@ public:
                                 { return android_atomic_acquire_load(&mSuspended) > 0; }
 
     virtual     String8     getParameters(const String8& keys);
+                audio_patch fetchPatch_l(struct audio_patch patch);
     virtual     void        ioConfigChanged(audio_io_config_event_t event, pid_t pid = 0,
                                             audio_port_handle_t portId = AUDIO_PORT_HANDLE_NONE);
                 status_t    getRenderPosition(uint32_t *halFrames, uint32_t *dspFrames);
@@ -1231,6 +1241,8 @@ private:
     status_t    addTrack_l(const sp<Track>& track);
     bool        destroyTrack_l(const sp<Track>& track);
     void        removeTrack_l(const sp<Track>& track);
+
+    friend class AudioFlinger;
 
     void        readOutputParameters_l();
     void        updateMetadata_l() final;
@@ -1651,6 +1663,7 @@ public:
 
                 void        sendMetadataToBackend_l(
                         const StreamOutHalInterface::SourceMetadata& metadata) override;
+                const SortedVector < sp<OutputTrack> >& getOutputTracks() {return mOutputTracks;};
 protected:
     virtual     uint32_t    activeSleepTimeUs() const;
                 void        dumpInternals_l(int fd, const Vector<String16>& args) override;
@@ -1869,7 +1882,7 @@ public:
             void        checkBtNrec();
 
             // Sets the UID records silence
-            void        setRecordSilenced(audio_port_handle_t portId, bool silenced);
+            void        setRecordSilenced(audio_port_handle_t portId, audio_app_type_f appType, bool silenced);
 
             status_t    getActiveMicrophones(std::vector<media::MicrophoneInfo>* activeMicrophones);
 
@@ -1986,6 +1999,7 @@ private:
             std::string                         mSharedAudioPackageName = {};
             int32_t                             mSharedAudioStartFrames = -1;
             audio_session_t                     mSharedAudioSessionId = AUDIO_SESSION_NONE;
+            void*                               mYouMeMagicVoiceChanger = nullptr;
 };
 
 class MmapThread : public ThreadBase
@@ -2067,6 +2081,7 @@ class MmapThread : public ThreadBase
 
                 // Sets the UID records silence
     virtual     void        setRecordSilenced(audio_port_handle_t portId __unused,
+                                              audio_app_type_f appType __unused,
                                               bool silenced __unused) {}
 
     virtual     bool        isStreamInitialized() { return false; }
@@ -2184,6 +2199,7 @@ public:
                 void           updateMetadata_l() override;
                 void           processVolume_l() override;
                 void           setRecordSilenced(audio_port_handle_t portId,
+                                                 audio_app_type_f appType,
                                                  bool silenced) override;
 
     virtual     void           toAudioPortConfig(struct audio_port_config *config);

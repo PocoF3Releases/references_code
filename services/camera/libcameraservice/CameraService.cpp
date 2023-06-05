@@ -78,6 +78,14 @@
 #include "utils/CameraThreadState.h"
 #include "utils/CameraServiceProxyWrapper.h"
 
+#ifdef __XIAOMI_CAMERA__
+#include "xm/CameraStub.h"
+#endif
+
+#ifdef __XIAOMI_CAMERA_PERF__
+#include "xm/CameraPerf.h"
+#endif
+
 namespace {
     const char* kPermissionServiceName = "permission";
 }; // namespace anonymous
@@ -142,6 +150,11 @@ const String16 CameraService::kWatchAllClientsFlag("all");
 // Set to keep track of logged service error events.
 static std::set<String8> sServiceErrorEventSet;
 
+#ifdef __XIAOMI_CAMERA__
+static bool sMemDirty;
+int32_t gCameraProviderPid;
+#endif
+
 CameraService::CameraService() :
         mEventLog(DEFAULT_EVENT_LOG_LENGTH),
         mNumberOfCameras(0),
@@ -154,6 +167,10 @@ CameraService::CameraService() :
     if (mMemFd == -1) {
         ALOGE("%s: Error while creating the file: %s", __FUNCTION__, sFileName);
     }
+#ifdef __XIAOMI_CAMERA__
+    mEnableCacheDump = false;
+    CameraStub::checkIsUnReleasedBuild();
+#endif
 }
 
 // The word 'System' here does not refer to clients only on the system
@@ -1276,9 +1293,15 @@ Status CameraService::validateClientPermissionsLocked(const String8& cameraId,
                 "Caller \"%s\" (PID %d, UID %d) cannot open camera \"%s\" without camera permission",
                 clientName8.string(), clientUid, clientPid, cameraId.string());
     }
-
+#ifdef __XIAOMI_CAMERA__
+    bool inWhiteList = CameraStub::checkWhiteNameList(clientName8);
+#endif
     // Make sure the UID is in an active state to use the camera
+#ifdef __XIAOMI_CAMERA__
+    if (!mUidPolicy->isUidActive(callingUid, String16(clientName8)) && !inWhiteList) {
+#else
     if (!mUidPolicy->isUidActive(callingUid, String16(clientName8))) {
+#endif
         int32_t procState = mUidPolicy->getProcState(callingUid);
         ALOGE("Access Denial: can't use the camera from an idle UID pid=%d, uid=%d",
             clientPid, clientUid);
@@ -1307,7 +1330,11 @@ Status CameraService::validateClientPermissionsLocked(const String8& cameraId,
     // For non-system clients : Only allow clients who are being used by the current foreground
     // device user, unless calling from our own process.
     if (!doesClientHaveSystemUid() && callingPid != getpid() &&
+#ifdef __XIAOMI_CAMERA__
+            (mAllowedUsers.find(clientUserId) == mAllowedUsers.end())  && !inWhiteList) {
+#else
             (mAllowedUsers.find(clientUserId) == mAllowedUsers.end())) {
+#endif
         ALOGE("CameraService::connect X (PID %d) rejected (cannot connect from "
                 "device user %d, currently allowed device users: %s)", callingPid, clientUserId,
                 toString(mAllowedUsers).string());
@@ -1408,6 +1435,10 @@ status_t CameraService::handleEvictionsLocked(const String8& cameraId, int clien
             }
         }
 
+#ifdef __XIAOMI_CAMERA__
+        CameraStub::waitFaceAuthenticated(packageName, mActiveClientManager);
+#endif
+
         // Get current active client PIDs
         std::vector<int> ownerPids(mActiveClientManager.getAllOwners());
         ownerPids.push_back(clientPid);
@@ -1424,6 +1455,11 @@ status_t CameraService::handleEvictionsLocked(const String8& cameraId, int clien
                   __FUNCTION__, err);
             return err;
         }
+
+#ifdef __XIAOMI_CAMERA__
+        CameraStub::adjCameraPriority(packageName, priorityScores, states,
+                                              mActiveClientManager, ownerPids);
+#endif
 
         // Update all active clients' priorities
         std::map<int,resource_policy::ClientPriority> pidToPriorityMap;
@@ -1605,6 +1641,10 @@ Status CameraService::connect(
         return ret;
     }
 
+#ifdef __XIAOMI_CAMERA__
+    CameraStub::setNfcPolling("1");
+    sMemDirty = true;
+#endif
     *device = client;
     return ret;
 }
@@ -1675,6 +1715,10 @@ Status CameraService::connectDevice(
         /*out*/
         sp<hardware::camera2::ICameraDeviceUser>* device) {
 
+#ifdef __XIAOMI_CAMERA_PERF__
+    TEMP_THREAD_HIGHER_PRIORITY();
+#endif
+
     ATRACE_CALL();
     Status ret = Status::ok();
     String8 id = String8(cameraId);
@@ -1726,6 +1770,10 @@ Status CameraService::connectDevice(
         return ret;
     }
 
+#ifdef __XIAOMI_CAMERA__
+    CameraStub::setNfcPolling("1");
+    sMemDirty = true;
+#endif
     *device = client;
     Mutex::Autolock lock(mServiceLock);
 
@@ -1757,6 +1805,10 @@ Status CameraService::connectHelper(const sp<CALLBACK>& cameraCb, const String8&
     String8 clientName8(clientPackageName);
 
     int originalClientPid = 0;
+
+#ifdef __XIAOMI_CAMERA__
+    CameraStub::setTargetSdkVersion(targetSdkVersion);
+#endif
 
     ALOGI("CameraService::connect call (PID %d \"%s\", camera ID %s) and "
             "Camera API version %d", clientPid, clientName8.string(), cameraId.string(),
@@ -1946,6 +1998,10 @@ Status CameraService::connectHelper(const sp<CALLBACK>& cameraCb, const String8&
         } else {
             // Otherwise, add client to active clients list
             finishConnectLocked(client, partial, oomScoreOffset, systemNativeClient);
+
+#ifdef __XIAOMI_CAMERA__
+            CameraStub::notifyCameraStatus(atoi(cameraId.string()), 1, clientPackageName);
+#endif
         }
 
         client->setImageDumpMask(mImageDumpMask);
@@ -2858,6 +2914,11 @@ bool CameraService::evictClientIdByRemote(const wp<IBinder>& remote) {
                 mActiveClientManager.remove(i);
                 continue;
             }
+#ifdef __XIAOMI_CAMERA__
+            ALOGI("Active Client: device %s  held by package %s PID %" PRId32 "",
+                    i->getKey().string(), String8{clientSp->getPackageName()}.string(),
+                    i->getOwnerId());
+#endif
             if (remote == clientSp->getRemote()) {
                 mActiveClientManager.remove(i);
                 evicted.push_back(clientSp);
@@ -2877,6 +2938,10 @@ bool CameraService::evictClientIdByRemote(const wp<IBinder>& remote) {
 
         for (auto& i : evicted) {
             if (i.get() != nullptr) {
+#ifdef __XIAOMI_CAMERA__
+                ALOGI("Camera will disconnected for package %s ",
+                        String8{i->getPackageName()}.string());
+#endif
                 i->disconnect();
                 ret = true;
             }
@@ -2977,6 +3042,10 @@ void CameraService::doUserSwitch(const std::vector<int32_t>& newUserIds) {
                 i->getOwnerId(), i->getPriority().getScore(),
                 i->getPriority().getState()));
 
+#ifdef __XIAOMI_CAMERA__
+        clientSp->notifyError(hardware::camera2::ICameraDeviceCallbacks::ERROR_CAMERA_DISCONNECTED,
+                    CaptureResultExtras());
+#endif
     }
 
     // Do not hold mServiceLock while disconnecting clients, but retain the condition
@@ -3125,7 +3194,12 @@ sp<MediaPlayer> CameraService::newMediaPlayer(const char *file) {
     sp<MediaPlayer> mp = new MediaPlayer();
     status_t error;
     if ((error = mp->setDataSource(NULL /* httpService */, file, NULL)) == NO_ERROR) {
+#ifdef __XIAOMI_CAMERA__
+        audio_stream_type_t type = CameraStub::getAudioStreamType();
+        mp->setAudioStreamType(type);
+#else
         mp->setAudioStreamType(AUDIO_STREAM_ENFORCED_AUDIBLE);
+#endif
         error = mp->prepare();
     }
     if (error != NO_ERROR) {
@@ -3303,8 +3377,13 @@ CameraService::BasicClient::BasicClient(const sp<CameraService>& cameraService,
     if (!mSystemNativeClient) {
         mAppOpsManager = std::make_unique<AppOpsManager>();
     }
-
+#ifdef __XIAOMI_CAMERA__
+    // Make sure the UID is trusted for MiuiCamera. VENUS-3104
+    String8 clientName8(mClientPackageName);
+    mUidIsTrusted = isTrustedCallingUid(mClientUid) || CameraStub::checkWhiteNameList(clientName8);
+#else
     mUidIsTrusted = isTrustedCallingUid(mClientUid);
+#endif
 }
 
 CameraService::BasicClient::~BasicClient() {
@@ -3334,6 +3413,14 @@ binder::Status CameraService::BasicClient::disconnect() {
     sCameraService->mFlashlight->deviceClosed(mCameraIdStr);
     ALOGI("%s: Disconnected client for camera %s for PID %d", __FUNCTION__, mCameraIdStr.string(),
             mClientPid);
+
+#ifdef __XIAOMI_CAMERA__
+    CameraStub::setNfcPolling("0");
+#endif
+
+#ifdef __XIAOMI_CAMERA__
+    CameraStub::notifyCameraStatus(atoi(mCameraIdStr.string()), 0, mClientPackageName);
+#endif
 
     // client shouldn't be able to call into us anymore
     mClientPid = 0;
@@ -3419,6 +3506,14 @@ bool CameraService::BasicClient::isValidAudioRestriction(int32_t mode) {
 }
 
 status_t CameraService::BasicClient::handleAppOpMode(int32_t mode) {
+#ifdef __XIAOMI_CAMERA__
+    if(CameraStub::checkInvisibleMode(mode)) {
+        ALOGI("MIUILOG-Camera %s: Access for \"%s\" has been restricted for invisible mode",
+            mCameraIdStr.string(), String8(mClientPackageName).string());
+        mAppOpsManager->noteOp(AppOpsManager::OP_CAMERA, mClientUid, mClientPackageName);
+        return -EACCES;
+    }
+#endif
     if (mode == AppOpsManager::MODE_ERRORED) {
         ALOGI("Camera %s: Access for \"%s\" has been revoked",
                 mCameraIdStr.string(), String8(mClientPackageName).string());
@@ -3457,6 +3552,13 @@ status_t CameraService::BasicClient::startCameraOps() {
         // camera frames start streaming in startCameraStreamingOps
         int32_t mode = mAppOpsManager->checkOp(AppOpsManager::OP_CAMERA, mClientUid,
                 mClientPackageName);
+#ifdef __XIAOMI_CAMERA__
+        int targetSdkVersion = CameraStub::getTargetSdkVersion();
+        if(targetSdkVersion < 23)
+        {
+            mode = mAppOpsManager->noteOp(AppOpsManager::OP_CAMERA, mClientUid, mClientPackageName);
+        }
+#endif
         status_t res = handleAppOpMode(mode);
         if (res != OK) {
             return res;
@@ -3734,6 +3836,13 @@ void CameraService::UidPolicy::onUidIdle(uid_t uid, bool /* disabled */) {
             service->blockClientsForUid(uid);
         }
     }
+
+#ifdef __XIAOMI_CAMERA__
+    sp<CameraService> service = mService.promote();
+    if (service->mActiveClientManager.getAll().empty() && sMemDirty) {
+        CameraStub::checkAllClientsStoppedAndReclaimMem(&gCameraProviderPid, &sMemDirty);
+    }
+#endif
 }
 
 void CameraService::UidPolicy::onUidStateChanged(uid_t uid, int32_t procState,
@@ -4148,6 +4257,10 @@ CameraService::DescriptorPtr CameraService::CameraClientManager::makeClientDescr
     int32_t score_adj = systemNativeClient ? kSystemNativeClientScore : score;
     int32_t state_adj = systemNativeClient ? kSystemNativeClientState: state;
 
+#ifdef __XIAOMI_CAMERA__
+    if (systemNativeClient)
+        CameraStub::adjNativeCameraPriority(key, score_adj, state_adj);
+#endif
     return std::make_shared<resource_policy::ClientDescriptor<String8, sp<BasicClient>>>(
             key, value, cost, conflictingKeys, score_adj, ownerId, state_adj,
             systemNativeClient, oomScoreOffset);
@@ -4294,7 +4407,11 @@ static bool tryLock(Mutex& mutex)
 }
 
 void CameraService::cacheDump() {
+#ifdef __XIAOMI_CAMERA__
+    if ((mEnableCacheDump) && (mMemFd != -1)) {
+#else
     if (mMemFd != -1) {
+#endif
         const Vector<String16> args;
         ATRACE_CALL();
         // Acquiring service lock here will avoid the deadlock since
@@ -4393,7 +4510,22 @@ status_t CameraService::dump(int fd, const Vector<String16>& args) {
 
     if (locked) mServiceLock.unlock();
 
+#ifdef __XIAOMI_CAMERA__
+    bool unreachableEnable = false;
+    String16 unreachableOptional("--unreachable");
+    if (std::find(args.begin(), args.end(), unreachableOptional) != args.end()) {
+        property_set("dumpsys.media.camera.unreachable.enable","1");
+        unreachableEnable = true;
+    }
+
     mCameraProviderManager->dump(fd, args);
+
+    if(unreachableEnable) {
+        property_set("dumpsys.media.camera.unreachable.enable","0");
+    }
+#else
+    mCameraProviderManager->dump(fd, args);
+#endif
 
     dprintf(fd, "\n== Vendor tags: ==\n\n");
 
@@ -4418,6 +4550,9 @@ status_t CameraService::dump(int fd, const Vector<String16>& args) {
     int n = args.size();
     String16 verboseOption("-v");
     String16 unreachableOption("--unreachable");
+#ifdef __XIAOMI_CAMERA__
+    String16 cacheDumpOption("-c");
+#endif
     for (int i = 0; i < n; i++) {
         if (args[i] == verboseOption) {
             // change logging level
@@ -4440,9 +4575,37 @@ status_t CameraService::dump(int fd, const Vector<String16>& args) {
                 write(fd, s.c_str(), s.size());
             }
         }
+#ifdef __XIAOMI_CAMERA__
+        else if (args[i] == cacheDumpOption) {
+            if (i + 1 >= n) continue;
+            String8 optStr(args[i+1]);
+            mEnableCacheDump = (atoi(optStr.string()) == 0) ? false : true;
+        }
+#endif
     }
 
     bool serviceLocked = tryLock(mServiceLock);
+#ifdef __XIAOMI_CAMERA__
+    /**
+     * Google's developers have implemented Dump last Open Session,
+     * but will affect performance, especially in SAT switching.
+     * So adding a "-c"option in "dumpsys media.camera"
+     * 0 "representative turns off the cachedump function,"
+     * 1 "represents opens the cachedump function
+     * For example, "dumpsys media.camera -c 1".
+     * Once opened, you will remain in the current
+     * state before the CameraService object is not destroyed.
+     * Google Submit: Commit: DF22307
+     *
+    */
+    if (mEnableCacheDump) {
+        dprintf(fd, "\n==Enable cacheDump. "
+                    "Can use \"-c 0\" disable==\n");
+    } else {
+        dprintf(fd, "\n==Disable cacheDump. "
+                    "Can use \"-c 1\" enable==\n");
+    }
+#endif
 
     // Dump info from previous open sessions.
     // Reposition the offset to beginning of the file before reading
@@ -4799,6 +4962,12 @@ void CameraService::blockClientsForUid(uid_t uid) {
         if (current != nullptr) {
             const auto basicClient = current->getValue();
             if (basicClient.get() != nullptr && basicClient->getClientUid() == uid) {
+#ifdef __XIAOMI_CAMERA__
+                //resolve issue MIUIROM-698839
+                ALOGI("%s: uid:%d", __FUNCTION__, basicClient->getClientUid());
+                if(!(basicClient->getPackageName().compare(String16("com.android.camera"))))
+                    continue;
+#endif
                 basicClient->block();
             }
         }

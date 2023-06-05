@@ -127,6 +127,12 @@ public:
     virtual product_strategy_t getProductStrategyForAttributes(
             const audio_attributes_t &attr, bool fallbackOnDefault = true) const = 0;
 
+    //MIUI ADD: MIAUDIO_MULTI_ROUTE
+    /**
+     * add interface setForceSkipDevice
+    **/
+    virtual bool setForceSkipDevice(audio_skip_device_t skipDevive) = 0;
+
     /**
      * @brief getOutputDevicesForAttributes retrieves the devices to be used for given
      * audio attributes.

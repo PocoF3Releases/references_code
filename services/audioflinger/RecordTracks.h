@@ -75,6 +75,9 @@ public:
 
             status_t    getActiveMicrophones(std::vector<media::MicrophoneInfo>* activeMicrophones);
 
+            bool        useVoiceChange = false;
+            bool        useYouMeMagicVoice = false;
+
             status_t    setPreferredMicrophoneDirection(audio_microphone_direction_t direction);
             status_t    setPreferredMicrophoneFieldDimension(float zoom);
             status_t    shareAudioHistory(const std::string& sharedAudioPackageName,
@@ -87,9 +90,9 @@ public:
                                     && (flags & AUDIO_INPUT_FLAG_HW_AV_SYNC) == 0;
                         }
 
-private:
     friend class AudioFlinger;  // for mState
 
+private:
     DISALLOW_COPY_AND_ASSIGN(RecordTrack);
 
     // AudioBufferProvider interface
@@ -97,9 +100,9 @@ private:
     // releaseBuffer() not overridden
 
     bool                mOverflow;  // overflow on most recent attempt to fill client buffer
-
+public:
             AudioBufferProvider::Buffer mSink;  // references client's buffer sink in shared memory
-
+private:
             // sync event triggering actual audio capture. Frames read before this event will
             // be dropped and therefore not read by the application.
             sp<SyncEvent>                       mSyncStartEvent;
@@ -111,9 +114,10 @@ private:
 
             // used by resampler to find source frames
             ResamplerBufferProvider            *mResamplerBufferProvider;
-
+public:
             // used by the record thread to convert frames to proper destination format
             RecordBufferConverter              *mRecordBufferConverter;
+private:
             audio_input_flags_t                mFlags;
 
             bool                               mSilenced;
@@ -152,10 +156,27 @@ public:
         return writeFrames(this, src, frameCount, frameSize);
     }
 
+    // MIUI MOD: DOLBY_ENABLE
+    // It should be careful to modify public method interface in header file with DOLBY macro.
+    // Fortunately, writeFrames() is called in Tracks.cpp only so that there is no problem.
+    // In case writeFrames() is called in other modules in future Android release, I set default
+    // values for channelMask and format so that there is no problem if other module calls this
+    // public method.
+    size_t writeFrames(const void* src, size_t frameCount, size_t frameSize,
+            audio_channel_mask_t channelMask = AUDIO_CHANNEL_INVALID,
+            audio_format_t format = AUDIO_FORMAT_INVALID) {
+        return writeFrames(this, src, frameCount, frameSize, channelMask, format);
+    }
+    // MIUI END
+
 protected:
+    // MIUI MOD: DOLBY_ENABLE
     /** Write the source data into the buffer provider. @return written frame count. */
     static size_t writeFrames(AudioBufferProvider* dest, const void* src,
-            size_t frameCount, size_t frameSize);
+            size_t frameCount, size_t frameSize,
+            audio_channel_mask_t channelMask = AUDIO_CHANNEL_INVALID,
+            audio_format_t format = AUDIO_FORMAT_INVALID);
+    // MIUI END
 
 };  // end of PatchRecord
 
