@@ -64,7 +64,12 @@ private:
     bool fillsColor() const;
     // Returns true if this layer has a blur value.
     bool hasBlur() const;
+#ifdef MI_SF_FEATURE
+    bool hasSomethingToDraw() const { return fillsColor() || drawShadows() || hasBlur()
+                                          || (drawMiuiShadows() && hasVisibleChildren()); }
+#else
     bool hasSomethingToDraw() const { return fillsColor() || drawShadows() || hasBlur(); }
+#endif
 };
 
 } // namespace android

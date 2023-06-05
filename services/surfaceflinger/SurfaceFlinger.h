@@ -75,6 +75,10 @@
 #include "TransactionCallbackInvoker.h"
 #include "TransactionState.h"
 
+// MIUI:ADD
+#include "MiuiSurfaceFlingerInspectorStub.h"
+// END
+
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -419,6 +423,8 @@ public:
     // SMPTE 170M as sRGB prior to color management being implemented, and now implementations rely
     // on this behavior to increase contrast for some media sources.
     bool mTreat170mAsSrgb = false;
+    // MIUI ADD:
+    nsecs_t mIntendedVsyncTimeStamp;
 
     nsecs_t mVsyncTimeStamp = -1;
     void NotifyIdleStatus();
@@ -462,6 +468,14 @@ private:
     friend class TestableSurfaceFlinger;
     friend class TransactionApplicationTest;
     friend class TunnelModeEnabledReporterTest;
+    friend class FodMonitorThread;
+    friend class BacklightMonitorThread;
+    friend class QsyncFeature;
+
+    // For Decouple SF
+    friend class MiSurfaceFlingerImpl;
+    friend class FodMonitorThread;
+    friend class DisplayDevice;
 
     using VsyncModulator = scheduler::VsyncModulator;
     using TransactionSchedule = scheduler::TransactionSchedule;
@@ -533,6 +547,7 @@ private:
                 }
                 int32_t count = ++(*pendingBuffers);
                 ATRACE_INT(name.c_str(), count);
+                MiuiSurfaceFlingerInspectorStub::recordBufferTxCount(name.c_str(), count);
             } else {
                 ALOGW("Handle not found! %p", layerHandle);
             }
@@ -640,6 +655,11 @@ private:
                                  const client_cache_t& uncacheBuffer, bool hasListenerCallbacks,
                                  const std::vector<ListenerCallbacks>& listenerCallbacks,
                                  uint64_t transactionId) override;
+#if MI_SCREEN_PROJECTION
+    // MIUI ADD:
+    void setMiuiTransactionState(const Vector<MiuiDisplayState>& miuiDisplays, uint32_t flags,
+            int64_t desiredPresentTime) override;
+#endif
     void bootFinished() override;
     bool authenticateSurfaceTexture(
             const sp<IGraphicBufferProducer>& bufferProducer) const override;
@@ -722,12 +742,29 @@ private:
     status_t removeHdrLayerInfoListener(const sp<IBinder>& displayToken,
                                         const sp<gui::IHdrLayerInfoListener>& listener);
     status_t notifyPowerBoost(int32_t boostId);
+    status_t setFrameRateVideoToDisplay(
+            uint32_t cmd, Parcel *data) override;
+
+// MIUI ADD: START
+    status_t producerFrameDropped(int32_t droppedFrameCount,
+                                    int64_t intendedVsyncTime, String8 windowName) override;
+// END
     status_t setGlobalShadowSettings(const half4& ambientColor, const half4& spotColor,
                                      float lightPosY, float lightPosZ, float lightRadius) override;
     status_t getDisplayDecorationSupport(
             const sp<IBinder>& displayToken,
             std::optional<aidl::android::hardware::graphics::common::DisplayDecorationSupport>*
                     outSupport) const override;
+
+#ifdef CURTAIN_ANIM
+    status_t enableCurtainAnim(bool isEnable) override;
+    status_t setCurtainAnimRate(float rate) override;
+#endif
+#ifdef MI_SF_FEATURE
+    // MIUI ADD: HDR Dimmer
+    status_t enableHdrDimmer(bool enable, float factor) override;
+#endif
+
     status_t setFrameRate(const sp<IGraphicBufferProducer>& surface, float frameRate,
                           int8_t compatibility, int8_t changeFrameRateStrategy) override;
     status_t setDisplayElapseTime(const sp<DisplayDevice>& display,
@@ -750,6 +787,10 @@ private:
             const sp<gui::IWindowInfosListener>& windowInfosListener) const override;
     status_t removeWindowInfosListener(
             const sp<gui::IWindowInfosListener>& windowInfosListener) const override;
+
+    // MIUI ADD: START
+    status_t checkLayerNum(bool* outNumber) const override;
+    //END
 
     // Implements IBinder::DeathRecipient.
     void binderDied(const wp<IBinder>& who) override;
@@ -777,6 +818,10 @@ private:
 
     // Samples the composited frame via RegionSamplingThread.
     void sample() override;
+
+    // MIUI ADD: START
+    void updateTime(nsecs_t intendedVsyncTimeStamp) override;
+    // END
 
     /*
      * ISchedulerCallback
@@ -873,6 +918,21 @@ private:
                                const std::vector<ListenerCallbacks>& listenerCallbacks,
                                int originPid, int originUid, uint64_t transactionId)
             REQUIRES(mStateLock);
+
+#if MI_SCREEN_PROJECTION
+    // MIUI ADD:
+    bool applyMiuiTransactionState(const FrameTimelineInfo& info, Vector<ComposerState>& state,
+            const Vector<MiuiDisplayState>& miuiDisplays,
+            const Vector<DisplayState>& displays, uint32_t flags,
+            const InputWindowCommands& inputWindowCommands,
+            const int64_t desiredPresentTime, bool isAutoTimestamp,
+            const client_cache_t& uncacheBuffer, const int64_t postTime,
+            uint32_t permissions, bool hasListenerCallbacks,
+            const std::vector<ListenerCallbacks>& listenerCallbacks,
+            int originPid, int originUid, uint64_t transactionId)
+            REQUIRES(mStateLock);
+#endif
+
     // flush pending transaction that was presented after desiredPresentTime.
     bool flushTransactionQueues(int64_t vsyncId);
     // Returns true if there is at least one transaction that needs to be flushed
@@ -926,6 +986,11 @@ private:
     bool applyTransactions(std::vector<TransactionState>& transactions, int64_t vsyncId)
             REQUIRES(mStateLock);
     uint32_t setDisplayStateLocked(const DisplayState& s) REQUIRES(mStateLock);
+#if MI_SCREEN_PROJECTION
+    // MIUI ADD:
+    uint32_t setMiuiDisplayStateLocked(const MiuiDisplayState& s) REQUIRES(mStateLock);
+#endif
+
     void checkVirtualDisplayHint(const Vector<DisplayState>& displays);
     uint32_t addInputWindowCommands(const InputWindowCommands& inputWindowCommands)
             REQUIRES(mStateLock);
@@ -959,6 +1024,11 @@ private:
     // resources associated to this layer.
     void onHandleDestroyed(BBinder* handle, sp<Layer>& layer);
     void markLayerPendingRemovalLocked(const sp<Layer>& layer);
+
+#if MI_SCREEN_PROJECTION
+    // MIUI ADD:
+    uint32_t getCastMode();
+#endif
 
     // add a layer to SurfaceFlinger
     status_t addClientLayer(const sp<Client>& client, const sp<IBinder>& handle,
@@ -1187,7 +1257,12 @@ private:
     }
 
     PhysicalDisplayId getPrimaryDisplayIdLocked() const REQUIRES(mStateLock) {
+#ifdef MI_FEATURE_ENABLE
+        return mIsFold ? getHwComposer().getSecondaryDisplayId() :
+                        getHwComposer().getPrimaryDisplayId();
+#else
         return getHwComposer().getPrimaryDisplayId();
+#endif
     }
 
     // Toggles use of HAL/GPU virtual displays.
@@ -1279,7 +1354,7 @@ private:
 
     void setupDisplayExtnFeatures();
 
-    void setupIdleTimeoutHandling(uint32_t displayId);
+    void setupIdleTimeoutHandling(uint32_t displayId, bool isPrimary);
 
     bool isDisplayExtnEnabled() { return (mEarlyWakeUpEnabled || mDynamicSfIdleEnabled); }
 
@@ -1407,6 +1482,10 @@ private:
     // did not change.
     bool mReusedClientComposition = false;
 
+#ifdef MI_SF_SETAFFINITY
+    // true means previous frame Composition type had client
+    bool mPrevFrameComposeHadClient = false;
+#endif
     BootStage mBootStage = BootStage::BOOTLOADER;
 
     std::vector<HotplugEvent> mPendingHotplugEvents GUARDED_BY(mStateLock);
@@ -1457,6 +1536,8 @@ private:
     bool mBlursAreExpensive = false;
     bool mUseAdvanceSfOffset = false;
     bool mUseFbScaling = false;
+    bool mSwitchResolutionSupport = false;
+    bool mModeChangeOpt = false;
     bool mAsyncVdsCreationSupported = false;
     std::atomic<uint32_t> mFrameMissedCount = 0;
     std::atomic<uint32_t> mHwcFrameMissedCount = 0;
@@ -1568,6 +1649,7 @@ private:
     void enableRefreshRateOverlay(bool enable) REQUIRES(mStateLock);
 
     // Flag used to set override desired display mode from backdoor
+    uint32_t mDebugDisplayModeSetByBackdoorLine = 0;
     bool mDebugDisplayModeSetByBackdoor = false;
 
     // A set of layers that have no parent so they are not drawn on screen.
@@ -1668,7 +1750,9 @@ private:
     bool mAllowHwcForVDS = false;
     bool mAllowHwcForWFD = false;
     int mFirstApiLevel = 0;
-
+    bool mIsFold = false;
+    bool mBackPanel = false;
+    bool mUpdateRefreshrateOverlayForFold = false;
     // returns the framerate of the layer with the given sequence ID
     float getLayerFramerate(nsecs_t now, int32_t id) const {
         return mScheduler->getLayerFramerate(now, id);
@@ -1684,6 +1768,14 @@ private:
     nsecs_t mAnimationTransactionTimeout = s2ns(5);
 
     friend class SurfaceComposerAIDL;
+
+#ifdef MI_FEATURE_ENABLE
+    // MIUI ADD: Added just for Global HBM Dither (J2S-T)
+    bool mGlobalHBMDitherEnabled = false;
+    mat4 mMiClientColorMatrix = mat4();
+    mat4 mCurrentGPUColorMatrix = mat4();
+    // MIUI ADD: END
+#endif
 };
 
 class SurfaceComposerAIDL : public gui::BnSurfaceComposer {
@@ -1716,6 +1808,10 @@ public:
                                                bool* outSupport) override;
     binder::Status setDisplayBrightness(const sp<IBinder>& displayToken,
                                         const gui::DisplayBrightness& brightness) override;
+    // MIUI ADD:
+    binder::Status setDisplayBrightnessWithDimLayer(const sp<IBinder>& displayToken,
+                                        const gui::DisplayBrightness& brightness,
+                                        bool hdrBoost, float dimmerFactor) override;
     binder::Status addHdrLayerInfoListener(const sp<IBinder>& displayToken,
                                            const sp<gui::IHdrLayerInfoListener>& listener) override;
     binder::Status removeHdrLayerInfoListener(

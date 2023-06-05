@@ -15,6 +15,7 @@
  */
 
 #include "InputThread.h"
+#include <log/log.h>
 
 namespace android {
 
@@ -23,13 +24,28 @@ namespace {
 // Implementation of Thread from libutils.
 class InputThreadImpl : public Thread {
 public:
-    explicit InputThreadImpl(std::function<void()> loop)
-          : Thread(/* canCallJava */ true), mThreadLoop(loop) {}
-
+    // MIUI MOD: START
+    explicit InputThreadImpl(std::string name, std::function<void()> loop)
+          : Thread(/* canCallJava */ true), mThreadLoop(loop), mName(name) {}
+    // NED
     ~InputThreadImpl() {}
 
 private:
     std::function<void()> mThreadLoop;
+    // MIUI ADD: START
+    std::string mName;
+    status_t readyToRun() {
+        if (mName == "InputDispatcher" || mName == "InputReader") {
+            struct sched_param param = {0};
+            param.sched_priority = 1;
+            if (sched_setscheduler(getTid(),
+                        SCHED_FIFO | SCHED_RESET_ON_FORK,&param) != 0) {
+                ALOGE("Couldn't set SCHED_FIFO: %d", errno);
+            }
+        }
+        return OK;
+    }
+    // END
 
     bool threadLoop() override {
         mThreadLoop();
@@ -41,7 +57,8 @@ private:
 
 InputThread::InputThread(std::string name, std::function<void()> loop, std::function<void()> wake)
       : mName(name), mThreadWake(wake) {
-    mThread = new InputThreadImpl(loop);
+    // MIUI MOD:
+    mThread = new InputThreadImpl(name, loop);
     mThread->run(mName.c_str(), ANDROID_PRIORITY_URGENT_DISPLAY);
 }
 

@@ -47,6 +47,8 @@ class RunDex2Oat {
                     bool debuggable,
                     bool post_bootcomplete,
                     bool for_restore,
+                    // MIUI ADD:
+                    bool multi_arch,
                     int target_sdk_version,
                     bool enable_hidden_api_checks,
                     bool generate_compact_dex,
@@ -76,6 +78,9 @@ class RunDex2Oat {
                                     bool enable_hidden_api_checks,
                                     bool generate_compact_dex,
                                     const char* compilation_reason);
+    // MIUI ADD:
+    void AddCpuSetArg(const char *  compilation_reason);
+    // END
     void PrepareCompilerRuntimeAndPerfConfigFlags(bool post_bootcomplete, bool for_restore);
 
     virtual std::string GetProperty(const std::string& key, const std::string& default_value);

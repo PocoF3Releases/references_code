@@ -92,6 +92,10 @@ public:
     //get previous frame gfx info.
     nsecs_t getPreviousGfxInfo();
 
+#ifdef MI_FEATURE_ENABLE
+    int mFpsNumFences;
+#endif
+
 private:
     struct FrameRecord {
         FrameRecord() :

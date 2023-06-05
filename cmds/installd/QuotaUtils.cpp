@@ -66,11 +66,16 @@ bool InvalidateQuotaMounts() {
         }
 
         if (source.compare(0, 11, "/dev/block/") == 0) {
-            struct dqblk dq;
-            if (quotactl(QCMD(Q_GETQUOTA, USRQUOTA), source.c_str(), 0,
-                    reinterpret_cast<char*>(&dq)) == 0) {
-                LOG(DEBUG) << "Found quota mount " << source << " at " << target;
-                mQuotaReverseMounts[target] = source;
+            // MIUI MOD: START
+            // speed install may mount path to /Android/data, don't record this path.
+            auto position = target.find(kMntSpeedInstall);
+            if (position == std::string::npos) {
+                struct dqblk dq;
+                if (quotactl(QCMD(Q_GETQUOTA, USRQUOTA), source.c_str(), 0,
+                        reinterpret_cast<char*>(&dq)) == 0) {
+                    LOG(DEBUG) << "Found quota mount " << source << " at " << target;
+                    mQuotaReverseMounts[target] = source;
+                }
             }
         }
     }

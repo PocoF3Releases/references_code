@@ -52,6 +52,14 @@ public:
     void setNextBrightness(float brightness) override;
     void setDisplaySize(const ui::Size&) override;
     void setLayerFilter(ui::LayerFilter) override;
+#if MI_SCREEN_PROJECTION
+    // MIUI ADD: START
+    void setDiffScreenProjection(uint32_t isScreenProjection) override;
+    void setCastMode(uint32_t isCastMode) override;
+    void setLastFrame(uint32_t isLastFrame) override;
+    // END
+#endif
+
     ui::Transform::RotationFlags getTransformHint() const override;
 
     void setColorTransform(const compositionengine::CompositionRefreshArgs&) override;
@@ -124,6 +132,11 @@ public:
     virtual void resetCompositionStrategy();
     void getVisibleLayerInfo(std::vector<std::string> *layerName,
                              std::vector<int32_t> *layerSequence) const override;
+
+#if MI_FEATURE_ENABLE
+    inline void updateMiCompositionState(bool GameBackGround, android::compositionengine::OutputLayer* layer,
+     const compositionengine::CompositionRefreshArgs& refreshArgs);
+#endif
 
 protected:
     std::unique_ptr<compositionengine::OutputLayer> createOutputLayer(const sp<LayerFE>&) const;

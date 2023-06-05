@@ -47,6 +47,8 @@
 #include <private/gui/ComposerService.h>
 #include <private/gui/ComposerServiceAIDL.h>
 
+#include "MiSurfaceStub.h"
+
 namespace android {
 
 using ui::Dataspace;
@@ -1180,6 +1182,15 @@ int Surface::queueBuffer(android_native_buffer_t* buffer, int fenceFd) {
     ALOGV("Surface::queueBuffer");
     Mutex::Autolock lock(mMutex);
 
+
+    if (MiSurfaceStub::supportFEAS()) {
+        MiSurfaceStub::DoNotifyFbc(FBC_QUEUE_BEG, 0, 0, static_cast<uint64_t>(reinterpret_cast<intptr_t>(this)));
+    }
+
+#ifdef FPS_BOOST_GAME
+    MiSurfaceStub::doNotifyFbc(FBC_QUEUE_BEG);
+#endif
+
     int i = getSlotFromBufferLocked(buffer);
     if (i < 0) {
         if (fenceFd >= 0) {
@@ -1193,6 +1204,7 @@ int Surface::queueBuffer(android_native_buffer_t* buffer, int fenceFd) {
         }
         return OK;
     }
+    MiSurfaceStub::doDynamicFps();
 
     IGraphicBufferProducer::QueueBufferOutput output;
     IGraphicBufferProducer::QueueBufferInput input;
@@ -1208,6 +1220,7 @@ int Surface::queueBuffer(android_native_buffer_t* buffer, int fenceFd) {
         ALOGE("queueBuffer: error queuing buffer, %d", err);
     }
 
+    MiSurfaceStub::skipSlotRef(this, i);
     onBufferQueuedLocked(i, fence, output);
     return err;
 }
@@ -1943,6 +1956,9 @@ int Surface::connect(
         mDirtyRegion = Region::INVALID_REGION;
     }
 
+    if (MiSurfaceStub::supportFEAS()) {
+       MiSurfaceStub::DoNotifyFbc(FBC_CNT, 0, api, static_cast<uint64_t>(reinterpret_cast<intptr_t>(this)));
+    }
     return err;
 }
 
@@ -1973,8 +1989,25 @@ int Surface::disconnect(int api, IGraphicBufferProducer::DisconnectMode mode) {
             mConnectedToCpu = false;
         }
     }
+
+    if (MiSurfaceStub::supportFEAS()) {
+       MiSurfaceStub::DoNotifyFbc(FBC_DISCNT, 0, api, static_cast<uint64_t>(reinterpret_cast<intptr_t>(this)));
+    }
     return err;
 }
+
+// MIUI ADD: START
+void Surface::releaseSlot(int slot) {
+    Mutex::Autolock lock(mMutex);
+    if(mDequeuedSlots.count(slot) <= 0) {
+        ALOGV("Surface releaseSlot %d",slot);
+        if (mReportRemovedBuffers && (mSlots[slot].buffer != nullptr)) {
+            mRemovedBuffers.push_back(mSlots[slot].buffer);
+        }
+        mSlots[slot].buffer = nullptr;
+    }
+}
+// MIUI ADD: END
 
 int Surface::detachNextBuffer(sp<GraphicBuffer>* outBuffer,
         sp<Fence>* outFence) {
@@ -2233,12 +2266,23 @@ int Surface::setBuffersTransform(uint32_t transform)
     // override it until the surface is disconnected. This is a temporary workaround for camera
     // until they switch to using Buffer State Layers. Currently if client sets the buffer transform
     // it may be overriden by the buffer producer when the producer sets the buffer transform.
-    if (transformToDisplayInverse()) {
+
+    // MIUI MOD : START
+    if (transformToDisplayInverse() || mEnableInverseDisplay) {
         transform |= NATIVE_WINDOW_TRANSFORM_INVERSE_DISPLAY;
     }
+    //END
     mTransform = transform;
     return NO_ERROR;
 }
+
+//MIUI ADD START
+void Surface::setInverseDisplayEnable(bool enable) {
+    ATRACE_CALL();
+    Mutex::Autolock lock(mMutex);
+    mEnableInverseDisplay = enable;
+}
+//END
 
 int Surface::setBuffersStickyTransform(uint32_t transform)
 {

@@ -21,6 +21,7 @@
 #include "convertV2_1.h"
 
 #include <android-base/logging.h>
+#include <algorithm>
 
 using android::hardware::hidl_vec;
 using android::hardware::sensors::V1_0::RateLevel;
@@ -137,6 +138,22 @@ void HidlSensorHalWrapper::prepareForReconnect() {
     }
 }
 
+static bool timestampCompare(const sensors_event_t &s1, const sensors_event_t &s2) {
+        return s1.timestamp < s2.timestamp;
+}
+
+static ssize_t bufferSort(sensors_event_t* buffer, size_t count) {
+    ssize_t result = 0;
+    std::sort(buffer, buffer + count, timestampCompare);
+    for (unsigned long i = 0; i < count; i++) {
+        if (buffer[i].timestamp < 0) {
+            buffer[i].timestamp = android::elapsedRealtimeNano();
+            result ++;
+        }
+    }
+    return result;
+}
+
 ssize_t HidlSensorHalWrapper::poll(sensors_event_t* buffer, size_t count) {
     ssize_t err;
     int numHidlTransportErrors = 0;
@@ -156,6 +173,10 @@ ssize_t HidlSensorHalWrapper::poll(sensors_event_t* buffer, size_t count) {
                                           err = statusFromResult(result);
                                       }
                                   });
+
+        if (isVirtualInjectSensorData) {
+            err = bufferSort(buffer, err);
+        }
 
         if (ret.isOk()) {
             hidlTransportError = false;
@@ -186,9 +207,22 @@ ssize_t HidlSensorHalWrapper::pollFmq(sensors_event_t* buffer, size_t maxNumEven
     ssize_t eventsRead = 0;
     size_t availableEvents = mSensors->getEventQueue()->availableToRead();
 
+    if (isVirtualInjectSensorData) {
+        uint32_t eventFlagState = 0;
+        if (mEventQueueFlag != nullptr) {
+            mEventQueueFlag->wait(asBaseType(INTERNAL_WAKE), &eventFlagState);
+        }
+        buffer[0].type = virtualSensorEvent.type;
+        buffer[0].data[0] = virtualSensorEvent.data[0];
+        buffer[0].data[1] = virtualSensorEvent.data[1];
+        buffer[0].data[2] = virtualSensorEvent.data[2];
+        buffer[0].sensor = virtualSensorEvent.sensor;
+        buffer[0].timestamp = android::elapsedRealtimeNano();
+        return 1;
+    }
+
     if (availableEvents == 0) {
         uint32_t eventFlagState = 0;
-
         // Wait for events to become available. This is necessary so that the Event FMQ's read() is
         // able to be called with the correct number of events to read. If the specified number of
         // events is not available, then read() would return no events, possibly introducing
@@ -274,9 +308,50 @@ status_t HidlSensorHalWrapper::flush(int32_t sensorHandle) {
 
 status_t HidlSensorHalWrapper::injectSensorData(const sensors_event_t* event) {
     if (mSensors == nullptr) return NO_INIT;
+    bool sendWake = false;
+
+    if (event->version == 0xFFFF) {
+        isVirtualInjectSensorData = true;
+        sendWake = true;
+    }
+
+    if (event->version == 0xFFFE) {
+        isVirtualInjectSensorData = false;
+        sendWake = true;
+    }
+
+    if (event->version == 0xFFFD) {
+        ALOGI("HidlSensorHalWrapper::injectSensorData: type: %d, data: %f, %f, %f", event->type,
+              event->data[0], event->data[1], event->data[2]);
+        if (mSensors != nullptr) {
+            checkReturn(mSensors->getSensorsList([&](const auto& list) {
+                for (size_t i = 0; i < list.size(); i++) {
+                    sensor_t sensor;
+                    convertToSensor(list[i], &sensor);
+                    if ((event->type == sensor.type) && ((sensor.flags & SENSOR_FLAG_WAKE_UP) == 0)) {
+                        memcpy(&virtualSensorEvent, event, sizeof(sensors_event_t));
+                        virtualSensorEvent.sensor = sensor.handle;
+                        virtualSensorEvent.timestamp = -1;
+                        ALOGI("HidlSensorHalWrapper::injectSensorData: handle [%d] found for "
+                              "sensor %d",
+                              sensor.handle, event->type);
+                        break;
+                    }
+                }
+            }));
+        }
+        sendWake = true;
+    }
+
+    if (sendWake && mEventQueueFlag != nullptr)
+        mEventQueueFlag->wake(asBaseType(INTERNAL_WAKE));
 
     Event ev;
-    convertFromSensorEvent(*event, &ev);
+    if (event->version == 0xFFFD) {
+        convertFromSensorEvent(virtualSensorEvent, &ev);
+    } else {
+        convertFromSensorEvent(*event, &ev);
+    }
     return checkReturnAndGetStatus(mSensors->injectSensorData(ev));
 }
 

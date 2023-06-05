@@ -1442,5 +1442,225 @@ bool remove_file_at_fd(int fd, /*out*/ std::string* path) {
     return true;
 }
 
+// MIUI ADD: START
+static int _transfer_set_perm(const char * name,
+                              uid_t target_uid,
+                              gid_t target_gid,
+                              mode_t target_mode,
+                              const char * target_se_info) {
+    struct stat st;
+    if (-1 == ::stat(name, &st)) { return -1; }
+
+    bool err = false;
+    if ((mode_t)-1 != target_mode) {
+        err = (err || -1 == ::chmod(name, target_mode | (st.st_mode & 07000)));
+    }
+    if (!((uid_t)-1 == target_uid && (gid_t)-1 == target_gid)) {
+        err = (err || -1 == ::chown(name, target_uid, target_gid));
+    }
+    if ((uid_t)-1 != target_uid && target_se_info) {
+        err = (err || -1 == selinux_android_restorecon_pkgdir(name, target_se_info, target_uid, 0));
+    }
+
+    errno = (err ? EPERM : 0);
+    return err ? -1 : 0;
+}
+
+static int _transfer_unlink_r(const char * name, bool is_dir) {
+    if (!is_dir) { return ::unlink(name); }
+
+    DIR * dir = ::opendir(name);
+    if (!dir) { return -1; }
+
+    struct dirent * entry;
+    for (errno = 0; (entry = ::readdir(dir)); errno = 0) {
+        if (!strcmp(".", entry->d_name) || !strcmp("..", entry->d_name)) { continue; }
+        if (-1 == _transfer_unlink_r(entry->d_name, DT_DIR == entry->d_type)) {
+            break;
+        }
+    }
+
+    int err = errno;
+    ::closedir(dir);
+    if (err) { errno = err; return -1; }
+
+    return ::remove(name);
+}
+
+static int _transfer_unlink(const char * name) {
+    struct stat st;
+    if (-1 == ::stat(name, &st)) { return -1; }
+    return _transfer_unlink_r(name, S_ISDIR(st.st_mode));
+}
+
+static void _transfer_prepare_r(const char * target_base,
+                                char * target_entry,
+                                size_t target_entry_len,
+                                int target_entry_level,
+                                uid_t target_uid,
+                                gid_t target_gid,
+                                mode_t target_mode,
+                                const char * target_se_info) {
+    size_t i = target_entry_len;
+    while (i && target_entry[i-1] == '/') { i--; }
+    while (i && target_entry[i-1] != '/') { i--; }
+
+    if (i) {
+        char old = target_entry[i];
+        target_entry[i] = 0;
+
+        _transfer_prepare_r(
+                target_base,
+                target_entry,
+                i,
+                target_entry_level + 1,
+                target_uid,
+                target_gid,
+                target_mode,
+                target_se_info);
+
+        target_entry[i] = old;
+    }
+
+    char name[PATH_MAX + 1];
+    ::strlcpy(name, target_base, sizeof(name));
+    ::strlcat(name, target_entry, sizeof(name));
+
+    if (0 == target_entry_level) { _transfer_unlink(name); }
+    else {
+        struct stat st;
+        if (-1 != ::stat(name, &st) && !S_ISDIR(st.st_mode)) {
+            _transfer_unlink(name);
+        }
+        ::mkdir(name, target_mode);
+        _transfer_set_perm(name, target_uid, target_gid, target_mode, target_se_info);
+    }
+}
+
+static void _transfer_prepare(const char * target_base,
+                              const char * target_relative,
+                              uid_t target_uid,
+                              gid_t target_gid,
+                              mode_t target_mode,
+                              const char * target_se_info) {
+    char entry[PATH_MAX + 1];
+    ::strlcpy(entry, target_relative, sizeof(entry));
+    _transfer_prepare_r(target_base, entry, strlen(entry), 0, target_uid, target_gid, target_mode, target_se_info);
+}
+
+static int _transfer_copy_file(const char * src, const char * dst, mode_t target_mode) {
+    int err = 0;
+
+    int sfd = -1, dfd = -1;
+
+    do {
+        sfd = ::open(src, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+        if (-1 == sfd) { err = errno; break; }
+
+        dfd = ::open(dst, O_WRONLY | O_NOFOLLOW | O_CLOEXEC | O_CREAT | O_EXCL, target_mode);
+        if (-1 == dfd) { err = errno; break; }
+
+        char buf[1024 * 8];
+        int len;
+        while ((len = ::read(sfd, buf, sizeof(buf))) > 0) {
+            int wt = 0, w;
+            while (wt < len && (w = ::write(dfd, buf + wt, len - wt)) >= 0) { wt += w; }
+            if (-1 == w) { len = -1; break; }
+        }
+
+        if (-1 == len) { err = errno; break; }
+    } while (false);
+
+    if (-1 != sfd) { ::close(sfd); }
+    if (-1 != dfd) {
+        if (-1 == ::close(dfd)) {
+            err = errno;
+        }
+    }
+
+    errno = err;
+    return err ? -1 : 0;
+}
+
+int transfer(const char * src,
+             const char * target_base,
+             const char * target_relative,
+             bool copy,
+             uid_t target_uid,
+             gid_t target_gid,
+             mode_t target_mode,
+             const char * target_se_info,
+             bool ignore_set_perm_err) {
+    if (!src || !target_base || !target_relative) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    size_t tbl;
+    if (!(tbl = strlen(target_base)) || '/' != target_base[tbl - 1]) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (!strlen(target_relative) || '/' == target_relative[0]) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    _transfer_prepare(target_base, target_relative, target_uid, target_gid, target_mode, target_se_info);
+
+    char name[PATH_MAX + 1];
+    ::strlcpy(name, target_base, sizeof(name));
+    ::strlcat(name, target_relative, sizeof(name));
+
+    if (copy) {
+        if (-1 == _transfer_copy_file(src, name, target_mode)) { return -1; }
+    } else {
+        if (-1 == ::rename(src, name)) { return -1; }
+    }
+
+    int set_perm_result = _transfer_set_perm(name, target_uid, target_gid, target_mode, target_se_info);
+    return ignore_set_perm_err ? 0 : set_perm_result;
+}
+
+int list_files(const char * path, size_t start, size_t max_count, std::vector<std::string> * list, int64_t * offset) {
+    if (!path || !list || !offset) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    list->clear();
+
+    DIR * dir = opendir(path);
+    if (!dir) { return -1; }
+
+    size_t bytes = 0, index = 0;
+    struct dirent * entry;
+    for (errno = 0; list->size() < max_count && (entry = ::readdir(dir)); errno = 0) {
+        if (!strcmp(".", entry->d_name) || !strcmp("..", entry->d_name)) { continue; }
+        if (index++ < start) { continue; }
+
+        bytes += strlen(entry->d_name);
+        if (bytes > MAX_DIR_LIST_BYTES) { break; }
+
+        list->emplace_back(entry->d_name);
+    }
+
+    int err = errno;
+    ::closedir(dir);
+
+    if (list->size() >= max_count || bytes > MAX_DIR_LIST_BYTES) {
+        *offset = start + list->size();
+        return 0;
+    }
+
+    if (!err) { *offset = -1; return 0; }
+
+    errno = err;
+    return -1;
+}
+
+// END
+
 }  // namespace installd
 }  // namespace android

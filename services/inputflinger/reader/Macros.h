@@ -20,7 +20,18 @@
 #define LOG_TAG "InputReader"
 
 //#define LOG_NDEBUG 0
-
+// MIUI ADD : START
+#ifdef MIUI_BUILD
+// we need all debug info on miui version, because our log control by dumpsys input debuglog
+static constexpr bool DEBUG_RAW_EVENTS = true;
+static constexpr bool DEBUG_VIRTUAL_KEYS = true;
+static constexpr bool DEBUG_POINTERS = true;
+static constexpr bool DEBUG_POINTER_ASSIGNMENT = true;
+static constexpr bool DEBUG_GESTURES = true;
+static constexpr bool DEBUG_VIBRATOR = true;
+static constexpr bool DEBUG_STYLUS_FUSION = true;
+#else
+// END
 // Log debug messages for each raw event received from the EventHub.
 static constexpr bool DEBUG_RAW_EVENTS = false;
 
@@ -41,6 +52,8 @@ static constexpr bool DEBUG_VIBRATOR = false;
 
 // Log debug messages about fusing stylus data.
 static constexpr bool DEBUG_STYLUS_FUSION = false;
+// MIUI ADD :
+#endif
 
 #define INDENT "  "
 #define INDENT2 "    "

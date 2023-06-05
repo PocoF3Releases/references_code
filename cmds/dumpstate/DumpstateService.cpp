@@ -20,6 +20,7 @@
 
 #include <memory>
 
+#include <android-base/properties.h>
 #include <android-base/stringprintf.h>
 #include "android/os/BnDumpstate.h"
 

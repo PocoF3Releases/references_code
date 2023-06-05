@@ -51,6 +51,10 @@ public:
     // Gets the raw front-end composition state data for the layer
     virtual const LayerFECompositionState* getCompositionState() const = 0;
 
+#ifdef MI_FEATURE_ENABLE
+    virtual LayerFECompositionState* editCompositionState() = 0;
+#endif
+
     // Called before composition starts. Should return true if this layer has
     // pending updates which would require an extra display refresh cycle to
     // process.

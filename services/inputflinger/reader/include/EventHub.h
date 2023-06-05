@@ -534,6 +534,9 @@ public:
 
     ~EventHub() override;
 
+    // MIUI ADD:
+    void switchTouchWorkMode(uint32_t workMode);
+
 private:
     struct AssociatedDevice {
         // The device descriptor from evdev device the misc device associated with.

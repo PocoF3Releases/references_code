@@ -293,5 +293,6 @@ uint64_t SurfaceControl::resolveFrameNumber(const std::optional<uint64_t>& frame
         return mFallbackFrameNumber++;
     }
 }
+
 // ----------------------------------------------------------------------------
 }; // namespace android

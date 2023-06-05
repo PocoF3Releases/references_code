@@ -55,7 +55,13 @@ void FrameTimelineInfo::merge(const FrameTimelineInfo& other) {
     } else if (vsyncId == INVALID_VSYNC_ID) {
         vsyncId = other.vsyncId;
         inputEventId = other.inputEventId;
+#ifdef MI_FEATURE_ENABLE
+        if (other.startTimeNanos != 0) {
+            startTimeNanos = other.startTimeNanos;
+        }
+#else
         startTimeNanos = other.startTimeNanos;
+#endif
     }
 }
 

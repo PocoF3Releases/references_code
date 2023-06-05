@@ -66,7 +66,9 @@ public:
 
     // isVisible - true if this layer is visible, false otherwise
     bool isVisible() const override;
-
+#ifdef MI_SF_FEATURE
+    bool hasVisibleChildren() const override{ return isVisible(); };
+#endif
     // isProtected - true if the layer may contain protected content in the
     // GRALLOC_USAGE_PROTECTED sense.
     bool isProtected() const override;
@@ -115,6 +117,10 @@ public:
     // Returns true if the transformed buffer size does not match the layer size and we need
     // to apply filtering.
     virtual bool bufferNeedsFiltering() const;
+    // Filter unnecessary InputWindowInfo
+    #ifdef MI_FEATURE_ENABLE
+    bool mNeedFilterInputWindowInfo = false;
+    #endif
 
     // Loads the corresponding system property once per process
     static bool latchUnsignaledBuffers();
@@ -200,7 +206,12 @@ private:
     // We generate InputWindowHandles for all non-cursor buffered layers regardless of whether they
     // have an InputChannel. This is to enable the InputDispatcher to do PID based occlusion
     // detection.
+    // Filter unnecessary InputWindowInfo
+    #ifdef MI_FEATURE_ENABLE
+    bool needsInputInfo() const override;
+    #else
     bool needsInputInfo() const override { return !mPotentialCursor; }
+    #endif
 
     // Returns true if this layer requires filtering
     bool needsFiltering(const DisplayDevice*) const override;

@@ -32,6 +32,9 @@
 #include "Scheduler/OneShotTimer.h"
 #include "Scheduler/StrongTyping.h"
 
+namespace android {
+class MiSurfaceFlingerImpl;
+}
 namespace android::scheduler {
 
 using namespace std::chrono_literals;
@@ -128,6 +131,11 @@ public:
     // policy otherwise.
     Policy getCurrentPolicy() const EXCLUDES(mLock);
     // Gets the display manager policy, regardless of whether an override policy is active.
+
+#if MI_FEATURE_ENABLE
+    Policy getCurrentPolicyNoLocked() const;
+#endif
+
     Policy getDisplayManagerPolicy() const EXCLUDES(mLock);
 
     // Returns true if mode is allowed by the current policy.
@@ -190,6 +198,10 @@ public:
         }
     };
 
+#ifdef MI_FEATURE_ENABLE
+    const char* getLayerVoteTypeName(const LayerVoteType& layerVote) const;
+#endif
+
     // Returns the refresh rate that best fits the given layers, and whether the refresh rate was
     // chosen based on touch boost and/or idle timer.
     std::pair<DisplayModePtr, GlobalSignals> getBestRefreshRate(
@@ -209,6 +221,19 @@ public:
     // Returns the highest refresh rate according to the current policy. May change at runtime. Only
     // uses the primary range, not the app request range.
     DisplayModePtr getMaxRefreshRateByPolicy() const EXCLUDES(mLock);
+
+#ifdef MI_FEATURE_ENABLE
+    const std::vector<DisplayModeIterator> getPrimaryRefreshRateByPolicyLocked() {
+        std::lock_guard lock(mLock);
+        return mPrimaryRefreshRates;
+    }
+    void resetBestRefreshRateCache() {
+        std::lock_guard lock(mLock);
+        // Invalidate the cached invocation to getBestRefreshRate. This forces
+        // the refresh rate to be recomputed on the next call to getBestRefreshRate.
+        mGetBestRefreshRateCache.reset();
+    }
+#endif
 
     void setActiveModeId(DisplayModeId) EXCLUDES(mLock);
     DisplayModePtr getActiveMode() const EXCLUDES(mLock);
@@ -332,6 +357,7 @@ public:
 
 private:
     friend struct TestableRefreshRateConfigs;
+    friend class ::android::MiSurfaceFlingerImpl;
 
     void constructAvailableRefreshRates() REQUIRES(mLock);
 
@@ -352,6 +378,10 @@ private:
     const DisplayModePtr& getMaxRefreshRateByPolicyLocked() const REQUIRES(mLock) {
         return getMaxRefreshRateByPolicyLocked(mActiveModeIt->second->getGroup());
     }
+
+#ifdef MI_FEATURE_ENABLE
+    const DisplayModePtr& getVideoFullScreenMaxRefreshRateByPolicyLocked(int anchorGroup, int fps) const REQUIRES(mLock);
+#endif
 
     const Policy* getCurrentPolicyLocked() const REQUIRES(mLock);
     bool isPolicyValidLocked(const Policy& policy) const REQUIRES(mLock);

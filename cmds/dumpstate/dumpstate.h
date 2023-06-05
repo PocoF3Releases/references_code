@@ -166,6 +166,23 @@ static std::string VERSION_DEFAULT = "default";
  */
 static const std::string DUMPSTATE_DIRECTORY = "/bugreports";
 
+// MIUI ADD: START
+static const std::string BOOTFAILD_DIR = "/cache/mqsas";
+
+static const std::string BOOTFAILD_AB_DIR = "/mnt/rescue/mqsas";
+
+static const std::string MQSAS_SCOUT_DIR = "/data/miuilog/stability/scout/";
+static const std::string MQSAS_WATCHDOG_DIR = "/data/mqsas/watchdog/";
+static const std::string MQSAS_JE_DIR = "/data/mqsas/je/";
+static const std::string MQSAS_NE_DIR = "/data/mqsas/ne/";
+static const std::string MQSAS_ANR_DIR = "/data/mqsas/anr/";
+static const std::string MQS_BINDER_DIR = "/data/mqsas/binderproxy/";
+static const std::string MQS_FD_DIR = "data/miuilog/stability/resleak/fdtrack/";
+static const std::string MQS_HPROF_DIR = "/data/miuilog/stability/memleak/";
+static const std::string MQS_LOCAL_RESTART_LOG_DIR = "/data/miuilog/stability/reboot/";
+static const std::string MQS_HANG_DIR = "/data/miuilog/stability/hanglog/";
+//END
+
 /*
  * Structure that contains the information of an open dump file.
  */
@@ -201,7 +218,7 @@ class Dumpstate {
         BUGREPORT_WEAR = android::os::IDumpstate::BUGREPORT_MODE_WEAR,
         BUGREPORT_TELEPHONY = android::os::IDumpstate::BUGREPORT_MODE_TELEPHONY,
         BUGREPORT_WIFI = android::os::IDumpstate::BUGREPORT_MODE_WIFI,
-        BUGREPORT_DEFAULT = android::os::IDumpstate::BUGREPORT_MODE_DEFAULT
+        BUGREPORT_DEFAULT = android::os::IDumpstate::BUGREPORT_MODE_DEFAULT,
     };
 
     static android::os::dumpstate::CommandOptions DEFAULT_DUMPSYS;
@@ -253,6 +270,14 @@ class Dumpstate {
      * |path| location of the file to be dumped.
      */
     int DumpFile(const std::string& title, const std::string& path);
+
+     /* MIUI ADD
+     * Prints the contents of a file from vendor domain.
+     * |title| description of the command printed on `stdout` (or empty to skip
+     * description).
+     * |path| location of the file to be dumped.
+     */
+    int DumpVendorFile(const std::string& title, const std::string& path);
 
     /*
      * Adds a new entry to the existing zip file.
@@ -392,6 +417,10 @@ class Dumpstate {
         bool limited_only = false;
         // Whether progress updates should be published.
         bool do_progress_updates = false;
+        // MIUI ADD: START
+        bool lite_only = false;
+        std::string lite_zip;
+        // END
         // this is used to derive dumpstate HAL bug report mode
         // TODO(b/148168577) get rid of the AIDL values, replace them with the HAL values instead.
         // The HAL is actually an API surface that can be validated, while the AIDL is not (@hide).

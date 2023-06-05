@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-// #define LOG_NDEBUG 0
+//#define LOG_NDEBUG 0
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
 
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
@@ -31,6 +31,7 @@
 
 #include "../SurfaceFlingerProperties.h"
 #include "RefreshRateConfigs.h"
+#include "MiSurfaceFlingerStub.h"
 
 #undef LOG_TAG
 #define LOG_TAG "RefreshRateConfigs"
@@ -297,6 +298,21 @@ auto RefreshRateConfigs::getBestRefreshRate(const std::vector<LayerRequirement>&
     return result;
 }
 
+#ifdef MI_FEATURE_ENABLE
+const char* RefreshRateConfigs::getLayerVoteTypeName(const LayerVoteType& layerVote) const {
+    switch (layerVote) {
+        case LayerVoteType::NoVote: return "NoVote";
+        case LayerVoteType::Min: return "Min";
+        case LayerVoteType::Max: return "Max";
+        case LayerVoteType::ExplicitDefault: return "ExplicitDefault";
+        case LayerVoteType::ExplicitExactOrMultiple: return "ExplicitExactOrMultiple";
+        case LayerVoteType::ExplicitExact: return "ExplicitExact";
+        case LayerVoteType::Heuristic: return "Heuristic";
+        default: return "Unknown";
+    }
+}
+#endif
+
 auto RefreshRateConfigs::getBestRefreshRateLocked(const std::vector<LayerRequirement>& layers,
                                                   GlobalSignals signals) const
         -> std::pair<DisplayModePtr, GlobalSignals> {
@@ -311,6 +327,14 @@ auto RefreshRateConfigs::getBestRefreshRateLocked(const std::vector<LayerRequire
     int explicitExact = 0;
     float maxExplicitWeight = 0;
     int seamedFocusedLayers = 0;
+
+#ifdef MI_FEATURE_ENABLE
+    bool isFpsInvalid = false;
+    // If the primary range consists of a single refresh rate then we can only
+    // move out the of range if layers explicitly request a different refresh
+    // rate.
+    const Policy* policy = getCurrentPolicyLocked();
+#endif
 
     for (const auto& layer : layers) {
         switch (layer.vote) {
@@ -342,11 +366,74 @@ auto RefreshRateConfigs::getBestRefreshRateLocked(const std::vector<LayerRequire
         if (layer.seamlessness == Seamlessness::SeamedAndSeamless && layer.focused) {
             seamedFocusedLayers++;
         }
+#ifdef MI_FEATURE_ENABLE
+        if (layer.desiredRefreshRate.getIntValue() >= policy->primaryRange.max.getIntValue() && (!MiSurfaceFlingerStub::isCTS())) {
+            switch (layer.vote) {
+                case LayerVoteType::NoVote:
+                case LayerVoteType::Min:
+                case LayerVoteType::Max:
+                case LayerVoteType::Heuristic:
+                    //do nothing
+                    break;
+                case LayerVoteType::ExplicitDefault:
+                    explicitDefaultVoteLayers--;
+                    break;
+                case LayerVoteType::ExplicitExactOrMultiple:
+                    explicitExactOrMultipleVoteLayers--;
+                    break;
+                case LayerVoteType::ExplicitExact:
+                    explicitExact--;
+                    break;
+            }
+            isFpsInvalid = true;
+        }
+        ALOGV("getLayerVoteTypeName : %s, desired %.2f, isFpsInvalid %d", getLayerVoteTypeName(layer.vote), layer.desiredRefreshRate.getValue(), isFpsInvalid);
+#endif
     }
 
     const bool hasExplicitVoteLayers = explicitDefaultVoteLayers > 0 ||
             explicitExactOrMultipleVoteLayers > 0 || explicitExact > 0;
 
+#ifdef MI_FEATURE_ENABLE
+    const auto& defaultMode = mDisplayModes.get(policy->defaultMode)->get();
+    // If the default mode group is different from the group of current mode,
+    // this means a layer requesting a seamed mode switch just disappeared and
+    // we should switch back to the default group.
+    // However if a seamed layer is still present we anchor around the group
+    // of the current mode, in order to prevent unnecessary seamed mode switches
+    // (e.g. when pausing a video playback).
+    const auto anchorGroup =
+            seamedFocusedLayers > 0 ? mActiveModeIt->second->getGroup() : defaultMode->getGroup();
+
+    const bool primaryRangeIsSingleRate =
+            isApproxEqual(policy->primaryRange.min, policy->primaryRange.max);
+
+    // Consider the touch event if there are no Explicit* layers. Otherwise wait until after we've
+    // selected a refresh rate to see if we should apply touch boost.
+    if (signals.touch && (!hasExplicitVoteLayers || (!MiSurfaceFlingerStub::isCTS()))) {
+        if (signals.idle && !(primaryRangeIsSingleRate && hasExplicitVoteLayers) &&
+            (!((MI_CURRENT_SETTING_FPS_90HZ == policy->primaryRange.max.getIntValue() &&
+            MiSurfaceFlingerStub::isSceneExist(FORCE_SKIP_IDLE_FOR_90HZ))))) {
+            MiSurfaceFlingerStub::setLayerRealUpdateFlag(LAYER_REAL_UPDATE_SCENE_1, false);
+            MiSurfaceFlingerStub::setLayerRealUpdateFlag(LAYER_REAL_UPDATE_SCENE_2, false);
+            bool minFps = false;
+            DisplayModePtr result = MiSurfaceFlingerStub::setIdleFps(mActiveModeIt->second->getGroup(), &minFps);
+            if (minFps) {
+                return {getMinRefreshRateByPolicyLocked(), GlobalSignals{.touch = true, .idle = true}};
+            } else {
+                return {result, GlobalSignals{.touch = true, .idle = true}};
+            }
+        }
+
+        if (MiSurfaceFlingerStub::isSceneExist(VIDEO_FULL_SCREEN_SCENE)) {
+            ALOGD("TouchBoost to full screen - choose Fps: %s", to_string(getVideoFullScreenMaxRefreshRateByPolicyLocked(anchorGroup, 60)->getFps()).c_str());
+            return {getVideoFullScreenMaxRefreshRateByPolicyLocked(anchorGroup, 60), GlobalSignals{.touch = true}};
+        }
+
+        ALOGD("TouchBoost - choose Fps: %s", to_string(getMaxRefreshRateByPolicyLocked()->getFps()).c_str());
+        return {getMaxRefreshRateByPolicyLocked(anchorGroup), GlobalSignals{.touch = true}};
+    }
+#else
     const Policy* policy = getCurrentPolicyLocked();
     const auto& defaultMode = mDisplayModes.get(policy->defaultMode)->get();
     // If the default mode group is different from the group of current mode,
@@ -371,11 +458,53 @@ auto RefreshRateConfigs::getBestRefreshRateLocked(const std::vector<LayerRequire
     // rate.
     const bool primaryRangeIsSingleRate =
             isApproxEqual(policy->primaryRange.min, policy->primaryRange.max);
+#endif
 
+#ifdef MI_FEATURE_ENABLE
+    if (!signals.touch && signals.idle && !(primaryRangeIsSingleRate && hasExplicitVoteLayers) &&
+        (!((MI_CURRENT_SETTING_FPS_90HZ == policy->primaryRange.max.getIntValue() &&
+        MiSurfaceFlingerStub::isSceneExist(FORCE_SKIP_IDLE_FOR_90HZ))))) {
+        MiSurfaceFlingerStub::setLayerRealUpdateFlag(LAYER_REAL_UPDATE_SCENE_1, false);
+        MiSurfaceFlingerStub::setLayerRealUpdateFlag(LAYER_REAL_UPDATE_SCENE_2, false);
+        bool minFps = false;
+        const DisplayModePtr& result = MiSurfaceFlingerStub::setIdleFps(mActiveModeIt->second->getGroup(), &minFps);
+        if (!minFps) {
+            return {result, GlobalSignals{.idle = true}};
+        }
+        const DisplayModePtr& min = getMinRefreshRateByPolicyLocked();
+        ALOGV("Idle - choose %s", to_string(min->getFps()).c_str());
+        return {min, GlobalSignals{.idle = true}};
+    }
+#else
     if (!signals.touch && signals.idle && !(primaryRangeIsSingleRate && hasExplicitVoteLayers)) {
         const DisplayModePtr& min = getMinRefreshRateByPolicyLocked();
         ALOGV("Idle - choose %s", to_string(min->getFps()).c_str());
         return {min, GlobalSignals{.idle = true}};
+    }
+#endif
+
+    if (MiSurfaceFlingerStub::isVideoScene()) {
+        if (signals.idle) {
+            const DisplayModePtr& max = getMaxRefreshRateByPolicyLocked(anchorGroup);
+            ALOGV("idle in video scene - choose %s", to_string(max->getFps()).c_str());
+            return {max, GlobalSignals{.idle = true}};
+        }
+        else {
+            return {MiSurfaceFlingerStub::setVideoFps(
+                defaultMode->getGroup()), kNoSignals};
+        }
+    }
+
+    if (MiSurfaceFlingerStub::isTpIdleScene(policy->primaryRange.max.getIntValue())) {
+        if (signals.idle) {
+            const DisplayModePtr& max = getMaxRefreshRateByPolicyLocked(anchorGroup);
+            ALOGV("idle in tp idle scene - choose %s", to_string(max->getFps()).c_str());
+            return {max, GlobalSignals{.idle = true}};
+        }
+        else {
+            return {MiSurfaceFlingerStub::setTpIdleFps(
+                defaultMode->getGroup()), kNoSignals};
+        }
     }
 
     if (layers.empty() || noVoteLayers == layers.size()) {
@@ -385,7 +514,22 @@ auto RefreshRateConfigs::getBestRefreshRateLocked(const std::vector<LayerRequire
     }
 
     // Only if all layers want Min we should return Min
-    if (noVoteLayers + minVoteLayers == layers.size()) {
+    if ((noVoteLayers + minVoteLayers == layers.size())) {
+#ifdef MI_FEATURE_ENABLE
+        if (!MiSurfaceFlingerStub::isCTS()) {
+            if (MiSurfaceFlingerStub::isForceSkipIdleTimer() || (MI_CURRENT_SETTING_FPS_120HZ == policy->primaryRange.max.getIntValue() &&
+                 MiSurfaceFlingerStub::isSceneExist(FORCE_SKIP_IDLE_FOR_AUTOMODE_120HZ))) {
+                const DisplayModePtr& max = getMaxRefreshRateByPolicyLocked(anchorGroup);
+                ALOGV("ForceSkipIdleTimer - choose %s", to_string(max->getFps()).c_str());
+                return {max, kNoSignals};
+            }
+            bool minFps = false;
+            const DisplayModePtr& result = MiSurfaceFlingerStub::setIdleFps(mActiveModeIt->second->getGroup(), &minFps);
+            if (!minFps) {
+                return {result, kNoSignals};
+            }
+        }
+#endif
         const DisplayModePtr& min = getMinRefreshRateByPolicyLocked();
         ALOGV("all layers Min - choose %s", to_string(min->getFps()).c_str());
         return {min, kNoSignals};
@@ -460,21 +604,23 @@ auto RefreshRateConfigs::getBestRefreshRateLocked(const std::vector<LayerRequire
         }
     }
 
+#ifdef MI_FEATURE_ENABLE
+    // Now that we scored all the refresh rates we need to pick the one that got the highest score.
+    // In case of a tie we will pick the higher refresh rate if any of the layers wanted Max,
+    // or the lower otherwise.
+    const DisplayModePtr& bestRefreshRate = (isFpsInvalid || maxVoteLayers > 0)
+            ? getMaxScoreRefreshRate(scores.rbegin(), scores.rend())
+            : getMaxScoreRefreshRate(scores.begin(), scores.end());
+#else
     // Now that we scored all the refresh rates we need to pick the one that got the highest score.
     // In case of a tie we will pick the higher refresh rate if any of the layers wanted Max,
     // or the lower otherwise.
     const DisplayModePtr& bestRefreshRate = maxVoteLayers > 0
             ? getMaxScoreRefreshRate(scores.rbegin(), scores.rend())
             : getMaxScoreRefreshRate(scores.begin(), scores.end());
+#endif
 
-   bool noFpsScored = std::all_of(scores.begin(), scores.end(),
-                                  [](RefreshRateScore score) { return score.score == 0; });
-   if (noFpsScored) {
-      ALOGV("No fps scored - choose %s", to_string(mActiveModeIt->second->getFps()).c_str());
-      return {mActiveModeIt->second, kNoSignals};
-   }
-
-   if (primaryRangeIsSingleRate) {
+    if (primaryRangeIsSingleRate) {
         // If we never scored any layers, then choose the rate from the primary
         // range instead of picking a random score from the app range.
         if (std::all_of(scores.begin(), scores.end(),
@@ -511,6 +657,20 @@ auto RefreshRateConfigs::getBestRefreshRateLocked(const std::vector<LayerRequire
         return {touchRefreshRate, GlobalSignals{.touch = true}};
     }
 
+#ifdef MI_FEATURE_ENABLE
+    if(((MI_CURRENT_SETTING_FPS_90HZ == bestRefreshRate->getFps().getIntValue() &&
+        MiSurfaceFlingerStub::isSceneExist(FORCE_SKIP_IDLE_FOR_90HZ)) ||
+        policy->primaryRange.max.getIntValue() == bestRefreshRate->getFps().getIntValue() ||
+        (hasExplicitVoteLayers && bestRefreshRate->getFps() < touchRefreshRate->getFps() &&
+        MiSurfaceFlingerStub::isSceneExist(FORCE_SKIP_IDLE_FOR_AUTOMODE_120HZ)) ||
+        MiSurfaceFlingerStub::isForceSkipIdleTimer()) && (!MiSurfaceFlingerStub::isCTS())) {
+        ALOGV("skip for bestRefreshRate %s - choose %s", to_string(bestRefreshRate->getFps()).c_str(),
+                        to_string(getMaxRefreshRateByPolicyLocked()->getFps()).c_str());
+        return {getMaxRefreshRateByPolicyLocked(anchorGroup), kNoSignals};
+    }
+    ALOGV("bestRefreshRate - choose %s, touchBoostForExplicitExact is %d",
+                            to_string(bestRefreshRate->getFps()).c_str(), touchBoostForExplicitExact);
+#endif
     return {bestRefreshRate, kNoSignals};
 }
 
@@ -647,13 +807,26 @@ std::optional<Fps> RefreshRateConfigs::onKernelTimerChanged(
 }
 
 const DisplayModePtr& RefreshRateConfigs::getMinRefreshRateByPolicyLocked() const {
+#ifdef MI_FEATURE_ENABLE
+    int anchorGroup = mActiveModeIt->second->getGroup();
+    if (MiSurfaceFlingerStub::isLtpoPanel()) {
+        anchorGroup &= 0xFF;
+    }
+
+    for (const DisplayModeIterator modeIt : mPrimaryRefreshRates) {
+        const auto& mode = modeIt->second;
+        if (anchorGroup == mode->getGroup()) {
+            return mode;
+        }
+    }
+#else
     for (const DisplayModeIterator modeIt : mPrimaryRefreshRates) {
         const auto& mode = modeIt->second;
         if (mActiveModeIt->second->getGroup() == mode->getGroup()) {
             return mode;
         }
     }
-
+#endif
     ALOGE("Can't find min refresh rate by policy with the same mode group"
           " as the current mode %s",
           to_string(*mActiveModeIt->second).c_str());
@@ -667,10 +840,59 @@ DisplayModePtr RefreshRateConfigs::getMaxRefreshRateByPolicy() const {
     return getMaxRefreshRateByPolicyLocked();
 }
 
+#ifdef MI_FEATURE_ENABLE
+const DisplayModePtr& RefreshRateConfigs::getVideoFullScreenMaxRefreshRateByPolicyLocked(int anchorGroup, int fps) const {
+    if (MiSurfaceFlingerStub::isLtpoPanel()) {
+        anchorGroup = MiSurfaceFlingerStub::getGroupByBrightness(fps, anchorGroup);
+        ALOGV("find video max refresh rate by policy anchorGroup %d(%x)", anchorGroup, anchorGroup);
+        if (MiSurfaceFlingerStub::isDdicAutoModeGroup(anchorGroup)) {
+            for (auto& iter: mDisplayModes) {
+                if (iter.second->getGroup() == anchorGroup) {
+                           ALOGV("find video max refresh rate:%d, mode:%d", iter.second->getFps().getIntValue(), anchorGroup);
+                           return iter.second;
+                }
+            }
+        }
+    }
+    for (auto it = mPrimaryRefreshRates.rbegin(); it != mPrimaryRefreshRates.rend(); ++it) {
+        const auto& mode = (*it)->second;
+        if (anchorGroup == mode->getGroup() && fps == mode->getFps().getIntValue()) {
+            ALOGV("find video max refresh rate by policy with the same mode group"
+                  " as the current mode %s", to_string(*mode).c_str());
+            return mode;
+        }
+    }
+
+    ALOGE("Can't find video max refresh rate by policy with the same mode group"
+          " as the current mode %s",
+          to_string(*mActiveModeIt->second).c_str());
+
+    // Default to the highest refresh rate.
+    return mPrimaryRefreshRates.back()->second;
+}
+#endif
+
 const DisplayModePtr& RefreshRateConfigs::getMaxRefreshRateByPolicyLocked(int anchorGroup) const {
+#ifdef MI_FEATURE_ENABLE
+    if (MiSurfaceFlingerStub::isLtpoPanel()) {
+        anchorGroup = MiSurfaceFlingerStub::getGroupByBrightness((*mPrimaryRefreshRates.rbegin())->second->getFps().getIntValue(), anchorGroup);
+        ALOGV("find max refresh rate by policy anchorGroup %d(%x)", anchorGroup, anchorGroup);
+        if (MiSurfaceFlingerStub::isDdicAutoModeGroup(anchorGroup)) {
+            for (auto& iter: mDisplayModes) {
+                if (iter.second->getGroup() == anchorGroup) {
+                           ALOGV("find max refresh rate:%d, mode:%d", iter.second->getFps().getIntValue(), anchorGroup);
+                           return iter.second;
+                }
+            }
+        }
+    }
+#endif
+
     for (auto it = mPrimaryRefreshRates.rbegin(); it != mPrimaryRefreshRates.rend(); ++it) {
         const auto& mode = (*it)->second;
         if (anchorGroup == mode->getGroup()) {
+            ALOGV("find max refresh rate by policy with the same mode group"
+                  " as the current mode %s", to_string(*mode).c_str());
             return mode;
         }
     }
@@ -808,6 +1030,12 @@ RefreshRateConfigs::Policy RefreshRateConfigs::getCurrentPolicy() const {
     return *getCurrentPolicyLocked();
 }
 
+#if MI_FEATURE_ENABLE
+RefreshRateConfigs::Policy RefreshRateConfigs::getCurrentPolicyNoLocked() const {
+    return *getCurrentPolicyLocked();
+}
+#endif
+
 RefreshRateConfigs::Policy RefreshRateConfigs::getDisplayManagerPolicy() const {
     std::lock_guard lock(mLock);
     return mDisplayManagerPolicy;
@@ -815,6 +1043,13 @@ RefreshRateConfigs::Policy RefreshRateConfigs::getDisplayManagerPolicy() const {
 
 bool RefreshRateConfigs::isModeAllowed(DisplayModeId modeId) const {
     std::lock_guard lock(mLock);
+    ALOGV("isModeAllowed begin: %d", modeId.value());
+    if (MiSurfaceFlingerStub::isLtpoPanel()) {
+        if (MiSurfaceFlingerStub::isDdicIdleModeGroup(mDisplayModes.get(modeId)->get()->getGroup()) ||
+             MiSurfaceFlingerStub::isDdicAutoModeGroup(mDisplayModes.get(modeId)->get()->getGroup())) {
+                return true;
+        }
+    }
     return std::any_of(mAppRequestRefreshRates.begin(), mAppRequestRefreshRates.end(),
                        [modeId](DisplayModeIterator modeIt) {
                            return modeIt->second->getId() == modeId;

@@ -29,6 +29,8 @@
 #include <unordered_map>
 
 #include <private/android_filesystem_config.h>
+// MIUI ADD:
+#include "stubs/MiInputManagerStub.h"
 
 namespace android {
 
@@ -60,10 +62,16 @@ static int32_t exceptionCodeFromStatusT(status_t status) {
 InputManager::InputManager(
         const sp<InputReaderPolicyInterface>& readerPolicy,
         const sp<InputDispatcherPolicyInterface>& dispatcherPolicy) {
+    // MIUI ADD:
+    MiInputManagerStub::init(this);
     mDispatcher = createInputDispatcher(dispatcherPolicy);
     mClassifier = std::make_unique<InputClassifier>(*mDispatcher);
     mBlocker = std::make_unique<UnwantedInteractionBlocker>(*mClassifier);
-    mReader = createInputReader(readerPolicy, *mBlocker);
+    // MIUI MOD: START
+    // mReader = createInputReader(readerPolicy, *mBlocker);
+    mMiInputMapper = MiInputManagerStub::createMiInputMapper(*mBlocker);
+    mReader = createInputReader(readerPolicy, *mMiInputMapper);
+    // END
 }
 
 InputManager::~InputManager() {
@@ -84,6 +92,14 @@ status_t InputManager::start() {
         mDispatcher->stop();
         return result;
     }
+    // MIUI ADD: START
+    result = MiInputManagerStub::start();
+    if(result) {
+        ALOGE("Could not start MiInputManagerStub::start due to error %d.", result);
+        MiInputManagerStub::stop();
+        return result;
+    }
+    // END
 
     return OK;
 }
@@ -102,6 +118,13 @@ status_t InputManager::stop() {
         ALOGW("Could not stop InputDispatcher thread due to error %d.", result);
         status = result;
     }
+    // MIUI ADD: START
+    result = MiInputManagerStub::stop();
+    if (result) {
+        ALOGW("Could not stop MiInputManagerStub::stop due to error %d.", result);
+        status = result;
+    }
+    // END
 
     return status;
 }

@@ -66,6 +66,9 @@ void FrameTracker::setActualPresentFence(const std::shared_ptr<FenceTime>& ready
     Mutex::Autolock lock(mMutex);
     mFrameRecords[mOffset].actualPresentFence = readyFence;
     mNumFences++;
+#ifdef MI_FEATURE_ENABLE
+    mFpsNumFences++;
+#endif
 }
 
 void FrameTracker::setDisplayRefreshPeriod(nsecs_t displayPeriod) {

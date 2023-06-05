@@ -37,6 +37,7 @@ struct ICompositor {
     virtual bool commit(nsecs_t frameTime, int64_t vsyncId, nsecs_t expectedVsyncTime) = 0;
     virtual void composite(nsecs_t frameTime, int64_t vsyncId) = 0;
     virtual void sample() = 0;
+    virtual void updateTime(nsecs_t intendedVsyncTimeStamp) = 0;
 
 protected:
     ~ICompositor() = default;
@@ -96,6 +97,9 @@ protected:
 
         virtual void dispatchFrame(int64_t vsyncId, nsecs_t expectedVsyncTime);
         virtual void dispatchFrameImmed();
+
+        // MIUI ADD:
+        nsecs_t mVsyncTimeStamp = 0;
     };
 
     friend class Handler;

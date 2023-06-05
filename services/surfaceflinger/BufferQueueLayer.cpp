@@ -33,6 +33,7 @@
 #include "FrameTracer/FrameTracer.h"
 #include "Scheduler/LayerHistory.h"
 #include "TimeStats/TimeStats.h"
+#include "MiSurfaceFlingerStub.h"
 
 namespace android {
 using PresentState = frametimeline::SurfaceFrame::PresentState;
@@ -394,7 +395,9 @@ void BufferQueueLayer::onFrameAvailable(const BufferItem& item) {
     mFlinger->mInterceptor->saveBufferUpdate(layerId, item.mGraphicBuffer->getWidth(),
                                              item.mGraphicBuffer->getHeight(), item.mFrameNumber);
 
-    mFlinger->onLayerUpdate();
+#ifdef MI_FEATURE_ENABLE
+    MiSurfaceFlingerStub::launcherUpdate(this);
+#endif
     mConsumer->onBufferAvailable(item);
 }
 

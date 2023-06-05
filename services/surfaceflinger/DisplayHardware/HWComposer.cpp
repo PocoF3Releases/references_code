@@ -220,6 +220,10 @@ void HWComposer::allocatePhysicalDisplay(hal::HWDisplayId hwcDisplayId,
 
     if (!mPrimaryHwcDisplayId) {
         mPrimaryHwcDisplayId = hwcDisplayId;
+#ifdef MI_FEATURE_ENABLE
+    } else if (mPrimaryHwcDisplayId != hwcDisplayId && !mSecondaryHwcDisplayId) {
+        mSecondaryHwcDisplayId = hwcDisplayId;
+#endif
     }
 
     auto& displayData = mDisplayData[displayId];
@@ -640,6 +644,10 @@ void HWComposer::disconnectDisplay(HalDisplayId displayId) {
     // because getPrimaryDisplayId() will crash.
     if (mPrimaryHwcDisplayId == hwcDisplayId) {
         mPrimaryHwcDisplayId.reset();
+#ifdef MI_FEATURE_ENABLE
+    } else if (hwcDisplayId == mSecondaryHwcDisplayId) {
+        mSecondaryHwcDisplayId.reset();
+#endif
     }
 }
 

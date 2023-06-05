@@ -81,9 +81,11 @@ status_t RenderEngineThreaded::setSchedFifo(bool enabled) {
 void RenderEngineThreaded::threadMain(CreateInstanceFactory factory) NO_THREAD_SAFETY_ANALYSIS {
     ATRACE_CALL();
 
+#ifndef MI_RE_SETAFFINITY
     if (!SetTaskProfiles(0, {"SFRenderEnginePolicy"})) {
         ALOGW("Failed to set render-engine task profile!");
     }
+#endif
 
     if (setSchedFifo(true) != NO_ERROR) {
         ALOGW("Couldn't set SCHED_FIFO");

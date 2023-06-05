@@ -44,6 +44,26 @@ layer_state_t::layer_state_t()
         h(0),
         alpha(0),
         flags(0),
+#if MI_SCREEN_PROJECTION
+        // MIUI ADD:
+        screenFlags(0),
+#endif
+#ifdef MI_SF_FEATURE
+        shadowType(0),
+        shadowLength(0.f),
+        shadowColor{0.f, 0.f, 0.f, 0.f},
+        shadowOffset{0.f, 0.f},
+        shadowOutset(0.f),
+        shadowLayers(0),
+#endif
+#ifdef MI_SF_FEATURE
+        // MIUI ADD: HDR Dimmer
+        hdrDimmerEnabled(false),
+        hdrBrightRegion(),
+        hdrDimRegion(),
+        hdrDimmerRatio(1.0f),
+        // END
+#endif
         mask(0),
         reserved(0),
         cornerRadius(0.0f),
@@ -68,6 +88,9 @@ layer_state_t::layer_state_t()
         isTrustedOverlay(false),
         bufferCrop(Rect::INVALID_RECT),
         destinationFrame(Rect::INVALID_RECT),
+#if MI_DEFER_GESTURE_ANIM
+        deferAnimation(0),
+#endif
         dropInputMode(gui::DropInputMode::NONE) {
     matrix.dsdx = matrix.dtdy = 1.0f;
     matrix.dsdy = matrix.dtdx = 0.0f;
@@ -87,6 +110,61 @@ status_t layer_state_t::write(Parcel& output) const
     SAFE_PARCEL(output.writeUint32, layerStack.id);
     SAFE_PARCEL(output.writeFloat, alpha);
     SAFE_PARCEL(output.writeUint32, flags);
+#if MI_SCREEN_PROJECTION
+    // MIUI ADD:
+    SAFE_PARCEL(output.writeUint32, screenFlags);
+#endif
+#ifdef MI_SF_FEATURE
+    SAFE_PARCEL(output.writeInt32, shadowType);
+    SAFE_PARCEL(output.writeFloat, shadowLength);
+    SAFE_PARCEL(output.writeFloat, shadowColor.r);
+    SAFE_PARCEL(output.writeFloat, shadowColor.g);
+    SAFE_PARCEL(output.writeFloat, shadowColor.b);
+    SAFE_PARCEL(output.writeFloat, shadowColor.a);
+    SAFE_PARCEL(output.writeFloat, shadowOffset[0]);
+    SAFE_PARCEL(output.writeFloat, shadowOffset[1]);
+    SAFE_PARCEL(output.writeFloat, shadowOutset)
+    SAFE_PARCEL(output.writeInt32, shadowLayers);
+#endif
+#ifdef MI_SF_FEATURE
+    // MIUI ADD: HDR Dimmer
+    SAFE_PARCEL(output.writeBool, hdrDimmerEnabled);
+    SAFE_PARCEL(output.writeUint32, hdrBrightRegion.size());
+    for (auto rect : hdrBrightRegion) {
+        SAFE_PARCEL(output.writeFloat, rect[0]);
+        SAFE_PARCEL(output.writeFloat, rect[1]);
+        SAFE_PARCEL(output.writeFloat, rect[2]);
+        SAFE_PARCEL(output.writeFloat, rect[3]);
+        SAFE_PARCEL(output.writeFloat, rect[4]);
+        SAFE_PARCEL(output.writeFloat, rect[5]);
+        SAFE_PARCEL(output.writeFloat, rect[6]);
+        SAFE_PARCEL(output.writeFloat, rect[7]);
+        SAFE_PARCEL(output.writeFloat, rect[8]);
+        SAFE_PARCEL(output.writeFloat, rect[9]);
+        SAFE_PARCEL(output.writeFloat, rect[10]);
+        SAFE_PARCEL(output.writeFloat, rect[11]);
+        SAFE_PARCEL(output.writeFloat, rect[12]);
+        SAFE_PARCEL(output.writeFloat, rect[13]);
+        SAFE_PARCEL(output.writeFloat, rect[14]);
+        SAFE_PARCEL(output.writeFloat, rect[15]);
+        SAFE_PARCEL(output.writeFloat, rect[16]);
+        SAFE_PARCEL(output.writeFloat, rect[17]);
+        SAFE_PARCEL(output.writeFloat, rect[18]);
+    }
+    SAFE_PARCEL(output.writeUint32, hdrDimRegion.size());
+    for (auto rect : hdrDimRegion) {
+        SAFE_PARCEL(output.writeFloat, rect[0]);
+        SAFE_PARCEL(output.writeFloat, rect[1]);
+        SAFE_PARCEL(output.writeFloat, rect[2]);
+        SAFE_PARCEL(output.writeFloat, rect[3]);
+        SAFE_PARCEL(output.writeFloat, rect[4]);
+        SAFE_PARCEL(output.writeFloat, rect[5]);
+        SAFE_PARCEL(output.writeFloat, rect[6]);
+        SAFE_PARCEL(output.writeFloat, rect[7]);
+    }
+    SAFE_PARCEL(output.writeFloat, hdrDimmerRatio);
+    // END
+#endif
     SAFE_PARCEL(output.writeUint32, mask);
     SAFE_PARCEL(matrix.write, output);
     SAFE_PARCEL(output.write, crop);
@@ -153,6 +231,9 @@ status_t layer_state_t::write(Parcel& output) const
     SAFE_PARCEL(output.write, bufferCrop);
     SAFE_PARCEL(output.write, destinationFrame);
     SAFE_PARCEL(output.writeBool, isTrustedOverlay);
+#if MI_DEFER_GESTURE_ANIM
+    SAFE_PARCEL(output.writeInt32, deferAnimation);
+#endif
 
     SAFE_PARCEL(output.writeUint32, static_cast<uint32_t>(dropInputMode));
 
@@ -178,7 +259,103 @@ status_t layer_state_t::read(const Parcel& input)
     SAFE_PARCEL(input.readFloat, &alpha);
 
     SAFE_PARCEL(input.readUint32, &flags);
-
+#if MI_SCREEN_PROJECTION
+    //MIUI ADD:
+    SAFE_PARCEL(input.readUint32, &screenFlags);
+#endif
+#ifdef MI_SF_FEATURE
+    SAFE_PARCEL(input.readInt32, &shadowType);
+    SAFE_PARCEL(input.readFloat, &shadowLength);
+    float tmp = 0.f;
+    SAFE_PARCEL(input.readFloat, &tmp);
+    shadowColor.r = tmp;
+    SAFE_PARCEL(input.readFloat, &tmp);
+    shadowColor.g = tmp;
+    SAFE_PARCEL(input.readFloat, &tmp);
+    shadowColor.b = tmp;
+    SAFE_PARCEL(input.readFloat, &tmp);
+    shadowColor.a = tmp;
+    SAFE_PARCEL(input.readFloat, &shadowOffset[0]);
+    SAFE_PARCEL(input.readFloat, &shadowOffset[1]);
+    SAFE_PARCEL(input.readFloat, &shadowOutset)
+    SAFE_PARCEL(input.readInt32, &shadowLayers);
+#endif
+#ifdef MI_SF_FEATURE
+    // MIUI ADD: HDR Dimmer
+    SAFE_PARCEL(input.readBool, &hdrDimmerEnabled);
+    hdrBrightRegion.clear();
+    uint32_t numRects = 0;
+    SAFE_PARCEL(input.readUint32, &numRects);
+    for (uint32_t i = 0; i < numRects; i++) {
+        std::vector<float> rect;
+        float tmpRect[19];
+        SAFE_PARCEL(input.readFloat, &tmpRect[0]);
+        SAFE_PARCEL(input.readFloat, &tmpRect[1]);
+        SAFE_PARCEL(input.readFloat, &tmpRect[2]);
+        SAFE_PARCEL(input.readFloat, &tmpRect[3]);
+        SAFE_PARCEL(input.readFloat, &tmpRect[4]);
+        SAFE_PARCEL(input.readFloat, &tmpRect[5]);
+        SAFE_PARCEL(input.readFloat, &tmpRect[6]);
+        SAFE_PARCEL(input.readFloat, &tmpRect[7]);
+        SAFE_PARCEL(input.readFloat, &tmpRect[8]);
+        SAFE_PARCEL(input.readFloat, &tmpRect[9]);
+        SAFE_PARCEL(input.readFloat, &tmpRect[10]);
+        SAFE_PARCEL(input.readFloat, &tmpRect[11]);
+        SAFE_PARCEL(input.readFloat, &tmpRect[12]);
+        SAFE_PARCEL(input.readFloat, &tmpRect[13]);
+        SAFE_PARCEL(input.readFloat, &tmpRect[14]);
+        SAFE_PARCEL(input.readFloat, &tmpRect[15]);
+        SAFE_PARCEL(input.readFloat, &tmpRect[16]);
+        SAFE_PARCEL(input.readFloat, &tmpRect[17]);
+        SAFE_PARCEL(input.readFloat, &tmpRect[18]);
+        rect.push_back(tmpRect[0]);
+        rect.push_back(tmpRect[1]);
+        rect.push_back(tmpRect[2]);
+        rect.push_back(tmpRect[3]);
+        rect.push_back(tmpRect[4]);
+        rect.push_back(tmpRect[5]);
+        rect.push_back(tmpRect[6]);
+        rect.push_back(tmpRect[7]);
+        rect.push_back(tmpRect[8]);
+        rect.push_back(tmpRect[9]);
+        rect.push_back(tmpRect[10]);
+        rect.push_back(tmpRect[11]);
+        rect.push_back(tmpRect[12]);
+        rect.push_back(tmpRect[13]);
+        rect.push_back(tmpRect[14]);
+        rect.push_back(tmpRect[15]);
+        rect.push_back(tmpRect[16]);
+        rect.push_back(tmpRect[17]);
+        rect.push_back(tmpRect[18]);
+        hdrBrightRegion.push_back(rect);
+    }
+    numRects = 0;
+    SAFE_PARCEL(input.readUint32, &numRects);
+    hdrDimRegion.clear();
+    for (uint32_t i = 0; i < numRects; i++) {
+        std::vector<float> rect;
+        float tmpRect[8];
+        SAFE_PARCEL(input.readFloat, &tmpRect[0]);
+        SAFE_PARCEL(input.readFloat, &tmpRect[1]);
+        SAFE_PARCEL(input.readFloat, &tmpRect[2]);
+        SAFE_PARCEL(input.readFloat, &tmpRect[3]);
+        SAFE_PARCEL(input.readFloat, &tmpRect[4]);
+        SAFE_PARCEL(input.readFloat, &tmpRect[5]);
+        SAFE_PARCEL(input.readFloat, &tmpRect[6]);
+        SAFE_PARCEL(input.readFloat, &tmpRect[7]);
+        rect.push_back(tmpRect[0]);
+        rect.push_back(tmpRect[1]);
+        rect.push_back(tmpRect[2]);
+        rect.push_back(tmpRect[3]);
+        rect.push_back(tmpRect[4]);
+        rect.push_back(tmpRect[5]);
+        rect.push_back(tmpRect[6]);
+        rect.push_back(tmpRect[7]);
+        hdrDimRegion.push_back(rect);
+    }
+    SAFE_PARCEL(input.readFloat, &hdrDimmerRatio);
+    // END
+#endif
     SAFE_PARCEL(input.readUint32, &mask);
 
     SAFE_PARCEL(matrix.read, input);
@@ -267,6 +444,9 @@ status_t layer_state_t::read(const Parcel& input)
     SAFE_PARCEL(input.read, bufferCrop);
     SAFE_PARCEL(input.read, destinationFrame);
     SAFE_PARCEL(input.readBool, &isTrustedOverlay);
+#if MI_DEFER_GESTURE_ANIM
+    SAFE_PARCEL(input.readInt32, &deferAnimation);
+#endif
 
     uint32_t mode;
     SAFE_PARCEL(input.readUint32, &mode);
@@ -302,6 +482,14 @@ status_t DisplayState::write(Parcel& output) const {
     SAFE_PARCEL(output.writeUint32, toRotationInt(orientation));
     SAFE_PARCEL(output.write, layerStackSpaceRect);
     SAFE_PARCEL(output.write, orientedDisplaySpaceRect);
+#if MI_VIRTUAL_DISPLAY_FRAMERATE
+    // MIUI ADD:
+    SAFE_PARCEL(output.writeUint32, limitedFrameRate);
+    // END
+#endif
+#ifdef MI_SF_FEATURE
+    SAFE_PARCEL(output.writeBool, isDisplaySecurity);
+#endif
     SAFE_PARCEL(output.writeUint32, width);
     SAFE_PARCEL(output.writeUint32, height);
     return NO_ERROR;
@@ -322,6 +510,14 @@ status_t DisplayState::read(const Parcel& input) {
 
     SAFE_PARCEL(input.read, layerStackSpaceRect);
     SAFE_PARCEL(input.read, orientedDisplaySpaceRect);
+#if MI_VIRTUAL_DISPLAY_FRAMERATE
+    // MIUI ADD:
+    SAFE_PARCEL(input.readUint32, &limitedFrameRate);
+    // END
+#endif
+#if MI_SF_FEATURE
+    SAFE_PARCEL(input.readBool, &isDisplaySecurity);
+#endif
     SAFE_PARCEL(input.readUint32, &width);
     SAFE_PARCEL(input.readUint32, &height);
     return NO_ERROR;
@@ -346,13 +542,26 @@ void DisplayState::merge(const DisplayState& other) {
         layerStackSpaceRect = other.layerStackSpaceRect;
         orientedDisplaySpaceRect = other.orientedDisplaySpaceRect;
     }
+#if MI_VIRTUAL_DISPLAY_FRAMERATE
+    // MIUI ADD:
+    if (other.what & eLimitedFrameRateChanged) {
+        what |= eLimitedFrameRateChanged;
+        limitedFrameRate = other.limitedFrameRate;
+    }
+    // END
+#endif
+#ifdef MI_SF_FEATURE
+    if (other.what & eIsDisplaySecurityChanged) {
+        what |= eIsDisplaySecurityChanged;
+        isDisplaySecurity = other.isDisplaySecurity;
+    }
+#endif
     if (other.what & eDisplaySizeChanged) {
         what |= eDisplaySizeChanged;
         width = other.width;
         height = other.height;
     }
 }
-
 void layer_state_t::sanitize(int32_t permissions) {
     // TODO: b/109894387
     //
@@ -603,11 +812,28 @@ void layer_state_t::merge(const layer_state_t& other) {
         what |= eDimmingEnabledChanged;
         dimmingEnabled = other.dimmingEnabled;
     }
+#ifdef MI_SF_FEATURE
+    // MIUI ADD: HDR Dimmer
+    if ((other.what & eHdrDimmerChanged)) {
+        what |= eHdrDimmerChanged;
+        hdrDimmerEnabled = other.hdrDimmerEnabled;
+        hdrBrightRegion = other.hdrBrightRegion;
+        hdrDimRegion = other.hdrDimRegion;
+    }
+    if ((other.what & eHdrDimmerRatioChanged)) {
+        what |= eHdrDimmerRatioChanged;
+        hdrDimmerRatio = other.hdrDimmerRatio;
+    }
+    // END
+#endif
     if ((other.what & what) != other.what) {
         ALOGE("Unmerged SurfaceComposer Transaction properties. LayerState::merge needs updating? "
               "other.what=0x%" PRIX64 " what=0x%" PRIX64 " unmerged flags=0x%" PRIX64,
               other.what, what, (other.what & what) ^ other.what);
     }
+#if MI_DEFER_GESTURE_ANIM
+    deferAnimation = other.deferAnimation;
+#endif
 }
 
 bool layer_state_t::hasBufferChanges() const {

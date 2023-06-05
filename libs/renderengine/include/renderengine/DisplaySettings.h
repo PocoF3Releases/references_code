@@ -79,6 +79,19 @@ struct DisplaySettings {
     // Configures the rendering intent of the output display. This is used for tonemapping.
     aidl::android::hardware::graphics::composer3::RenderIntent renderIntent =
             aidl::android::hardware::graphics::composer3::RenderIntent::TONE_MAP_COLORIMETRIC;
+
+#ifdef MI_SF_FEATURE
+    bool useBlurCover = false;
+    // MIUI ADD: HDR Dimmer
+    bool hdrDimmerEnabled = false;
+    float hdrDimmerFactor = 1.f;
+    int colorScheme = 0;
+    // END
+#endif
+#ifdef CURTAIN_ANIM
+    bool enableCurtainAnim = false;
+    float curtainAnimRate = -1.f;
+#endif
 };
 
 static inline bool operator==(const DisplaySettings& lhs, const DisplaySettings& rhs) {

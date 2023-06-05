@@ -98,6 +98,9 @@ private:
     composer::DisplayExtnIntf *mDisplayExtnIntf = nullptr;
     void beginDraw();
     void endDraw();
+#if MI_FEATURE_ENABLE
+    bool mHasColorFade{false};
+#endif
     ColorProfile mColorProfile = {ui::ColorMode::NATIVE, ui::Dataspace::UNKNOWN,
                                   ui::RenderIntent::COLORIMETRIC, ui::Dataspace::UNKNOWN};
 };

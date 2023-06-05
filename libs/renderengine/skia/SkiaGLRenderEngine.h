@@ -41,6 +41,18 @@
 #include "filters/LinearEffect.h"
 #include "filters/StretchShaderFactory.h"
 
+#ifdef MI_FEATURE_ENABLE
+// MIUI ADD: Added just for Global HBM Dither (J2S-T)
+#include "filters/MiHBMEffect.h"
+// MIUI ADD: END
+#endif
+
+#ifdef CURTAIN_ANIM
+#include "curtainanim/CurtainAnim.h"
+#endif
+#ifdef MI_SF_FEATURE
+#include "hdrdimmer/HdrDimmer.h"
+#endif
 namespace android {
 namespace renderengine {
 namespace skia {
@@ -125,7 +137,12 @@ private:
     EGLContext mProtectedEGLContext;
     EGLSurface mProtectedPlaceholderSurface;
     BlurFilter* mBlurFilter = nullptr;
-
+#ifdef CURTAIN_ANIM
+    CurtainAnim* mCurtainAnim = nullptr;
+#endif
+#ifdef MI_SF_FEATURE
+    HdrDimmer* mHdrDimmer = nullptr;
+#endif
     const PixelFormat mDefaultPixelFormat;
     const bool mUseColorManagement;
 
@@ -186,6 +203,36 @@ private:
     };
 
     SkSLCacheMonitor mSkSLCacheMonitor;
+
+#ifdef MI_FEATURE_ENABLE
+    // MIUI ADD: Added just for Global HBM Dither (J2S-T)
+    bool mDebugMiHBMEffectEnabled = true;
+    bool mGlobalHBMDitherEnabled = false;
+
+    enum {
+        COLORFADE_LAYER_MASK = 0x00000010,
+        NO_HBM_EFFECT_MASK = 0x00000100,
+    };
+
+    bool needApplyHBMEffect= false;
+    float hbmLayerAlpha = 1.0f;
+    uint32_t layersInfo = 0;
+
+    MiHBMEffect* mMiHBMEffect = nullptr;
+
+    void getMiHBMEffectParams(const std::vector<LayerSettings>& layers,
+                              bool& needApplyHBMEffect,
+                              uint32_t& layersInfo,
+                              float& hbmLayerAlpha);
+    bool skiaHBMLayerDraw(const LayerSettings& layer, MiHBMEffect* miHBMEffect);
+    bool applyMiHBMRuntimeEffect(SkPaint& paint,
+                                 sk_sp<SkShader> input,
+                                 const LayerSettings& layer,
+                                 bool needApplyHBMEffect,
+                                 float hbmLayerAlpha,
+                                 MiHBMEffect* miHBMEffect);
+    // MIUI ADD: END
+#endif
 };
 
 } // namespace skia

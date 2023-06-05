@@ -19,6 +19,8 @@
 // clang-format on
 
 #include "KeyboardInputMapper.h"
+// MIUI ADD:
+#include "../stubs/MiKeyboardInputMapperStub.h"
 
 namespace android {
 
@@ -91,7 +93,10 @@ static int32_t rotateKeyCode(int32_t keyCode, int32_t orientation) {
 
 KeyboardInputMapper::KeyboardInputMapper(InputDeviceContext& deviceContext, uint32_t source,
                                          int32_t keyboardType)
-      : InputMapper(deviceContext), mSource(source), mKeyboardType(keyboardType) {}
+      : InputMapper(deviceContext), mSource(source), mKeyboardType(keyboardType) {
+    // MIUI ADD:
+    MiKeyboardInputMapperStub::init(this);
+}
 
 KeyboardInputMapper::~KeyboardInputMapper() {}
 
@@ -207,6 +212,11 @@ void KeyboardInputMapper::reset(nsecs_t when) {
 }
 
 void KeyboardInputMapper::process(const RawEvent* rawEvent) {
+    // MIUI ADD: START
+    if(MiKeyboardInputMapperStub::processIntercept(rawEvent)) {
+        return;
+    }
+    // END
     switch (rawEvent->type) {
         case EV_KEY: {
             int32_t scanCode = rawEvent->code;

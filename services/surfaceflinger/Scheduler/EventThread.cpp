@@ -164,7 +164,12 @@ EventThreadConnection::EventThreadConnection(
         mOwnerUid(callingUid),
         mEventRegistration(eventRegistration),
         mEventThread(eventThread),
-        mChannel(gui::BitTube(8 * 1024 /* default size is 4KB, double it */)) {}
+        // MIUI MOD: START
+        //mChannel(gui::BitTube(8 * 1024 /* default size is 4KB, double it */)) {}
+        mChannel(gui::BitTube(8 * 1024 /* default size is 4KB, double it */)) {
+    setMinSchedulerPolicy(SCHED_FIFO, 2);
+}
+        // END
 
 EventThreadConnection::~EventThreadConnection() {
     // do nothing here -- clean-up will happen automatically
@@ -268,6 +273,9 @@ EventThread::EventThread(std::unique_ptr<VSyncSource> vsyncSource,
     }
 
     set_sched_policy(tid, SP_FOREGROUND);
+
+    // MIUI ADD:
+    mEventThreadInspector = new MiuiEventThreadInspectorStub(mThreadName);
 }
 
 EventThread::~EventThread() {
@@ -397,6 +405,9 @@ void EventThread::onVSyncEvent(nsecs_t timestamp, VSyncSource::VSyncData vsyncDa
     mPendingEvents.push_back(makeVSync(mVSyncState->displayId, timestamp, ++mVSyncState->count,
                                        vsyncData.expectedPresentationTime,
                                        vsyncData.deadlineTimestamp));
+
+    // MIUI ADD:
+    mConditionNotifiedByVsync = true;
     mCondition.notify_all();
 }
 
@@ -513,6 +524,10 @@ void EventThread::threadMain(std::unique_lock<std::mutex>& lock) {
             // display is off, keep feeding clients at 60 Hz.
             const std::chrono::nanoseconds timeout =
                     mState == State::SyntheticVSync ? 16ms : 1000ms;
+            // MIUI ADD:
+            const nsecs_t waitVsyncStartTime = systemTime(SYSTEM_TIME_MONOTONIC);
+            mConditionNotifiedByVsync = false;
+            // END
             if (mCondition.wait_for(lock, timeout) == std::cv_status::timeout) {
                 if (mState == State::VSync) {
                     ALOGW("Faking VSYNC due to driver stall for thread %s", mThreadName);
@@ -535,6 +550,12 @@ void EventThread::threadMain(std::unique_lock<std::mutex>& lock) {
                                                    ++mVSyncState->count, expectedVSyncTime,
                                                    deadlineTimestamp));
             }
+            // MIUI ADD: START
+            if (mConditionNotifiedByVsync && mEventThreadInspector) {
+                mEventThreadInspector->checkVsyncWaitTime(waitVsyncStartTime, toCString(mState),
+                        mVSyncState->displayId);
+            }
+            // END
         }
     }
 }

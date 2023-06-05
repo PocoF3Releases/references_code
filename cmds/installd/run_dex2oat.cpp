@@ -77,6 +77,8 @@ void RunDex2Oat::Initialize(const UniqueFile& output_oat,
                             bool debuggable,
                             bool post_bootcomplete,
                             bool for_restore,
+                            // MIUI ADD:
+                            bool multi_arch,
                             int target_sdk_version,
                             bool enable_hidden_api_checks,
                             bool generate_compact_dex,
@@ -93,6 +95,13 @@ void RunDex2Oat::Initialize(const UniqueFile& output_oat,
                                generate_compact_dex, compilation_reason);
 
     PrepareCompilerRuntimeAndPerfConfigFlags(post_bootcomplete, for_restore);
+    // MIUI ADD: START
+    // 9.5 minutes in total for both archs, slightly smaller than timeout of the
+    // PackageManager watchdog
+    if (multi_arch) {
+        AddArg("--watchdog-timeout=285000");
+    }
+    // END
 
     const std::string dex2oat_flags = GetProperty("dalvik.vm.dex2oat-flags", "");
     std::vector<std::string> dex2oat_flags_args = SplitBySpaces(dex2oat_flags);
@@ -235,6 +244,9 @@ void RunDex2Oat::PrepareCompilerConfigFlags(const UniqueFile& input_vdex,
 
         if (compilation_reason != nullptr) {
             AddArg(std::string("--compilation-reason=") + compilation_reason);
+            // MIUI ADD:
+            AddCpuSetArg(compilation_reason);
+            // END
         }
     }
 
@@ -294,6 +306,76 @@ void RunDex2Oat::PrepareCompilerConfigFlags(const UniqueFile& input_vdex,
         AddRuntimeArg("-Xhidden-api-policy:enabled");
     }
 }
+
+// MIUI ADD:
+void RunDex2Oat::AddCpuSetArg(const char *  compilation_reason){
+#if defined(__linux__)
+    std::string cpu_set_arg = "--cpu-set=";
+    enum REASON {REASON_UNKNOWN, REASON_FIRST_BOOT, REASON_BOOT, REASON_INSTALL,
+           REASON_BACKGROUND_DEXOPT, REASON_SECONDARY, REASON_BOOTING,
+           REASON_UPDATE, REASON_FIRST_USE, REASON_SPECIAL_CASE};
+    REASON r = REASON_UNKNOWN;
+    std::vector<int32_t> cpu_list = {0, 1};
+    std::string reason = compilation_reason == nullptr ? "" : compilation_reason;
+    if (reason.find("install") != std::string::npos) {
+        r = REASON_INSTALL;
+    } else if (reason.find("first-boot") != std::string::npos) {
+        r = REASON_FIRST_BOOT;
+    } else if (reason.find("booting") != std::string::npos) {
+        r = REASON_BOOTING;
+    } else if (reason.find("boot") != std::string::npos) {
+        r = REASON_BOOT;
+    } else if (reason.find("bg-dexopt") != std::string::npos) {
+        r = REASON_BACKGROUND_DEXOPT;
+    } else if (reason.find("secondary") != std::string::npos) {
+        r = REASON_SECONDARY;
+    } else if (reason.find("update") != std::string::npos) {
+        r = REASON_UPDATE;
+    } else if (reason.find("first-use") != std::string::npos) {
+        r = REASON_FIRST_USE;
+    } else if (reason.find("unknown") != std::string::npos) {
+        r = REASON_UNKNOWN;
+    } else if (reason.find("camera-foreground") != std::string::npos) {
+        r = REASON_SPECIAL_CASE;
+    }
+
+    switch (r) {
+        case REASON_SECONDARY:
+        case REASON_BOOT:
+            cpu_list.push_back(4);
+            cpu_list.push_back(5);
+            break;
+        case REASON_UPDATE:
+        case REASON_UNKNOWN:
+        case REASON_FIRST_USE:
+        case REASON_BACKGROUND_DEXOPT:
+        case REASON_SPECIAL_CASE:
+            cpu_list.push_back(2);
+            cpu_list.push_back(3);
+            break;
+        case REASON_INSTALL:
+        case REASON_BOOTING:
+        case REASON_FIRST_BOOT:
+        default:
+            cpu_list.push_back(2);
+            cpu_list.push_back(3);
+            cpu_list.push_back(4);
+            cpu_list.push_back(5);
+            cpu_list.push_back(6);
+            cpu_list.push_back(7);
+    }
+
+    std::string log_cpu = "";
+    int cpu_list_len = (int)cpu_list.size() - 1;
+    for (int i = 0; i <= cpu_list_len; i++) {
+        log_cpu += StringPrintf(i == cpu_list_len ? "%d" : "%d,", cpu_list[i]);
+    }
+
+    cpu_set_arg += log_cpu;
+    AddArg(cpu_set_arg);
+#endif
+}
+// END
 
 void RunDex2Oat::PrepareCompilerRuntimeAndPerfConfigFlags(bool post_bootcomplete,
                                                           bool for_restore) {

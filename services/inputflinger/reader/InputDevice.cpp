@@ -35,6 +35,15 @@
 #include "SwitchInputMapper.h"
 #include "VibratorInputMapper.h"
 
+// MIUI ADD : START
+#ifdef MIUI_BUILD
+// we should modify ALOGD working way on miui version, let ALOGD control by dumpsys input debuglog
+#include "../stubs/MiInputReaderStub.h"
+#undef ALOGD
+#define ALOGD(...) if (MiInputReaderStub::getInputReaderAll()) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+#endif
+// END
+
 namespace android {
 
 InputDevice::InputDevice(InputReaderContext* context, int32_t id, int32_t generation,

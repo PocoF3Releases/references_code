@@ -32,6 +32,10 @@ class BatteryService : public Singleton<BatteryService> {
 
     void enableSensorImpl(uid_t uid, int handle);
     void disableSensorImpl(uid_t uid, int handle);
+    // MI ADD: START
+    void enableSensorImpl(uid_t uid, int handle, const String16& packageName);
+    void disableSensorImpl(uid_t uid, int handle, const String16& packageName);
+    //END
 
     struct Info {
         uid_t uid;
@@ -57,6 +61,15 @@ public:
     static void disableSensor(uid_t uid, int handle) {
         BatteryService::getInstance().disableSensorImpl(uid, handle);
     }
+
+    //MI ADD: START
+    static void enableSensor(uid_t uid, int handle, const String16& packageName) {
+        BatteryService::getInstance().enableSensorImpl(uid, handle, packageName);
+    }
+    static void disableSensor(uid_t uid, int handle, const String16& packageName) {
+        BatteryService::getInstance().disableSensorImpl(uid, handle, packageName);
+    }
+    //END
 };
 
 // ---------------------------------------------------------------------------

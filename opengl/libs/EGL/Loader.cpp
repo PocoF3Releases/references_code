@@ -34,6 +34,9 @@
 #include "egl_platform_entries.h"
 #include "egl_trace.h"
 #include "egldefs.h"
+#if MI_MIGGLE
+#include "../MiGL/MiGLStub.h"
+#endif
 
 namespace android {
 
@@ -94,6 +97,9 @@ Loader::driver_t::~driver_t()
             dso[i] = nullptr;
         }
     }
+#if MI_MIGGLE
+    MiGLStub::releaseInstance();
+#endif
 }
 
 int Loader::driver_t::set(void* hnd, int32_t api)

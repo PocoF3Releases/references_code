@@ -990,6 +990,13 @@ public:
 
     binder::Status notifyPowerBoost(int /*boostId*/) override { return binder::Status::ok(); }
 
+    //MIUI ADD: START
+    status_t producerFrameDropped(int32_t /*droppedFrameCount*/,
+                                  int64_t /*intendedVsyncTime*/, String8 /*windowName*/) {
+        return NO_ERROR;
+    }
+    //END
+
 protected:
     IBinder* onAsBinder() override { return nullptr; }
 

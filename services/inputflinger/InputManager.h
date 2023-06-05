@@ -126,6 +126,9 @@ private:
     std::unique_ptr<InputClassifierInterface> mClassifier;
 
     std::unique_ptr<InputDispatcherInterface> mDispatcher;
+
+    // MIUI ADD:
+    InputListenerInterface *mMiInputMapper;
 };
 
 } // namespace android

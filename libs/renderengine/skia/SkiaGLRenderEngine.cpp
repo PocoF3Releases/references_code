@@ -64,6 +64,16 @@
 #include "skia/filters/StretchShaderFactory.h"
 #include "system/graphics-base-v1.0.h"
 
+#ifdef MI_FEATURE_ENABLE
+// MIUI ADD: Added just for Global HBM Dither (J2S-T)
+#include <cutils/properties.h>
+// MIUI ADD: END
+#endif
+
+#ifdef MI_SF_FEATURE
+#include "miuishadow/MiuiShadow.h"
+#endif
+
 namespace {
 // Debugging settings
 static const bool kPrintLayerSettings = false;
@@ -330,7 +340,24 @@ SkiaGLRenderEngine::SkiaGLRenderEngine(const RenderEngineCreationArgs& args, EGL
         ALOGD("Background Blurs Enabled");
         mBlurFilter = new KawaseBlurFilter();
     }
+#ifdef CURTAIN_ANIM
+    mCurtainAnim = new CurtainAnim();
+#endif
+#ifdef MI_SF_FEATURE
+    mHdrDimmer = new HdrDimmer();
+#endif
     mCapture = std::make_unique<SkiaCapture>();
+
+#ifdef MI_FEATURE_ENABLE
+    // MIUI ADD: Added just for Global HBM Dither (J2S-T)
+    mGlobalHBMDitherEnabled = property_get_bool("ro.vendor.mi_sf.display.global_hbm_dither_enabled", false);
+    if (mGlobalHBMDitherEnabled) {
+        mDebugMiHBMEffectEnabled = property_get_bool("debug.mi_sf.renderengine.skia_hbm_effect_enabled", true);
+        mMiHBMEffect = new MiHBMEffect();
+        mMiHBMEffect->initPatternSkImage();
+    }
+    // MIUI ADD: END
+#endif
 }
 
 SkiaGLRenderEngine::~SkiaGLRenderEngine() {
@@ -338,6 +365,25 @@ SkiaGLRenderEngine::~SkiaGLRenderEngine() {
     if (mBlurFilter) {
         delete mBlurFilter;
     }
+#ifdef CURTAIN_ANIM
+    if (mCurtainAnim) {
+        delete mCurtainAnim;
+    }
+#endif
+#ifdef MI_SF_FEATURE
+    if (mHdrDimmer) {
+        delete mHdrDimmer;
+    }
+#endif
+#ifdef MI_FEATURE_ENABLE
+    // MIUI ADD: Added just for Global HBM Dither (J2S-T)
+    if (mGlobalHBMDitherEnabled) {
+        if (mMiHBMEffect) {
+            delete mMiHBMEffect;
+        }
+    }
+    // MIUI ADD: END
+#endif
 
     mCapture = nullptr;
 
@@ -836,7 +882,11 @@ void SkiaGLRenderEngine::drawLayersInternal(
     SkCanvas* canvas = dstCanvas;
     SkiaCapture::OffscreenState offscreenCaptureState;
     const LayerSettings* blurCompositionLayer = nullptr;
+#ifdef MI_SF_FEATURE
+    if (mBlurFilter && !isProtected()) {
+#else
     if (mBlurFilter) {
+#endif
         bool requiresCompositionLayer = false;
         for (const auto& layer : layers) {
             // if the layer doesn't have blur or it is not visible then continue
@@ -866,9 +916,19 @@ void SkiaGLRenderEngine::drawLayersInternal(
     canvas->clear(SK_ColorTRANSPARENT);
     initCanvas(canvas, display);
 
+#ifdef MI_FEATURE_ENABLE
+    // MIUI ADD: Added just for Global HBM Dither (J2S-T)
+    if (mGlobalHBMDitherEnabled) {
+        getMiHBMEffectParams(layers, needApplyHBMEffect, layersInfo, hbmLayerAlpha);
+        needApplyHBMEffect = needApplyHBMEffect && mDebugMiHBMEffectEnabled;
+    }
+    // MIUI ADD: END
+#endif
+
     if (kPrintLayerSettings) {
         logSettings(display);
     }
+
     for (const auto& layer : layers) {
         ATRACE_FORMAT("DrawLayer: %s", layer.name.c_str());
 
@@ -930,7 +990,11 @@ void SkiaGLRenderEngine::drawLayersInternal(
         const auto [bounds, roundRectClip] =
                 getBoundsAndClip(layer.geometry.boundaries, layer.geometry.roundedCornersCrop,
                                  layer.geometry.roundedCornersRadius);
+#ifdef MI_SF_FEATURE
+        if (mBlurFilter && layerHasBlur(layer, ctModifiesAlpha) && !isProtected()) {
+#else
         if (mBlurFilter && layerHasBlur(layer, ctModifiesAlpha)) {
+#endif
             std::unordered_map<uint32_t, sk_sp<SkImage>> cachedBlurs;
 
             // if multiple layers have blur, then we need to take a snapshot now because
@@ -969,10 +1033,18 @@ void SkiaGLRenderEngine::drawLayersInternal(
                                 mBlurFilter->generate(grContext, region.blurRadius, blurInput,
                                                       blurRect);
                     }
-
+#ifdef MI_SF_FEATURE
+                    canvas->save();
+                    canvas->clipRRect(bounds, SkClipOp::kIntersect, true);
                     mBlurFilter->drawBlurRegion(canvas, getBlurRRect(region), region.blurRadius,
                                                 region.alpha, blurRect,
                                                 cachedBlurs[region.blurRadius], blurInput);
+                    canvas->restore();
+#else
+                    mBlurFilter->drawBlurRegion(canvas, getBlurRRect(region), region.blurRadius,
+                                                region.alpha, blurRect,
+                                                cachedBlurs[region.blurRadius], blurInput);
+#endif
                 }
             }
         }
@@ -1001,6 +1073,30 @@ void SkiaGLRenderEngine::drawLayersInternal(
                     shadowBounds.isRect() && !shadowClip.isEmpty() ? shadowClip : shadowBounds;
             drawShadow(canvas, rrect, layer.shadow);
         }
+#ifdef MI_SF_FEATURE
+        if (layer.miShadow.shadowType != 0) {
+            if (layer.disableBlending) {
+                ALOGE("Cannot disableBlending with a miui shadow");
+                continue;
+            }
+            SkRRect shadowBounds, shadowClip;
+            if (layer.geometry.boundaries == layer.miShadow.boundaries) {
+                shadowBounds = bounds;
+                shadowClip = roundRectClip;
+            } else {
+                std::tie(shadowBounds, shadowClip) =
+                        getBoundsAndClip(layer.miShadow.boundaries,
+                                            layer.geometry.roundedCornersCrop,
+                                            layer.geometry.roundedCornersRadius);
+            }
+            auto rrect =
+                    shadowBounds.isRect() && !shadowClip.isEmpty() ? shadowClip : shadowBounds;
+            if (layer.miShadow.shadowType == 1 || layer.miShadow.shadowType == 2)
+                drawMiuiShadow(canvas, rrect, layer.miShadow);
+            else if (mBlurFilter && layer.miShadow.shadowType == 3)
+                drawBlurShadow(canvas, rrect, layer.miShadow, mBlurFilter, grContext, activeSurface);
+        }
+#endif
 
         const float layerDimmingRatio = layer.whitePointNits <= 0.f
                 ? displayDimmingRatio
@@ -1096,6 +1192,18 @@ void SkiaGLRenderEngine::drawLayersInternal(
 
             sk_sp<SkShader> shader;
 
+#ifdef MI_FEATURE_ENABLE
+            // MIUI ADD: Added just for Global HBM Dither (J2S-T)
+            if (mGlobalHBMDitherEnabled) {
+                if (needApplyHBMEffect &&
+                    !(layersInfo & NO_HBM_EFFECT_MASK) &&
+                    skiaHBMLayerDraw(layer, mMiHBMEffect)) {
+                    continue;
+                }
+            }
+            // MIUI ADD: END
+#endif
+
             if (layer.source.buffer.useTextureFiltering) {
                 shader = image->makeShader(SkTileMode::kClamp, SkTileMode::kClamp,
                                            SkSamplingOptions(
@@ -1111,64 +1219,144 @@ void SkiaGLRenderEngine::drawLayersInternal(
                                                            toSkColorSpace(layerDataspace)));
             }
 
-            paint.setShader(createRuntimeEffectShader(
-                    RuntimeEffectShaderParameters{.shader = shader,
-                                                  .layer = layer,
-                                                  .display = display,
-                                                  .undoPremultipliedAlpha = !item.isOpaque &&
-                                                          item.usePremultipliedAlpha,
-                                                  .requiresLinearEffect = requiresLinearEffect,
-                                                  .layerDimmingRatio = dimInLinearSpace
-                                                          ? layerDimmingRatio
-                                                          : 1.f}));
+#ifdef MI_FEATURE_ENABLE
+            // MIUI ADD: Added just for Global HBM Dither (J2S-T)
+            if (mGlobalHBMDitherEnabled) {
+                if (layersInfo & NO_HBM_EFFECT_MASK) {
+                    ALOGI("AOD Scene don't need apply MiHBMEffect");
+                    paint.setShader(createRuntimeEffectShader(
+                            RuntimeEffectShaderParameters{.shader = shader,
+                                                          .layer = layer,
+                                                          .display = display,
+                                                          .undoPremultipliedAlpha = !item.isOpaque &&
+                                                                  item.usePremultipliedAlpha,
+                                                          .requiresLinearEffect = requiresLinearEffect,
+                                                          .layerDimmingRatio = layerDimmingRatio}));
+                    paint.setAlphaf(layer.alpha);
+                } else if (!applyMiHBMRuntimeEffect(paint, shader, layer, needApplyHBMEffect,
+                                                    hbmLayerAlpha, mMiHBMEffect)) {
+                    paint.setShader(createRuntimeEffectShader(
+                            RuntimeEffectShaderParameters{.shader = shader,
+                                                          .layer = layer,
+                                                          .display = display,
+                                                          .undoPremultipliedAlpha = !item.isOpaque &&
+                                                                   item.usePremultipliedAlpha,
+                                                          .requiresLinearEffect = requiresLinearEffect,
+                                                          .layerDimmingRatio = layerDimmingRatio}));
 
-            // Turn on dithering when dimming beyond this (arbitrary) threshold...
-            static constexpr float kDimmingThreshold = 0.2f;
-            // ...or we're rendering an HDR layer down to an 8-bit target
-            // Most HDR standards require at least 10-bits of color depth for source content, so we
-            // can just extract the transfer function rather than dig into precise gralloc layout.
-            // Furthermore, we can assume that the only 8-bit target we support is RGBA8888.
-            const bool requiresDownsample = isHdrDataspace(layer.sourceDataspace) &&
-                    buffer->getPixelFormat() == PIXEL_FORMAT_RGBA_8888;
-            if (layerDimmingRatio <= kDimmingThreshold || requiresDownsample) {
-                paint.setDither(true);
-            }
-            paint.setAlphaf(layer.alpha);
+                    // Turn on dithering when dimming beyond this threshold.
+                    static constexpr float kDimmingThreshold = 0.2f;
+                    if (layerDimmingRatio <= kDimmingThreshold) {
+                        paint.setDither(true);
+                    }
+                    paint.setAlphaf(layer.alpha);
 
-            if (imageTextureRef->colorType() == kAlpha_8_SkColorType) {
-                LOG_ALWAYS_FATAL_IF(layer.disableBlending, "Cannot disableBlending with A8");
+                    if (imageTextureRef->colorType() == kAlpha_8_SkColorType) {
+                        LOG_ALWAYS_FATAL_IF(layer.disableBlending, "Cannot disableBlending with A8");
 
-                // SysUI creates the alpha layer as a coverage layer, which is
-                // appropriate for the DPU. Use a color matrix to convert it to
-                // a mask.
-                // TODO (b/219525258): Handle input as a mask.
-                //
-                // The color matrix will convert A8 pixels with no alpha to
-                // black, as described by this vector. If the display handles
-                // the color transform, we need to invert it to find the color
-                // that will result in black after the DPU applies the transform.
-                SkV4 black{0.0f, 0.0f, 0.0f, 1.0f}; // r, g, b, a
-                if (display.colorTransform != mat4() && display.deviceHandlesColorTransform) {
-                    SkM44 colorSpaceMatrix = getSkM44(display.colorTransform);
-                    if (colorSpaceMatrix.invert(&colorSpaceMatrix)) {
-                        black = colorSpaceMatrix * black;
-                    } else {
-                        // We'll just have to use 0,0,0 as black, which should
-                        // be close to correct.
-                        ALOGI("Could not invert colorTransform!");
+                        // SysUI creates the alpha layer as a coverage layer, which is
+                        // appropriate for the DPU. Use a color matrix to convert it to
+                        // a mask.
+                        // TODO (b/219525258): Handle input as a mask.
+                        //
+                        // The color matrix will convert A8 pixels with no alpha to
+                        // black, as described by this vector. If the display handles
+                        // the color transform, we need to invert it to find the color
+                        // that will result in black after the DPU applies the transform.
+                        SkV4 black{0.0f, 0.0f, 0.0f, 1.0f}; // r, g, b, a
+                        if (display.colorTransform != mat4() && display.deviceHandlesColorTransform) {
+                            SkM44 colorSpaceMatrix = getSkM44(display.colorTransform);
+                            if (colorSpaceMatrix.invert(&colorSpaceMatrix)) {
+                                black = colorSpaceMatrix * black;
+                            } else {
+                                // We'll just have to use 0,0,0 as black, which should
+                                // be close to correct.
+                                ALOGI("Could not invert colorTransform!");
+                            }
+                        }
+                        SkColorMatrix colorMatrix(0, 0, 0, 0, black[0],
+                                                  0, 0, 0, 0, black[1],
+                                                  0, 0, 0, 0, black[2],
+                                                  0, 0, 0, -1, 1);
+                        if (display.colorTransform != mat4() && !display.deviceHandlesColorTransform) {
+                            // On the other hand, if the device doesn't handle it, we
+                            // have to apply it ourselves.
+                            colorMatrix.postConcat(toSkColorMatrix(display.colorTransform));
+                        }
+                        paint.setColorFilter(SkColorFilters::Matrix(colorMatrix));
                     }
                 }
-                SkColorMatrix colorMatrix(0, 0, 0, 0, black[0],
-                                          0, 0, 0, 0, black[1],
-                                          0, 0, 0, 0, black[2],
-                                          0, 0, 0, -1, 1);
-                if (display.colorTransform != mat4() && !display.deviceHandlesColorTransform) {
-                    // On the other hand, if the device doesn't handle it, we
-                    // have to apply it ourselves.
-                    colorMatrix.postConcat(toSkColorMatrix(display.colorTransform));
+            // MIUI ADD: END
+            } else {
+#endif
+                paint.setShader(createRuntimeEffectShader(
+                        RuntimeEffectShaderParameters{.shader = shader,
+                                                      .layer = layer,
+                                                      .display = display,
+                                                      .undoPremultipliedAlpha = !item.isOpaque &&
+                                                              item.usePremultipliedAlpha,
+                                                      .requiresLinearEffect = requiresLinearEffect,
+                                                      .layerDimmingRatio = dimInLinearSpace
+                                                              ? layerDimmingRatio
+                                                              : 1.f}));
+
+                // Turn on dithering when dimming beyond this (arbitrary) threshold...
+                static constexpr float kDimmingThreshold = 0.2f;
+                // ...or we're rendering an HDR layer down to an 8-bit target
+                // Most HDR standards require at least 10-bits of color depth for source content, so we
+                // can just extract the transfer function rather than dig into precise gralloc layout.
+                // Furthermore, we can assume that the only 8-bit target we support is RGBA8888.
+                const bool requiresDownsample = isHdrDataspace(layer.sourceDataspace) &&
+                        buffer->getPixelFormat() == PIXEL_FORMAT_RGBA_8888;
+                if (layerDimmingRatio <= kDimmingThreshold || requiresDownsample) {
+                    paint.setDither(true);
                 }
-                paint.setColorFilter(SkColorFilters::Matrix(colorMatrix));
+                paint.setAlphaf(layer.alpha);
+
+                if (imageTextureRef->colorType() == kAlpha_8_SkColorType) {
+                    LOG_ALWAYS_FATAL_IF(layer.disableBlending, "Cannot disableBlending with A8");
+
+                    // SysUI creates the alpha layer as a coverage layer, which is
+                    // appropriate for the DPU. Use a color matrix to convert it to
+                    // a mask.
+                    // TODO (b/219525258): Handle input as a mask.
+                    //
+                    // The color matrix will convert A8 pixels with no alpha to
+                    // black, as described by this vector. If the display handles
+                    // the color transform, we need to invert it to find the color
+                    // that will result in black after the DPU applies the transform.
+                    SkV4 black{0.0f, 0.0f, 0.0f, 1.0f}; // r, g, b, a
+                    if (display.colorTransform != mat4() && display.deviceHandlesColorTransform) {
+                        SkM44 colorSpaceMatrix = getSkM44(display.colorTransform);
+                        if (colorSpaceMatrix.invert(&colorSpaceMatrix)) {
+                            black = colorSpaceMatrix * black;
+                        } else {
+                            // We'll just have to use 0,0,0 as black, which should
+                            // be close to correct.
+                            ALOGI("Could not invert colorTransform!");
+                        }
+                    }
+                    SkColorMatrix colorMatrix(0, 0, 0, 0, black[0],
+                                              0, 0, 0, 0, black[1],
+                                              0, 0, 0, 0, black[2],
+                                              0, 0, 0, -1, 1);
+                    if (display.colorTransform != mat4() && !display.deviceHandlesColorTransform) {
+                        // On the other hand, if the device doesn't handle it, we
+                        // have to apply it ourselves.
+                        colorMatrix.postConcat(toSkColorMatrix(display.colorTransform));
+                    }
+                    paint.setColorFilter(SkColorFilters::Matrix(colorMatrix));
+                }
+#ifdef MI_FEATURE_ENABLE
             }
+#endif
+#ifdef MI_SF_FEATURE
+            if (layer.atmosphereLamp) {
+                const auto& rrect =
+                        bounds.isRect() && !roundRectClip.isEmpty() ? roundRectClip : bounds;
+                drawAtmosphereLamp(canvas, rrect, layer.miShadow, mBlurFilter, grContext, image);
+            }
+#endif
         } else {
             ATRACE_NAME("DrawColor");
             const auto color = layer.source.solidColor;
@@ -1209,7 +1397,20 @@ void SkiaGLRenderEngine::drawLayersInternal(
                                              ? displayColorTransform->makeComposed(colorFilter)
                                              : colorFilter);
             } else {
-                paint.setColorFilter(displayColorTransform);
+#ifdef MI_FEATURE_ENABLE
+                // MIUI ADD: Added just for Global HBM Dither (J2S-T)
+                if (mGlobalHBMDitherEnabled) {
+                    if (!(layersInfo & COLORFADE_LAYER_MASK) &&
+                        !(layer.name.find("gxzw_icon") != std::string::npos)) {
+                        paint.setColorFilter(displayColorTransform);
+                    }
+                // MIUI ADD: END
+                } else {
+#endif
+                    paint.setColorFilter(displayColorTransform);
+#ifdef MI_FEATURE_ENABLE
+                }
+#endif
             }
         }
 
@@ -1217,17 +1418,44 @@ void SkiaGLRenderEngine::drawLayersInternal(
             canvas->clipRRect(roundRectClip, true);
         }
 
-        if (!bounds.isRect()) {
-            paint.setAntiAlias(true);
-            canvas->drawRRect(bounds, paint);
+#ifdef MI_SF_FEATURE
+        // MIUI ADD: HDR Dimmer
+        if (mHdrDimmer && display.hdrDimmerEnabled) {
+            mHdrDimmer->drawHdrDim(canvas, &paint, bounds, layer.hdrDimmerEnabled, display.hdrDimmerFactor,
+                                   layer.hdrDimmerRatio, layer.hdrBrightRegion, layer.hdrDimRegion);
         } else {
-            canvas->drawRect(bounds.rect(), paint);
+        // END
+#endif
+            if (!bounds.isRect()) {
+                paint.setAntiAlias(true);
+                canvas->drawRRect(bounds, paint);
+            } else {
+                canvas->drawRect(bounds.rect(), paint);
+            }
+#ifdef MI_SF_FEATURE
         }
+#endif
+#ifdef MI_SF_FEATURE
+        if(layer.coverBlur && display.useBlurCover) {
+            blurInput = activeSurface->makeImageSnapshot();
+            const auto blurRect = canvas->getTotalMatrix().mapRect(bounds.rect());
+            auto blurredImage =
+                    mBlurFilter->generate(grContext, 36, blurInput, blurRect);
+            mBlurFilter->drawBlurRegion(canvas, bounds, 36, 1.0f, blurRect, blurredImage, blurInput);
+        }
+#endif
         if (kFlushAfterEveryLayer) {
             ATRACE_NAME("flush surface");
             activeSurface->flush();
         }
     }
+
+#ifdef CURTAIN_ANIM
+    if (mCurtainAnim && display.enableCurtainAnim) {
+        mCurtainAnim->drawCurtainAnim(canvas, display.curtainAnimRate, activeSurface);
+    }
+#endif
+
     surfaceAutoSaveRestore.restore();
     mCapture->endCapture();
     {

@@ -54,6 +54,8 @@
 #include <regex>
 
 #include "EventHub.h"
+// MIUI ADD:
+#include "stubs/MiEventHubStub.h"
 
 #define INDENT "  "
 #define INDENT2 "    "
@@ -733,6 +735,8 @@ EventHub::EventHub(void)
     result = epoll_ctl(mEpollFd, EPOLL_CTL_ADD, mWakeReadPipeFd, &eventItem);
     LOG_ALWAYS_FATAL_IF(result != 0, "Could not add wake read pipe to epoll instance.  errno=%d",
                         errno);
+    //MIUI ADD:
+    MiEventHubStub::init(this);
 }
 
 EventHub::~EventHub(void) {
@@ -1000,6 +1004,32 @@ status_t EventHub::mapKey(int32_t deviceId, int32_t scanCode, int32_t usageCode,
 
         // Check the key layout next.
         if (status != NO_ERROR && device->keyMap.haveKeyLayout()) {
+#define MIAUDIO_HEADSET_BUTTON_MODE_SWITCH
+#ifdef MIAUDIO_HEADSET_BUTTON_MODE_SWITCH
+            // MIUI ADD START:
+            // Xiaomi ANC Type-C headset mode: MEDIA_PREVIOUS_SCAN_CODE MEDIA_NEXT_SCAN_CODE scanCode will map in KeyLayoutMap::mapKey()
+            if (device->classes.any(InputDeviceClass::EXTERNAL) && device->classes.any(InputDeviceClass::KEYBOARD)) {
+                #define MEDIA_PREVIOUS_SCAN_CODE 257
+                #define MEDIA_NEXT_SCAN_CODE 258
+                char status_value[PROPERTY_VALUE_MAX];
+                property_get("persist.audio.headset.plug.status", status_value, "off");
+                if (device->identifier.vendor == 0x2717) {
+                    if (scanCode == KEY_PLAYPAUSE) {
+                        ALOGI("mapKey: scanCode=%d, changed to scanCode=%d .", scanCode, KEY_MEDIA);
+                        scanCode = KEY_MEDIA;
+                    }
+                }
+
+                if ((scanCode == KEY_VOLUMEDOWN || scanCode == KEY_NEXTSONG) && !strcmp(status_value, "on")) {
+                    ALOGI("mapKey: scanCode=%d, changed to scanCode=%d .", scanCode, MEDIA_NEXT_SCAN_CODE);
+                    scanCode = MEDIA_NEXT_SCAN_CODE;
+                } else if ((scanCode == KEY_VOLUMEUP || scanCode == KEY_PREVIOUSSONG) && !strcmp(status_value, "on")) {
+                    ALOGI("mapKey: scanCode=%d, changed to scanCode=%d .", scanCode, MEDIA_PREVIOUS_SCAN_CODE);
+                    scanCode = MEDIA_PREVIOUS_SCAN_CODE;
+                }
+            }
+            // END
+#endif
             if (!device->keyMap.keyLayoutMap->mapKey(scanCode, usageCode, outKeycode, outFlags)) {
                 status = NO_ERROR;
             }
@@ -2551,5 +2581,34 @@ void EventHub::monitor() {
     // Acquire and release the lock to ensure that the event hub has not deadlocked.
     std::unique_lock<std::mutex> lock(mLock);
 }
+
+// MIUI ADD: START
+void EventHub::switchTouchWorkMode(uint32_t workMode) {
+    struct input_event ev;
+
+    memset(&ev, 0, sizeof(ev));
+    ev.type = EV_SYN;
+    ev.code = SYN_CONFIG;
+    ev.value = workMode;
+    std::scoped_lock _l(mLock);
+
+
+    for (const auto& [id, device] : mDevices) {
+        ALOGI("EventHub switchTouchWorkMode write workMode=%d to devicesID=%d", workMode, id);
+        if (device->fd != -1) {
+            ssize_t nWrite;
+            do {
+                nWrite = write(device->fd, &ev, sizeof(ev));
+            } while (nWrite == -1 && errno == EINTR);
+
+            if (nWrite == -1) {
+                ALOGE("Could not send sync to device %s due to error %d.",
+                        device->identifier.name.c_str(), errno);
+            }
+        }
+    }
+
+}
+// END
 
 }; // namespace android

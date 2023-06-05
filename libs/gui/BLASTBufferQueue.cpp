@@ -225,6 +225,8 @@ BLASTBufferQueue::BLASTBufferQueue(const std::string& name, bool updateDestinati
             if (callbackCopy) callbackCopy(true);
         }, this);
 
+    // MIUI ADD: dynamic ViewRootImpl and BlastBufferQueue Log
+    mPropDynamicLog = property_get_bool("persist.sys.sf.dynamic.log", false);
     BQA_LOGV("BLASTBufferQueue created");
 }
 
@@ -299,7 +301,8 @@ void BLASTBufferQueue::update(const sp<SurfaceControl>& surface, uint32_t width,
         // All transactions on our apply token are one-way. See comment on mAppliedLastTransaction
         t.setApplyToken(mApplyToken).apply(false, true);
     }
-    if(strstr(mName.c_str(),"ScreenDecorOverlay") != nullptr && mSurfaceControl != nullptr){
+    if((strstr(mName.c_str(),"ScreenDecorOverlay") != nullptr || strstr(mName.c_str(),"RoundCorner") != nullptr)
+      && mSurfaceControl != nullptr){
        sp<SurfaceComposerClient> client = mSurfaceControl->getClient();
        if (client != nullptr) {
            const sp<IBinder> display = client->getInternalDisplayToken();
@@ -418,6 +421,16 @@ void BLASTBufferQueue::transactionCallback(nsecs_t /*latchTime*/, const sp<Fence
                                                     stat.latchTime,
                                                     stat.frameEventStats.dequeueReadyTime);
                 }
+                // MIUI ADD: dynamic ViewRootImpl and BlastBufferQueue Log
+                if(isDynamicLog()) {
+                    for (const auto& [key, value]: mSubmitted) {
+                        if (stat.frameEventStats.frameNumber > key.framenumber) {
+                            ALOGD("bbq.transactionCallback stale:%s curRelease:%" PRIu64,
+                                key.to_string().c_str(), stat.frameEventStats.frameNumber);
+                        }
+                    }
+                }
+                // END
             } else {
                 BQA_LOGE("Failed to find matching SurfaceControl in transactionCallback");
             }
@@ -477,6 +490,13 @@ void BLASTBufferQueue::releaseBufferCallback(
     const uint32_t numPendingBuffersToHold =
             isEGL ? std::max(0, mMaxAcquiredBuffers - (int32_t)mCurrentMaxAcquiredBufferCount) : 0;
     mPendingRelease.emplace_back(ReleasedBuffer{id, releaseFence});
+    // MIUI ADD: dynamic ViewRootImpl and BlastBufferQueue Log
+    if(isDynamicLog()) {
+        ALOGD("bbq.releaseBufferCallback %s isEGL:%d mMaxAcq:%u currMaxAcq:%u numToHold:%u ",
+            id.to_string().c_str(), isEGL, mMaxAcquiredBuffers,
+            currentMaxAcquiredBufferCount, numPendingBuffersToHold);
+    }
+    // END
 
     // Release all buffers that are beyond the ones that we need to hold
     while (mPendingRelease.size() > numPendingBuffersToHold) {
@@ -636,6 +656,13 @@ void BLASTBufferQueue::acquireNextBufferLocked(
     }
 
     mergePendingTransactions(t, bufferItem.mFrameNumber);
+    // MIUI ADD: dynamic ViewRootImpl and BlastBufferQueue Log
+    if(isDynamicLog()) {
+        ALOGD("bbq.acquireNextBufferLocked bufId:%" PRIu64 " frN:%" PRIu64 " layerId:%d apply:%s",
+                bufferItem.mGraphicBuffer->getId(), bufferItem.mFrameNumber,
+                mSurfaceControl->getLayerId(), boolToString(applyTransaction));
+    }
+    // END
     if (applyTransaction) {
         if (sIsGame) {
             t->setApplyToken(mApplyToken).apply(false, false);
@@ -660,9 +687,22 @@ void BLASTBufferQueue::acquireNextBufferLocked(
 }
 
 Rect BLASTBufferQueue::computeCrop(const BufferItem& item) {
-    if (item.mScalingMode == NATIVE_WINDOW_SCALING_MODE_SCALE_CROP) {
-        return GLConsumer::scaleDownCrop(item.mCrop, mSize.width, mSize.height);
+    // MIUI MOD: dynamic wallpaper display exception
+
+    // if (item.mScalingMode == NATIVE_WINDOW_SCALING_MODE_SCALE_CROP) {
+    //      return GLConsumer::scaleDownCrop(item.mCrop, mSize.width, mSize.height);
+    // }
+
+    uint32_t width = mSize.width;
+    uint32_t height = mSize.height;
+    if (item.mTransform & NATIVE_WINDOW_TRANSFORM_ROT_90) {
+        width = mSize.height;
+        height = mSize.width;
     }
+    if (item.mScalingMode == NATIVE_WINDOW_SCALING_MODE_SCALE_CROP) {
+        return GLConsumer::scaleDownCrop(item.mCrop, width, height);
+    }
+    // MIUI END: dynamic wallpaper display exception
     return item.mCrop;
 }
 
@@ -1202,5 +1242,23 @@ void BLASTBufferQueue::setTransactionHangCallback(std::function<void(bool)> call
     std::unique_lock _lock{mMutex};
     mTransactionHangCallback = callback;
 }
+
+// MIUI ADD: START
+bool BLASTBufferQueue::adjustMaxDequeuedBufferCountForProducer(int count) {
+    return mProducer->adjustMaxDequeuedBufferCount(count) == NO_ERROR;
+}
+// END
+
+// MIUI ADD: dynamic ViewRootImpl and BlastBufferQueue Log
+bool BLASTBufferQueue::setDynamicLog(int dynamic) {
+    mDynamicLog = (dynamic > 0 ? true : false);
+    ALOGD("setDynamicLog prop:%d dynamic:%d", mPropDynamicLog, mDynamicLog);
+    return mDynamicLog;
+}
+
+bool BLASTBufferQueue::isDynamicLog() {
+    return (mPropDynamicLog || mDynamicLog);
+}
+// END
 
 } // namespace android

@@ -168,10 +168,10 @@ inline bool equalsExceptDisplayModeId(const DisplayMode& lhs, const DisplayMode&
 
 inline std::string to_string(const DisplayMode& mode) {
     return base::StringPrintf("{id=%d, hwcId=%d, resolution=%dx%d, refreshRate=%s, "
-                              "dpi=%.2fx%.2f, group=%d}",
+                              "dpi=%.2fx%.2f, group=%d, ddicMode=%d}",
                               mode.getId().value(), mode.getHwcId(), mode.getWidth(),
                               mode.getHeight(), to_string(mode.getFps()).c_str(), mode.getDpi().x,
-                              mode.getDpi().y, mode.getGroup());
+                              mode.getDpi().y, mode.getGroup(), (mode.getGroup() >> 24));
 }
 
 template <typename... DisplayModePtrs>

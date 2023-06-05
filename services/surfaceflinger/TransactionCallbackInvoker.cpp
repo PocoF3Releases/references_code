@@ -31,6 +31,9 @@
 #include <binder/IInterface.h>
 #include <utils/RefBase.h>
 
+// MIUI ADD:
+#include "MiSurfaceFlingerStub.h"
+
 namespace android {
 
 // Returns 0 if they are equal
@@ -220,6 +223,19 @@ void TransactionCallbackInvoker::sendCallbacks(bool onCommitOnly) {
                 // keep it as an IBinder due to consistency reasons: if we
                 // interface_cast at the IPC boundary when reading a Parcel,
                 // we get pointers that compare unequal in the SF process.
+                // MIUI ADD: dynamic SurfaceFlinger Log
+                if(MiSurfaceFlingerStub::isDynamicSfLog()) {
+                    for (const auto& transactionStats : listenerStats.transactionStats) {
+                        for (const auto& surfaceStats : transactionStats.surfaceStats) {
+                            ALOGI("sf.sendCallbacks releaseBuf:%s maxAcquired:%u hint:%d",
+                                surfaceStats.previousReleaseCallbackId.to_string().c_str(),
+                                surfaceStats.currentMaxAcquiredBufferCount,
+                                surfaceStats.transformHint
+                            );
+                        }
+                    }
+                }
+                // END
                 callbacks.emplace_back([stats = std::move(listenerStats)]() {
                     interface_cast<ITransactionCompletedListener>(stats.listener)
                             ->onTransactionCompleted(stats);

@@ -147,6 +147,14 @@ struct OutputCompositionState {
     // Display brightness that will take effect this frame.
     // This is slightly distinct from nits, in that nits cannot be passed to hw composer.
     std::optional<float> displayBrightness = std::nullopt;
+#if MI_SCREEN_PROJECTION
+    // MIUI ADD:
+    uint32_t isScreenProjection{0};
+    uint32_t isCastMode{0};
+    uint32_t isLastFrame{0};
+    bool hideRecorderBar{false};
+    // END
+#endif
 
     enum class CompositionStrategyPredictionState : uint32_t {
         // Composition strategy prediction did not run for this frame.

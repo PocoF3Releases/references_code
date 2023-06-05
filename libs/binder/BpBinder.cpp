@@ -25,6 +25,11 @@
 #include <binder/Stability.h>
 #include <cutils/compiler.h>
 #include <utils/Log.h>
+// MIUI ADD: START
+#include <inttypes.h>
+#include <utils/SystemClock.h>
+#include <cutils/properties.h>
+// END
 
 #include <stdio.h>
 
@@ -47,6 +52,22 @@ bool BpBinder::sBinderProxyThrottleCreate = false;
 uint32_t BpBinder::sBinderProxyCountHighWatermark = 2500;
 // Another arbitrary value a binder count needs to drop below before another callback will be called
 uint32_t BpBinder::sBinderProxyCountLowWatermark = 2000;
+
+// MIUI ADD: STADRT
+// host tools like validatekeymaps staticly link against libbinder and libbase, we need to make
+// sure the the runtime linker always loads ctors of libbase before that of libbinder, as
+// property_get_int32() depends on libbase
+// int32_t slowBinderThreshold = property_get_int32("ro.miui.slowbinderthreshold", 200);
+static int32_t getSlowBinderThreshold() {
+    static int32_t slowBinderThreshold = property_get_int32("ro.miui.slowbinderthreshold", 200);
+    return slowBinderThreshold;
+}
+
+static bool getLogTurboVersionNative() {
+    static bool sLogTurboVersionNative = property_get_int32("persist.sys.perfdebug.monitor.perfversion", 3) == 3;
+    return sLogTurboVersionNative;
+}
+// END
 
 // Log any transactions for which the data exceeds this size
 #define LOG_TRANSACTIONS_OVER_SIZE (300 * 1024)
@@ -303,7 +324,25 @@ status_t BpBinder::transact(
             status = rpcSession()->transact(sp<IBinder>::fromExisting(this), code, data, reply,
                                             flags);
         } else {
+            // MIUI ADD: START
+            int64_t startTime = 0;
+            bool isOneway = (flags & IBinder::FLAG_ONEWAY) != 0;
+            bool queryingInterfaceDesc = (INTERFACE_TRANSACTION == code);
+            if (!isOneway && !queryingInterfaceDesc) startTime = uptimeMillis();
+            // END
+
             status = IPCThreadState::self()->transact(binderHandle(), code, data, reply, flags);
+
+            // MIUI ADD: START
+            if (!isOneway && !queryingInterfaceDesc && !getLogTurboVersionNative()) {
+                int64_t duration = uptimeMillis() - startTime;
+                if (duration > getSlowBinderThreshold()) {
+                    String8 desc(getInterfaceDescriptor());
+                    SLOGW("PerfMonitor binderTransact :  time=%" PRId64 "ms interface=%s code=%u\n",
+                            duration, desc.string(), code );
+                }
+            }
+            // END
         }
         if (data.dataSize() > LOG_TRANSACTIONS_OVER_SIZE) {
             Mutex::Autolock _l(mLock);

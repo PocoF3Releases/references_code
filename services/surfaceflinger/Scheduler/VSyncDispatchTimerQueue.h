@@ -103,6 +103,11 @@ private:
     mutable std::mutex mRunningMutex;
     std::condition_variable mCv;
     bool mRunning GUARDED_BY(mRunningMutex) = false;
+#ifdef MI_FEATURE_ENABLE
+    std::optional<nsecs_t> mLastWakeupTime;
+    void optimizeNextVsyncTime(const VSyncTracker& tracker, nsecs_t& nextVsyncTime,
+            nsecs_t now, const VSyncDispatch::ScheduleTiming& timing);
+#endif
 };
 
 /*

@@ -31,7 +31,12 @@ status_t WorkSource::readFromParcel(const android::Parcel *parcel) {
     int32_t workChainCount;
     status_t ret = parcel->readInt32(&num)
                 ?: parcel->readInt32Vector(&mUids)
+                //MIUI MOD START:
+                //?: parcel->readString16Vector(&mNames);
                 ?: parcel->readString16Vector(&mNames)
+                ?: parcel->readString16(&name0)
+                ?: parcel->readInt32(&pid0)
+                //END
                 ?: parcel->readInt32(&workChainCount);
 
     if (ret == OK && workChainCount > 0) {
@@ -50,7 +55,12 @@ status_t WorkSource::writeToParcel(android::Parcel *parcel) const {
 
     return parcel->writeInt32(mUids.size())
         ?: parcel->writeInt32Vector(mUids)
+        //MIUI MOD START:
+        //?: parcel->writeString16Vector(mNames);
         ?: parcel->writeString16Vector(mNames)
+        ?: parcel->writeString16(name0)
+        ?: parcel->writeInt32(pid0)
+        //END
         ?: parcel->writeInt32(-1);
 }
 

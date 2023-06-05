@@ -44,7 +44,7 @@
 #include "RotationVectorSensor.h"
 #include "SensorFusion.h"
 #include "SensorInterface.h"
-
+#include "MiSensorServiceStub.h"
 #include "SensorService.h"
 #include "SensorDirectConnection.h"
 #include "SensorEventAckReceiver.h"
@@ -65,7 +65,10 @@
 #include <future>
 
 #include <private/android_filesystem_config.h>
-
+#ifdef MI_SENSORSERVICE_FEATURE_ENABLE
+#include <MiSensorServiceStub.h>
+#endif
+#include <pthread.h>
 using namespace std::chrono_literals;
 
 namespace android {
@@ -90,6 +93,8 @@ String16 SensorService::sSensorInterfaceDescriptorPrefix =
 AppOpsManager SensorService::sAppOpsManager;
 std::atomic_uint64_t SensorService::curProxCallbackSeq(0);
 std::atomic_uint64_t SensorService::completedCallbackSeq(0);
+// MIUI ADD:
+bool SensorService::mReversedState = false;
 
 #define SENSOR_SERVICE_DIR "/data/system/sensor_service"
 #define SENSOR_SERVICE_HMAC_KEY_FILE  SENSOR_SERVICE_DIR "/hmac_key"
@@ -374,6 +379,12 @@ void SensorService::onFirstRef() {
             // Start watching mic sensor privacy changes
             mMicSensorPrivacyPolicy->registerSelf();
         }
+        //for SensorEventToOneTrack
+        pthread_t PID_OneTrack;
+        ALOGD("Sensorservice creating onetrack thread\n");
+        if (pthread_create(&PID_OneTrack, NULL,  MiSensorServiceStub::timeToReport,(void *)this)!=0){
+            ALOGE("Sensorservice Error creating onetrack thread\n");
+        }
     }
 }
 
@@ -403,8 +414,19 @@ bool SensorService::hasSensorAccess(uid_t uid, const String16& opPackageName) {
 }
 
 bool SensorService::hasSensorAccessLocked(uid_t uid, const String16& opPackageName) {
+#if MI_SENSORSERVICE_FEATURE_ENABLE
+    return !mSensorPrivacyPolicy->isSensorPrivacyEnabled()
+        && (isUidActive(uid) || MiSensorServiceStub::isonwhitelist(String8(opPackageName)))
+        && !isOperationRestrictedLocked(opPackageName);
+#else
+#ifdef HAS_SENSOR_CONTROL
+    if (MiSensorServiceStub::appIsControlledLocked(uid, -1)) {
+        return false;
+    }
+#endif
     return !mSensorPrivacyPolicy->isSensorPrivacyEnabled()
         && isUidActive(uid) && !isOperationRestrictedLocked(opPackageName);
+#endif
 }
 
 const Sensor& SensorService::registerSensor(SensorInterface* s, bool isDebug, bool isVirtual) {
@@ -454,6 +476,70 @@ status_t SensorService::dump(int fd, const Vector<String16>& args) {
                 IPCThreadState::self()->getCallingUid());
     } else {
         bool privileged = IPCThreadState::self()->getCallingUid() == 0;
+
+        if (args.size() >= 2) {
+            // MIUI ADD: START
+            if (args[0] == String16("virtual")) {
+                ALOGI("dumpsys sensor virtual command");
+                int type = -1;
+                float data0 = 0, data1 = 0, data2 = 0;
+                if (args[1] == String16("start")) {
+                    bool debuggable = property_get_bool("ro.debuggable", false);
+                    if(!debuggable) {
+                        return INVALID_OPERATION;
+                    }
+                    SensorDevice& tmpDev(SensorDevice::getInstance());
+                    disableAllSensors();
+                    sensors_event_t tempdata;
+                    tempdata.version = 0xFFFF;
+                    tmpDev.injectSensorData(&tempdata);
+                    ALOGI("dumpsys sensor start virtual command");
+                    return NO_ERROR;
+                } else if (args[1] == String16("end")) {
+                    SensorDevice& tmpDev(SensorDevice::getInstance());
+                    sensors_event_t tempdata;
+                    tempdata.version = 0xFFFE;
+                    tmpDev.injectSensorData(&tempdata);
+                    ALOGI("dumpsys sensor stop virtual command");
+                    enableAllSensors();
+                    return NO_ERROR;
+                }
+
+                if (args.size() == 3) {
+                    type = std::stoi(String8(args[1]).string());
+                    data0 = std::stof(String8(args[2]).string());
+                } else if (args.size() == 5) {
+                    type = std::stoi(String8(args[1]).string());
+                    data0 = std::stof(String8(args[2]).string());
+                    data1 = std::stof(String8(args[3]).string());
+                    data2 = std::stof(String8(args[4]).string());
+                } else {
+                    ALOGE("dumpsys sensor virtual command error!");
+                    return INVALID_OPERATION;
+                }
+                ALOGI("Using SensorService Dump for Triggering Inject Sensor Data, type: %d, data: %f, "
+                    "%f, %f",
+                    type, data0, data1, data2);
+                SensorDevice& tmpDev(SensorDevice::getInstance());
+                sensors_event_t tempdata;
+                tempdata.type = type;
+                tempdata.data[0] = data0;
+                tempdata.data[1] = data1;
+                tempdata.data[2] = data2;
+                tempdata.version = 0xFFFD;
+                tempdata.timestamp = android::elapsedRealtimeNano();
+                tmpDev.injectSensorData(&tempdata);
+                return NO_ERROR;
+            }
+            // END
+        }
+#ifdef HAS_SENSOR_CONTROL
+        if ((3 == args.size() || (4 == args.size())) && args[0] == String16("sensorsControl")) {
+            if (NO_ERROR == MiSensorServiceStub::executeCommand(this, args)) {
+                return NO_ERROR;
+            }
+        }
+#endif
         if (args.size() > 2) {
            return INVALID_OPERATION;
         }
@@ -558,6 +644,9 @@ status_t SensorService::dump(int fd, const Vector<String16>& args) {
                                 mSocketBufferSize/sizeof(sensors_event_t));
             result.appendFormat("WakeLock Status: %s \n", mWakeLockAcquired ? "acquired" :
                     "not held");
+#if MI_SCREEN_PROJECTION
+            result.append(MiSensorServiceStub::getDumpsysInfo());
+#endif
             result.appendFormat("Mode :");
             switch(mCurrentOperatingMode) {
                case NORMAL:
@@ -585,7 +674,9 @@ status_t SensorService::dump(int fd, const Vector<String16>& args) {
                 result.appendFormat("Direct connection %zu:\n", i);
                 directConnections[i]->dump(result);
             }
-
+#ifdef HAS_SENSOR_CONTROL
+            MiSensorServiceStub::dumpResultLocked(result);
+#endif
             result.appendFormat("Previous Registrations:\n");
             // Log in the reverse chronological order.
             int currentIndex = (mNextSensorRegIndex - 1 + SENSOR_REGISTRATIONS_BUF_SIZE) %
@@ -1000,6 +1091,25 @@ bool SensorService::threadLoop() {
             }
             device.writeWakeLockHandled(wakeEvents);
         }
+
+        // MIUI ADD: START
+        // handle for reversed device state for foldable
+        if (mReversedState) {
+            for (int i = 0; i < count; i++) {
+                if (mSensorEventBuffer[i].type == SENSOR_TYPE_ACCELEROMETER) {
+                    mSensorEventBuffer[i].data[0] = -mSensorEventBuffer[i].data[0];
+                    mSensorEventBuffer[i].data[2] = -mSensorEventBuffer[i].data[2];
+                } else if (mSensorEventBuffer[i].type == SENSOR_TYPE_DEVICE_ORIENTATION) {
+                    if (mSensorEventBuffer[i].data[0] == 3) {
+                        mSensorEventBuffer[i].data[0] = 1;
+                    } else if (mSensorEventBuffer[i].data[0] == 1) {
+                        mSensorEventBuffer[i].data[0] = 3;
+                    }
+                }
+            }
+        }
+        // END
+
         recordLastValueLocked(mSensorEventBuffer, count);
 
         // handle virtual sensors
@@ -1121,8 +1231,15 @@ bool SensorService::threadLoop() {
         // lock if none of the clients need it.
         bool needsWakeLock = false;
         for (const sp<SensorEventConnection>& connection : activeConnections) {
+#if MI_SCREEN_PROJECTION
+            if(!MiSensorServiceStub::isSensorDisableApp(String8(connection->getOpPackageName()))) {
+                connection->sendEvents(mSensorEventBuffer, count, mSensorEventScratch,
+                        mMapFlushEventsToConnections);
+            }
+#else
             connection->sendEvents(mSensorEventBuffer, count, mSensorEventScratch,
                     mMapFlushEventsToConnections);
+#endif
             needsWakeLock |= connection->needsWakeLock();
             // If the connection has one-shot sensors, it may be cleaned up after first trigger.
             // Early check for one-shot sensors.
@@ -1394,6 +1511,22 @@ sp<ISensorEventConnection> SensorService::createSensorEventConnection(const Stri
     return result;
 }
 
+#if MI_SCREEN_PROJECTION
+// MIUI ADD: START
+void SensorService::setSensorDisableApp(const String8& packageName) {
+    Mutex::Autolock _l(mLock);
+    MiSensorServiceStub::setSensorDisableApp(packageName);
+}
+
+
+void SensorService::removeSensorDisableApp(const String8& packageName) {
+    Mutex::Autolock _l(mLock);
+    MiSensorServiceStub::removeSensorDisableApp(packageName);
+}
+// END
+#endif
+
+
 int SensorService::isDataInjectionEnabled() {
     Mutex::Autolock _l(mLock);
     return (mCurrentOperatingMode == DATA_INJECTION);
@@ -1614,6 +1747,9 @@ void SensorService::cleanupConnection(SensorEventConnection* c) {
             sp<SensorInterface> sensor = getSensorInterfaceFromHandle(handle);
             if (sensor != nullptr) {
                 sensor->activate(c, false);
+            //for SensorEventToOneTrack
+            MiSensorServiceStub::SaveSensorUsageItem(sensor->getSensor().getType(),
+                                       getSensorName(handle), c->getPackageName(), false);
             } else {
                 ALOGE("sensor interface of handle=0x%08x is null!", handle);
             }
@@ -1733,6 +1869,15 @@ status_t SensorService::removeProximityActiveListener(
     return NAME_NOT_FOUND;
 }
 
+// MIUI ADD: START
+// set reversed device state for foldable
+status_t SensorService::setReversedState(bool reverse) {
+    ALOGD_IF(DEBUG_CONNECTIONS, "setReversedState reverse=%d", reverse);
+    mReversedState = reverse;
+    return OK;
+}
+// END
+
 sp<SensorInterface> SensorService::getSensorInterfaceFromHandle(int handle) const {
     return mSensors.getInterface(handle);
 }
@@ -1810,10 +1955,15 @@ status_t SensorService::enable(const sp<SensorEventConnection>& connection,
     }
 
     if (connection->addSensor(handle)) {
-        BatteryService::enableSensor(connection->getUid(), handle);
+        //MI MOD:
+        //BatteryService::enableSensor(connection->getUid(), handle);
+        BatteryService::enableSensor(connection->getUid(), handle, String16(connection->getPackageName()));
         // the sensor was added (which means it wasn't already there)
         // so, see if this connection becomes active
         mConnectionHolder.addEventConnectionIfNotPresent(connection);
+        //for SensorEventToOneTrack
+        MiSensorServiceStub::SaveSensorUsageItem(sensor->getSensor().getType(),
+                                       getSensorName(handle), connection->getPackageName(), true);
     } else {
         ALOGW("sensor %08x already enabled in connection %p (ignoring)",
             handle, connection.get());
@@ -1897,6 +2047,10 @@ status_t SensorService::disable(const sp<SensorEventConnection>& connection, int
         mLastNSensorRegistrations.editItemAt(mNextSensorRegIndex) =
                 SensorRegistrationInfo(handle, connection->getPackageName(), 0, 0, false);
         mNextSensorRegIndex = (mNextSensorRegIndex + 1) % SENSOR_REGISTRATIONS_BUF_SIZE;
+        //for SensorEventToOneTrack
+        sp<SensorInterface> sensor = getSensorInterfaceFromHandle(handle);
+        MiSensorServiceStub::SaveSensorUsageItem(sensor->getSensor().getType(),
+                                       getSensorName(handle), connection->getPackageName(), false);
     }
     return err;
 }
@@ -1913,7 +2067,9 @@ status_t SensorService::cleanupWithoutDisableLocked(
     if (rec) {
         // see if this connection becomes inactive
         if (connection->removeSensor(handle)) {
-            BatteryService::disableSensor(connection->getUid(), handle);
+            //MI MOD:
+            //BatteryService::disableSensor(connection->getUid(), handle);
+            BatteryService::disableSensor(connection->getUid(), handle, String16(connection->getPackageName()));
         }
         if (connection->hasAnySensor() == false) {
             connection->updateLooperRegistration(mLooper);

@@ -54,6 +54,11 @@ public:
     virtual bool needsReleaseNotify() = 0;
 
     virtual void onBuffersDiscarded(const std::vector<sp<GraphicBuffer>>& buffers) = 0;
+    // MIUI ADD: START
+    virtual void onBufferDetached(int /**slot**/) {
+        //default do nothing
+    }
+    // MIUI ADD: END
 };
 
 /*
@@ -187,6 +192,9 @@ public:
 
     status_t getWideColorSupport(bool* supported);
     status_t getHdrSupport(bool* supported);
+
+    // MIUI ADD
+    void setInverseDisplayEnable(bool enable);
 
     status_t getUniqueId(uint64_t* outId) const;
     status_t getConsumerUsage(uint64_t* outUsage) const;
@@ -333,6 +341,8 @@ public:
             bool reportBufferRemoval);
     virtual int detachNextBuffer(sp<GraphicBuffer>* outBuffer,
             sp<Fence>* outFence);
+    // MIUI ADD
+    virtual void releaseSlot(int slot);
     virtual int attachBuffer(ANativeWindowBuffer*);
 
     virtual int connect(
@@ -388,10 +398,18 @@ protected:
         }
 
         virtual void onBuffersDiscarded(const std::vector<int32_t>& slots);
+
+        // MIUI ADD: START
+        virtual void onBufferDetached(int slot) {
+            mSurfaceListener->onBufferDetached(slot);
+        }
+        // MIUI ADD: END
     private:
         wp<Surface> mParent;
         sp<SurfaceListener> mSurfaceListener;
     };
+
+    friend class MiSurfaceImpl;
 
     void querySupportedTimestampsLocked() const;
 
@@ -609,6 +627,9 @@ protected:
 
     // Buffers that are successfully dequeued/attached and handed to clients
     std::unordered_set<int> mDequeuedSlots;
+
+    // MIUI ADD
+    bool mEnableInverseDisplay = false;
 };
 
 } // namespace android

@@ -91,8 +91,8 @@ int main(int argc, char* argv[]) {
     for (int i = 0; i < 20; i++) {
         s = socket_local_client("dumpstate", ANDROID_SOCKET_NAMESPACE_RESERVED, SOCK_STREAM);
         if (s >= 0) break;
-        // Try again in 1 second.
-        sleep(1);
+        // Try again in 2 second.
+        sleep(2);
     }
 
     if (s == -1) {

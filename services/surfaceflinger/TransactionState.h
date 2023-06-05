@@ -66,6 +66,17 @@ struct TransactionState {
         }
     }
 
+#if MI_DEFER_GESTURE_ANIM
+    void traverseStatesNeedCache(std::function<void(const layer_state_t&)> visitor) {
+        for (const auto& state : states) {
+            if ((state.state.hasBufferChanges() && state.state.hasValidBuffer() && state.state.surface) ||
+                (state.state.deferAnimation && !transactionCommittedSignal)) {
+                visitor(state.state);
+            }
+        }
+    }
+#endif
+
     // TODO(b/185535769): Remove FrameHint. Instead, reset the idle timer (of the relevant physical
     // display) on the main thread if commit leads to composite. Then, RefreshRateOverlay should be
     // able to setFrameRate once, rather than for each transaction.

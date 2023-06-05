@@ -35,6 +35,9 @@ public:
 
 protected:
     bool canDrawShadows() const override { return false; }
+#ifdef MI_SF_FEATURE
+    bool canDrawHdrDim() const override { return false; }
+#endif
     sp<Layer> createClone() override;
 };
 

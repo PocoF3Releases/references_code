@@ -28,6 +28,9 @@
 #include <cinttypes>
 #include <numeric>
 #include <unordered_set>
+#ifdef MI_FEATURE_ENABLE
+#include "../MiuiSurfaceFlingerInspectorStub.h"
+#endif
 
 namespace android::frametimeline {
 
@@ -736,6 +739,13 @@ void SurfaceFrame::trace(int64_t displayFrameToken, nsecs_t monoBootOffset) cons
         tracePredictions(displayFrameToken, monoBootOffset);
     }
     traceActuals(displayFrameToken, monoBootOffset);
+#ifdef MI_FEATURE_ENABLE
+    MiuiSurfaceFlingerInspectorStub::monitorAppFrame(
+                                            mLayerName, mToken, displayFrameToken,
+                                            getActuals().endTime - mPredictions.endTime,
+                                            mPredictions.endTime - mPredictions.startTime,
+                                            getJankType().value() & JankType::AppDeadlineMissed);
+#endif
 }
 
 namespace impl {
@@ -789,15 +799,35 @@ std::shared_ptr<SurfaceFrame> FrameTimeline::createSurfaceFrameForToken(
         std::string layerName, std::string debugName, bool isBuffer, GameMode gameMode) {
     ATRACE_CALL();
     if (frameTimelineInfo.vsyncId == FrameTimelineInfo::INVALID_VSYNC_ID) {
+#ifdef MI_FEATURE_ENABLE
+        FrameTimelineInfo currentFrameTimelineInfo = frameTimelineInfo;
+        TimelineItem predictions = TimelineItem();
+        MiuiSurfaceFlingerInspectorStub::getCurrentSurfaceFrameInfo(layerName,
+            currentFrameTimelineInfo.startTimeNanos, &currentFrameTimelineInfo.vsyncId,
+            &predictions.startTime, &predictions.endTime, &predictions.presentTime);
+        PredictionState predictionState = (predictions != TimelineItem() ? PredictionState::Valid :
+                                                                           PredictionState::None);
+        return std::make_shared<SurfaceFrame>(currentFrameTimelineInfo, ownerPid, ownerUid, layerId,
+                                              std::move(layerName), std::move(debugName),
+                                              predictionState, std::move(predictions), mTimeStats,
+                                              mJankClassificationThresholds, &mTraceCookieCounter,
+                                              isBuffer, gameMode);
+#else
         return std::make_shared<SurfaceFrame>(frameTimelineInfo, ownerPid, ownerUid, layerId,
                                               std::move(layerName), std::move(debugName),
                                               PredictionState::None, TimelineItem(), mTimeStats,
                                               mJankClassificationThresholds, &mTraceCookieCounter,
                                               isBuffer, gameMode);
+#endif
     }
     std::optional<TimelineItem> predictions =
             mTokenManager.getPredictionsForToken(frameTimelineInfo.vsyncId);
     if (predictions) {
+#ifdef MI_FEATURE_ENABLE
+        MiuiSurfaceFlingerInspectorStub::setLastPredictions(layerName, predictions->startTime,
+                                                            predictions->endTime,
+                                                            predictions->presentTime);
+#endif
         return std::make_shared<SurfaceFrame>(frameTimelineInfo, ownerPid, ownerUid, layerId,
                                               std::move(layerName), std::move(debugName),
                                               PredictionState::Valid, std::move(*predictions),
@@ -833,6 +863,9 @@ void FrameTimeline::setSfWakeUp(int64_t token, nsecs_t wakeUpTime, Fps refreshRa
     std::scoped_lock lock(mMutex);
     mCurrentDisplayFrame->onSfWakeUp(token, refreshRate,
                                      mTokenManager.getPredictionsForToken(token), wakeUpTime);
+#ifdef MI_FEATURE_ENABLE
+    MiuiSurfaceFlingerInspectorStub::setVsyncPeriodNsecs(refreshRate.getPeriodNsecs());
+#endif
 }
 
 void FrameTimeline::setSfPresent(nsecs_t sfPresentTime,

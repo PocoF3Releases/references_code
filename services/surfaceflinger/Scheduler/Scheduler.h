@@ -75,6 +75,7 @@ namespace android {
 
 class FenceTime;
 class InjectVSyncSource;
+class MiSurfaceFlingerImpl;
 
 namespace frametimeline {
 class TokenManager;
@@ -119,6 +120,8 @@ public:
 
     using Impl::scheduleFrame;
     using Impl::scheduleFrameImmed;
+
+    using Impl::postMessage;
 
     // Schedule an asynchronous or synchronous task on the main thread.
     template <typename F, typename T = std::invoke_result_t<F>>
@@ -243,11 +246,19 @@ public:
         return mLayerHistory.getLayerFramerate(now, id);
     }
 
+#if MI_FEATURE_ENABLE
+    enum class VideoCodecFpsSwitchState { NoChange, Change };
+    std::string setVideoCodecFpsSwitchStateName(VideoCodecFpsSwitchState state);
+    void setVideoCodecFpsSwitchState(VideoCodecFpsSwitchState state);
+    void qsyncDisableVsync(bool disableVsync);
+#endif
+
     void setIdleState();
     void updateThermalFps(float fps);
 
 private:
     friend class TestableScheduler;
+    friend class ::android::MiSurfaceFlingerImpl;
 
     enum class ContentDetectionState { Off, On };
     enum class TimerState { Reset, Expired };
@@ -334,6 +345,13 @@ private:
         TouchState touch = TouchState::Inactive;
         TimerState displayPowerTimer = TimerState::Expired;
         bool isDisplayPowerStateNormal = true;
+#if MI_FEATURE_ENABLE
+        VideoCodecFpsSwitchState videoCodec = VideoCodecFpsSwitchState::NoChange;
+        bool isVideoTimerSkip = false;
+        bool isTouchTimerSkip = false;
+        bool isIdleTimerSkip = false;
+        bool isIdleState = false;
+#endif
 
         // Chosen display mode.
         DisplayModePtr mode;
@@ -368,6 +386,9 @@ private:
 
     // Cache thermal Fps, and limit to the given level
     float mThermalFps = 0.0f;
+#if MI_FEATURE_ENABLE
+    bool mQsyncDisableVsyncPeriod = false;
+#endif
 };
 
 } // namespace scheduler

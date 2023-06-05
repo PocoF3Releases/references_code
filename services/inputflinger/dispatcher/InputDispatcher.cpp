@@ -42,6 +42,8 @@
 #include "Connection.h"
 #include "DebugConfig.h"
 #include "InputDispatcher.h"
+// MIUI ADD:
+#include "../stubs/MiInputDispatcherStub.h"
 
 #define INDENT "  "
 #define INDENT2 "    "
@@ -60,6 +62,16 @@ using android::os::BlockUntrustedTouchesMode;
 using android::os::IInputConstants;
 using android::os::InputEventInjectionResult;
 using android::os::InputEventInjectionSync;
+
+// MIUI ADD START:
+#ifdef MIUI_BUILD
+// on miui version we should modify ALOGD working way, let ALOGD control by dumpsys input debuglog
+#undef ALOGD
+#define ALOGD(...)                                      \
+    if (MiInputDispatcherStub::getInputDispatcherAll()) \
+    __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+#endif
+// END
 
 namespace android::inputdispatcher {
 
@@ -343,6 +355,12 @@ std::unique_ptr<DispatchEntry> createDispatchEntry(const InputTarget& inputTarge
         combinedMotionEntry->injectionState->refCount += 1;
     }
 
+    // MIUI ADD: START Activity Embedding
+    if(MiInputDispatcherStub::isNeedMiuiEmbeddedEventMapping(inputTarget)) {
+        return MiInputDispatcherStub::creatEmbeddedEventMappingEntry(combinedMotionEntry, inputTargetFlags, inputTarget);
+    }
+    // END
+
     std::unique_ptr<DispatchEntry> dispatchEntry =
             std::make_unique<DispatchEntry>(std::move(combinedMotionEntry), inputTargetFlags,
                                             firstPointerTransform, inputTarget.displayTransform,
@@ -559,6 +577,8 @@ InputDispatcher::InputDispatcher(const sp<InputDispatcherPolicyInterface>& polic
     mReporter = createInputReporter();
 
     mWindowInfoListener = new DispatcherWindowListener(*this);
+    // MIUI ADD:
+    MiInputDispatcherStub::init(this);
     SurfaceComposerClient::getDefault()->addWindowInfosListener(mWindowInfoListener);
 
     mKeyRepeatState.lastKeyEntry = nullptr;
@@ -621,6 +641,8 @@ void InputDispatcher::dispatchOnce() {
         // we might have to wake up earlier to check if an app is anr'ing.
         const nsecs_t nextAnrCheck = processAnrsLocked();
         nextWakeupTime = std::min(nextWakeupTime, nextAnrCheck);
+        // MIUI ADD:
+        MiInputDispatcherStub::checkHotDownTimeoutLocked(&nextWakeupTime);
 
         // We are about to enter an infinitely long sleep, because we have no commands or
         // pending or queued events
@@ -772,6 +794,12 @@ void InputDispatcher::dispatchOnceInnerLocked(nsecs_t* nextWakeupTime) {
             mPendingEvent = mInboundQueue.front();
             mInboundQueue.pop_front();
             traceInboundQueueLengthLocked();
+            // MIUI ADD: START
+            if (MiInputDispatcherStub::needSkipEventAfterPopupFromInboundQueueLocked(
+                        nextWakeupTime)) {
+                return;
+            }
+            // END
         }
 
         // Poke user activity for this event.
@@ -1075,6 +1103,11 @@ sp<WindowInfoHandle> InputDispatcher::findTouchedWindowAtLocked(int32_t displayI
 
         const WindowInfo& info = *windowHandle->getInfo();
         if (!info.isSpy() && windowAcceptsTouchAt(info, displayId, x, y, isStylus)) {
+            //MIUI ADD: START
+            if (addOutsideTargets && MiInputDispatcherStub::needSkipWindowLocked(info)) {
+                continue;
+            }
+            //END
             return windowHandle;
         }
 
@@ -1091,6 +1124,12 @@ std::vector<sp<WindowInfoHandle>> InputDispatcher::findTouchedSpyWindowsAtLocked
         int32_t displayId, int32_t x, int32_t y, bool isStylus) const {
     // Traverse windows from front to back and gather the touched spy windows.
     std::vector<sp<WindowInfoHandle>> spyWindows;
+    // MIUI ADD: START
+    // do not dispatch hot down to Monitor
+    if (MiInputDispatcherStub::needSkipDispatchToSpyWindow()) {
+        return spyWindows;
+    }
+    //END
     const auto& windowHandles = getWindowHandlesLocked(displayId);
     for (const sp<WindowInfoHandle>& windowHandle : windowHandles) {
         const WindowInfo& info = *windowHandle->getInfo();
@@ -1656,11 +1695,16 @@ bool InputDispatcher::dispatchMotionLocked(nsecs_t currentTime, std::shared_ptr<
 
     bool conflictingPointerActions = false;
     InputEventInjectionResult injectionResult;
+    // MIUI ADD:
+    MiInputDispatcherStub::beforePointerEventFindTargetsLocked(currentTime, entry.get(),
+                                                               nextWakeupTime);
     if (isPointerEvent) {
         // Pointer event.  (eg. touchscreen)
         injectionResult =
                 findTouchedWindowTargetsLocked(currentTime, *entry, inputTargets, nextWakeupTime,
                                                &conflictingPointerActions);
+        // MIUI ADD:
+        MiInputDispatcherStub::afterPointerEventFindTouchedWindowTargetsLocked(entry.get());
     } else {
         // Non touch event.  (eg. trackball)
         injectionResult =
@@ -2072,7 +2116,7 @@ InputEventInjectionResult InputDispatcher::findTouchedWindowTargetsLocked(
         const bool isStylus = isPointerFromStylus(entry, pointerIndex);
         newTouchedWindowHandle = findTouchedWindowAtLocked(displayId, x, y, &tempTouchState,
                                                            isStylus, isDown /*addOutsideTargets*/);
-
+        MiInputDispatcherStub::afterFindTouchedWindowAtDownActionLocked(newTouchedWindowHandle, entry);
         // Handle the case where we did not find a window.
         if (newTouchedWindowHandle == nullptr) {
             ALOGD("No new touched window at (%" PRId32 ", %" PRId32 ") in display %" PRId32, x, y,
@@ -2192,6 +2236,9 @@ InputEventInjectionResult InputDispatcher::findTouchedWindowTargetsLocked(
             } else if (isWindowObscuredLocked(windowHandle)) {
                 targetFlags |= InputTarget::FLAG_WINDOW_IS_PARTIALLY_OBSCURED;
             }
+            // MIUI ADD:
+            MiInputDispatcherStub::addExtraTargetFlagLocked(windowHandle, x, y,
+                                                            /*by ref*/ targetFlags);
 
             // Update the temporary touch state.
             BitSet32 pointerIds;
@@ -2273,6 +2320,9 @@ InputEventInjectionResult InputDispatcher::findTouchedWindowTargetsLocked(
                 } else if (isWindowObscuredLocked(newTouchedWindowHandle)) {
                     targetFlags |= InputTarget::FLAG_WINDOW_IS_PARTIALLY_OBSCURED;
                 }
+                // MIUI ADD:
+                MiInputDispatcherStub::addExtraTargetFlagLocked(newTouchedWindowHandle, x, y,
+                                                                /*by ref*/ targetFlags);
 
                 BitSet32 pointerIds;
                 if (isSplit) {
@@ -2625,6 +2675,12 @@ void InputDispatcher::addWindowTargetLocked(const sp<WindowInfoHandle>& windowHa
     ALOG_ASSERT(it->flags == targetFlags);
     ALOG_ASSERT(it->globalScaleFactor == windowInfo->globalScaleFactor);
 
+    // MIUI ADD: START Activity Embedding
+    if(MiInputDispatcherStub::addEmbeddedEventMappingPointers(*it, pointerIds, windowInfo)) {
+        return;
+    }
+    //END
+
     it->addPointers(pointerIds, windowInfo->transform);
 }
 
@@ -2641,6 +2697,8 @@ void InputDispatcher::addGlobalMonitoringTargetsLocked(std::vector<InputTarget>&
             target.displayTransform = it->second.transform;
         }
         target.setDefaultPointerTransform(target.displayTransform);
+        // MIUI ADD:
+        MiInputDispatcherStub::whileAddGlobalMonitoringTargetsLocked(monitor, target);
         inputTargets.push_back(target);
     }
 }
@@ -2726,6 +2784,8 @@ InputDispatcher::TouchOcclusionInfo InputDispatcher::computeTouchOcclusionInfoLo
                 info.hasBlockingOcclusion = true;
                 info.obscuringUid = otherInfo->ownerUid;
                 info.obscuringPackage = otherInfo->packageName;
+                // MIUI ADD:
+                info.obscuringWindowName = otherInfo->name;
                 break;
             }
             if (otherInfo->touchOcclusionMode == TouchOcclusionMode::USE_OPACITY) {
@@ -2740,6 +2800,8 @@ InputDispatcher::TouchOcclusionInfo InputDispatcher::computeTouchOcclusionInfoLo
                     info.obscuringOpacity = opacity;
                     info.obscuringUid = uid;
                     info.obscuringPackage = otherInfo->packageName;
+                    // MIUI ADD:
+                    info.obscuringWindowName = otherInfo->name;
                 }
             }
         }
@@ -2768,15 +2830,27 @@ std::string InputDispatcher::dumpWindowForTouchOcclusion(const WindowInfo* info,
 
 bool InputDispatcher::isTouchTrustedLocked(const TouchOcclusionInfo& occlusionInfo) const {
     if (occlusionInfo.hasBlockingOcclusion) {
-        ALOGW("Untrusted touch due to occlusion by %s/%d", occlusionInfo.obscuringPackage.c_str(),
-              occlusionInfo.obscuringUid);
+        // MIUI MOD: START
+        // ALOGW("Untrusted touch due to occlusion by
+        // %s/%d",occlusionInfo.obscuringPackage.c_str(),occlusionInfo.obscuringUid);
+        ALOGW("Untrusted touch due to occlusion by %s/%d/%s",
+              occlusionInfo.obscuringPackage.c_str(), occlusionInfo.obscuringUid,
+              occlusionInfo.obscuringWindowName.c_str());
+        // END
         return false;
     }
     if (occlusionInfo.obscuringOpacity > mMaximumObscuringOpacityForTouch) {
-        ALOGW("Untrusted touch due to occlusion by %s/%d (obscuring opacity = "
+        // MIUI MOD: START
+        // ALOGW("Untrusted touch due to occlusion by %s/%d (obscuring opacity = "
+        //       "%.2f, maximum allowed = %.2f)",
+        //       occlusionInfo.obscuringPackage.c_str(), occlusionInfo.obscuringUid,
+        //       occlusionInfo.obscuringOpacity, mMaximumObscuringOpacityForTouch);
+        ALOGW("Untrusted touch due to occlusion by %s/%d/%s (obscuring opacity = "
               "%.2f, maximum allowed = %.2f)",
               occlusionInfo.obscuringPackage.c_str(), occlusionInfo.obscuringUid,
-              occlusionInfo.obscuringOpacity, mMaximumObscuringOpacityForTouch);
+              occlusionInfo.obscuringWindowName.c_str(), occlusionInfo.obscuringOpacity,
+              mMaximumObscuringOpacityForTouch);
+        // END
         return false;
     }
     return true;
@@ -2876,6 +2950,11 @@ void InputDispatcher::pokeUserActivityLocked(const EventEntry& eventEntry) {
         }
     }
 
+    // MIUI ADD : START
+    if (!MiInputDispatcherStub::needPokeUserActivityLocked(eventEntry)) {
+        return;
+    }
+    // END
     auto command = [this, eventTime = eventEntry.eventTime, eventType, displayId]()
                            REQUIRES(mLock) {
                                scoped_unlock unlock(mLock);
@@ -3064,6 +3143,8 @@ void InputDispatcher::enqueueDispatchEntryLocked(const sp<Connection>& connectio
             if (dispatchEntry->targetFlags & InputTarget::FLAG_WINDOW_IS_PARTIALLY_OBSCURED) {
                 dispatchEntry->resolvedFlags |= AMOTION_EVENT_FLAG_WINDOW_IS_PARTIALLY_OBSCURED;
             }
+            // MIUI ADD:
+            MiInputDispatcherStub::addMotionExtraResolvedFlagLocked(dispatchEntry);
 
             if (!connection->inputState.trackMotion(motionEntry, dispatchEntry->resolvedAction,
                                                     dispatchEntry->resolvedFlags)) {
@@ -3182,6 +3263,8 @@ void InputDispatcher::updateInteractionTokensLocked(const EventEntry& entry,
     std::string targetList;
     for (const sp<Connection>& connection : newConnections) {
         targetList += connection->getWindowName() + ", ";
+        // MIUI ADD:
+        MiInputDispatcherStub::appendDetailInfoForConnectionLocked(connection, targetList);
     }
     std::string message = "Interaction with: " + targetList;
     if (targetList.empty()) {
@@ -3246,6 +3329,8 @@ void InputDispatcher::startDispatchCycleLocked(nsecs_t currentTime,
                                                   keyEntry.scanCode, keyEntry.metaState,
                                                   keyEntry.repeatCount, keyEntry.downTime,
                                                   keyEntry.eventTime);
+                // MIUI ADD:
+                MiInputDispatcherStub::afterPublishEvent(status, connection, dispatchEntry);
                 break;
             }
 
@@ -3282,6 +3367,9 @@ void InputDispatcher::startDispatchCycleLocked(nsecs_t currentTime,
 
                 std::array<uint8_t, 32> hmac = getSignature(motionEntry, *dispatchEntry);
 
+                // MIUI ADD: Activity Embedding
+                MiInputDispatcherStub::embeddedEventMapping(dispatchEntry, motionEntry, usingCoords);
+
                 // Publish the motion event.
                 status = connection->inputPublisher
                                  .publishMotionEvent(dispatchEntry->seq,
@@ -3302,6 +3390,8 @@ void InputDispatcher::startDispatchCycleLocked(nsecs_t currentTime,
                                                      motionEntry.downTime, motionEntry.eventTime,
                                                      motionEntry.pointerCount,
                                                      motionEntry.pointerProperties, usingCoords);
+                // MIUI ADD:
+                MiInputDispatcherStub::afterPublishEvent(status, connection, dispatchEntry);
                 break;
             }
 
@@ -3353,7 +3443,19 @@ void InputDispatcher::startDispatchCycleLocked(nsecs_t currentTime,
         // Check the result.
         if (status) {
             if (status == WOULD_BLOCK) {
+                // MIUI ADD: START
+                if (MiInputDispatcherStub::isOnewayMode()) {
+                    // start the next dispatch cycle for this connection when the pipe is not full.
+                    MiInputDispatcherStub::addCallbackForOnewayMode(connection, true);
+                    return;
+                }
+                // END
                 if (connection->waitQueue.empty()) {
+                    // MIUI ADD: START
+                    if(MiInputDispatcherStub::isBerserkMode() && connection->monitor) {
+                        return;
+                    }
+                    // END
                     ALOGE("channel '%s' ~ Could not publish event because the pipe is full. "
                           "This is unexpected because the wait queue is empty, so the pipe "
                           "should be empty and we shouldn't have any problems writing an "
@@ -3385,6 +3487,14 @@ void InputDispatcher::startDispatchCycleLocked(nsecs_t currentTime,
                                                     connection->outboundQueue.end(),
                                                     dispatchEntry));
         traceOutboundQueueLength(*connection);
+        // MIUI ADD: START
+        if (MiInputDispatcherStub::isOnewayEvent(eventEntry)) {
+            ALOGD("skip motion event anr monitor in oneway mode");
+            traceWaitQueueLength(*connection);
+            delete dispatchEntry;
+            continue;
+        }
+        // END
         connection->waitQueue.push_back(dispatchEntry);
         if (connection->responsive) {
             mAnrTracker.insert(dispatchEntry->timeoutTime,
@@ -3892,6 +4002,8 @@ void InputDispatcher::accelerateMetaShortcuts(const int32_t deviceId, const int3
             metaState &= ~(AMETA_META_ON | AMETA_META_LEFT_ON | AMETA_META_RIGHT_ON);
         }
     }
+    // MIUI ADD:
+    MiInputDispatcherStub::accelerateMetaShortcutsAction(deviceId, action, keyCode, metaState);
 }
 
 void InputDispatcher::notifyKey(const NotifyKeyArgs* args) {
@@ -3906,6 +4018,8 @@ void InputDispatcher::notifyKey(const NotifyKeyArgs* args) {
     if (!validateKeyEvent(args->action)) {
         return;
     }
+    //MIUI ADD:
+    MiInputDispatcherStub::beforeNotifyKey(args);
 
     uint32_t policyFlags = args->policyFlags;
     int32_t flags = args->flags;
@@ -3933,6 +4047,8 @@ void InputDispatcher::notifyKey(const NotifyKeyArgs* args) {
 
     android::base::Timer t;
     mPolicy->interceptKeyBeforeQueueing(&event, /*byref*/ policyFlags);
+    //MIUI ADD:
+    MiInputDispatcherStub::changeInjectedKeyEventPolicyFlags(event, policyFlags);
     if (t.duration() > SLOW_INTERCEPTION_THRESHOLD) {
         ALOGW("Excessive delay in interceptKeyBeforeQueueing; took %s ms",
               std::to_string(t.duration().count()).c_str());
@@ -4007,9 +4123,13 @@ void InputDispatcher::notifyMotion(const NotifyMotionArgs* args) {
 
     uint32_t policyFlags = args->policyFlags;
     policyFlags |= POLICY_FLAG_TRUSTED;
+    // MIUI ADD:
+    MiInputDispatcherStub::beforeNotifyMotion(args);
 
     android::base::Timer t;
     mPolicy->interceptMotionBeforeQueueing(args->displayId, args->eventTime, /*byref*/ policyFlags);
+    // MIUI ADD:
+    MiInputDispatcherStub::changeInjectedMotionArgsPolicyFlags(args, policyFlags);
     if (t.duration() > SLOW_INTERCEPTION_THRESHOLD) {
         ALOGW("Excessive delay in interceptMotionBeforeQueueing; took %s ms",
               std::to_string(t.duration().count()).c_str());
@@ -4204,6 +4324,11 @@ InputEventInjectionResult InputDispatcher::injectInputEvent(const InputEvent* ev
             }
             int32_t keyCode = incomingKey.getKeyCode();
             int32_t metaState = incomingKey.getMetaState();
+            // MIUI ADD: START
+            MiInputDispatcherStub::
+                    modifyDeviceIdBeforeInjectEventInitialize(flags, /*byref*/ resolvedDeviceId,
+                                                              incomingKey.getDeviceId());
+            // END
             accelerateMetaShortcuts(resolvedDeviceId, action,
                                     /*byref*/ keyCode, /*byref*/ metaState);
             KeyEvent keyEvent;
@@ -4219,6 +4344,8 @@ InputEventInjectionResult InputDispatcher::injectInputEvent(const InputEvent* ev
             if (!(policyFlags & POLICY_FLAG_FILTERED)) {
                 android::base::Timer t;
                 mPolicy->interceptKeyBeforeQueueing(&keyEvent, /*byref*/ policyFlags);
+                //MIUI ADD:
+                MiInputDispatcherStub::changeInjectedKeyEventPolicyFlags(keyEvent, policyFlags);
                 if (t.duration() > SLOW_INTERCEPTION_THRESHOLD) {
                     ALOGW("Excessive delay in interceptKeyBeforeQueueing; took %s ms",
                           std::to_string(t.duration().count()).c_str());
@@ -4226,6 +4353,8 @@ InputEventInjectionResult InputDispatcher::injectInputEvent(const InputEvent* ev
             }
 
             mLock.lock();
+            //MIUI ADD:
+            MiInputDispatcherStub::beforeInjectEventLocked(0, event);
             std::unique_ptr<KeyEntry> injectedEntry =
                     std::make_unique<KeyEntry>(incomingKey.getId(), incomingKey.getEventTime(),
                                                resolvedDeviceId, incomingKey.getSource(),
@@ -4250,6 +4379,11 @@ InputEventInjectionResult InputDispatcher::injectInputEvent(const InputEvent* ev
             const PointerProperties* pointerProperties = motionEvent.getPointerProperties();
             const int32_t actionButton = motionEvent.getActionButton();
             int32_t flags = motionEvent.getFlags();
+            // MIUI ADD: START
+            MiInputDispatcherStub::
+                    modifyDeviceIdBeforeInjectEventInitialize(flags, /*byref*/ resolvedDeviceId,
+                                                              motionEvent.getDeviceId());
+            // END
             if (!validateMotionEvent(action, actionButton, pointerCount, pointerProperties)) {
                 return InputEventInjectionResult::FAILED;
             }
@@ -4258,6 +4392,8 @@ InputEventInjectionResult InputDispatcher::injectInputEvent(const InputEvent* ev
                 nsecs_t eventTime = motionEvent.getEventTime();
                 android::base::Timer t;
                 mPolicy->interceptMotionBeforeQueueing(displayId, eventTime, /*byref*/ policyFlags);
+                // MIUI ADD:
+                MiInputDispatcherStub::changeInjectedMotionEventPolicyFlags(motionEvent, policyFlags);
                 if (t.duration() > SLOW_INTERCEPTION_THRESHOLD) {
                     ALOGW("Excessive delay in interceptMotionBeforeQueueing; took %s ms",
                           std::to_string(t.duration().count()).c_str());
@@ -4269,6 +4405,8 @@ InputEventInjectionResult InputDispatcher::injectInputEvent(const InputEvent* ev
             }
 
             mLock.lock();
+            //MIUI ADD:
+            MiInputDispatcherStub::beforeInjectEventLocked(0, event);
             const nsecs_t* sampleEventTimes = motionEvent.getSampleEventTimes();
             const PointerCoords* samplePointerCoords = motionEvent.getSamplePointerCoords();
             std::unique_ptr<MotionEntry> injectedEntry =
@@ -4828,6 +4966,8 @@ void InputDispatcher::setFocusedApplicationLocked(
     if (sharedPointersEqual(oldFocusedApplicationHandle, inputApplicationHandle)) {
         return; // This application is already focused. No need to wake up or change anything.
     }
+    //MIUI ADD:
+    MiInputDispatcherStub::beforeSetFocusedApplicationLocked(displayId, inputApplicationHandle);
 
     // Set the new application handle.
     if (inputApplicationHandle != nullptr) {
@@ -4899,6 +5039,8 @@ void InputDispatcher::setInputDispatchMode(bool enabled, bool frozen) {
     if (DEBUG_FOCUS) {
         ALOGD("setInputDispatchMode: enabled=%d, frozen=%d", enabled, frozen);
     }
+    //MIUI ADD:
+    MiInputDispatcherStub::beforeSetInputDispatchMode(enabled, frozen);
 
     bool changed;
     { // acquire lock
@@ -4935,6 +5077,8 @@ void InputDispatcher::setInputFilterEnabled(bool enabled) {
     if (DEBUG_FOCUS) {
         ALOGD("setInputFilterEnabled: enabled=%d", enabled);
     }
+    //MIUI ADD:
+    MiInputDispatcherStub::beforeSetInputFilterEnabled(enabled);
 
     { // acquire lock
         std::scoped_lock _l(mLock);
@@ -5043,6 +5187,8 @@ bool InputDispatcher::transferTouchFocus(const sp<IBinder>& fromToken, const sp<
 
     { // acquire lock
         std::scoped_lock _l(mLock);
+        // MIUI ADD:
+        MiInputDispatcherStub::beforeTransferTouchFocusLocked(fromToken, toToken, isDragDrop);
 
         // Find the target touch state and touched window by fromToken.
         auto [state, touchedWindow] = findTouchStateAndWindowLocked(fromToken);
@@ -5868,6 +6014,8 @@ void InputDispatcher::updateLastAnrStateLocked(const std::string& windowLabel,
     mLastAnrState += StringPrintf(INDENT2 "Reason: %s\n", reason.c_str());
     mLastAnrState += StringPrintf(INDENT2 "Window: %s\n", windowLabel.c_str());
     dumpDispatchStateLocked(mLastAnrState);
+    // MIUI ADD:
+    miuiAddAnrStateLocked(timestr, windowLabel, reason);
 }
 
 void InputDispatcher::doInterceptKeyBeforeDispatchingCommand(const sp<IBinder>& focusedWindowToken,
@@ -6172,6 +6320,7 @@ void InputDispatcher::dump(std::string& dump) {
         dump += "\nInput Dispatcher State at time of last ANR:\n";
         dump += mLastAnrState;
     }
+    MiInputDispatcherStub::dump(dump);
 }
 
 void InputDispatcher::monitor() {
@@ -6216,6 +6365,8 @@ bool InputDispatcher::waitForIdle() {
 void InputDispatcher::setFocusedWindow(const FocusRequest& request) {
     { // acquire lock
         std::scoped_lock _l(mLock);
+        //MIUI ADD:
+        MiInputDispatcherStub::beforeSetFocusedWindowLocked(request);
         std::optional<FocusResolver::FocusChanges> changes =
                 mFocusResolver.setFocusedWindow(request, getWindowHandlesLocked(request.displayId));
         if (changes) {
@@ -6227,6 +6378,8 @@ void InputDispatcher::setFocusedWindow(const FocusRequest& request) {
 }
 
 void InputDispatcher::onFocusChangedLocked(const FocusResolver::FocusChanges& changes) {
+    // MIUI ADD:
+    MiInputDispatcherStub::beforeOnFocusChangedLocked(changes);
     if (changes.oldFocus) {
         std::shared_ptr<InputChannel> focusedInputChannel = getInputChannelLocked(changes.oldFocus);
         if (focusedInputChannel) {
@@ -6376,5 +6529,230 @@ void InputDispatcher::setMonitorDispatchingTimeoutForTest(std::chrono::nanosecon
     std::scoped_lock _l(mLock);
     mMonitorDispatchingTimeout = timeout;
 }
+
+// MIUI ADD: START
+void InputDispatcher::miuiAddAnrStateLocked(const std::string time, const std::string& windowLabel,
+                                      const std::string& reason) {
+    std::string dump;
+    dump += INDENT "ANR:\n";
+    dump += StringPrintf(INDENT2 "Time: %s\n", time.c_str());
+    dump += StringPrintf(INDENT2 "Reason: %s\n", reason.c_str());
+    dump += StringPrintf(INDENT2 "Window: %s\n", windowLabel.c_str());
+    uint32_t targetFlags = 0;
+    if (reason.find("is not responding") != std::string::npos) {
+        targetFlags = OUT_DUMP_ERROREVENTS;
+    } else if (reason.find("does not have a focused window") != std::string::npos) {
+        targetFlags = OUT_DUMP_WINDOW;
+    }
+    dump += StringPrintf(INDENT "DispatchEnabled: %s\n", toString(mDispatchEnabled));
+    dump += StringPrintf(INDENT "DispatchFrozen: %s\n", toString(mDispatchFrozen));
+    dump += StringPrintf(INDENT "InputFilterEnabled: %s\n", toString(mInputFilterEnabled));
+    dump += StringPrintf(INDENT "FocusedDisplayId: %" PRId32 "\n", mFocusedDisplayId);
+    if (targetFlags & OUT_DUMP_WINDOW) {
+        if (!mFocusedApplicationHandlesByDisplay.empty()) {
+            dump += StringPrintf(INDENT "FocusedApplications:\n");
+            for (auto& it : mFocusedApplicationHandlesByDisplay) {
+                const int32_t displayId = it.first;
+                const std::shared_ptr<InputApplicationHandle>& applicationHandle = it.second;
+                const std::chrono::duration timeout =
+                        applicationHandle->getDispatchingTimeout(DEFAULT_INPUT_DISPATCHING_TIMEOUT);
+                dump += StringPrintf(INDENT2 "displayId=%" PRId32
+                                             ", name='%s', dispatchingTimeout=%" PRId64 "ms\n",
+                                     displayId, applicationHandle->getName().c_str(),
+                                     millis(timeout));
+            }
+        } else {
+            dump += StringPrintf(INDENT "FocusedApplications: <none>\n");
+        }
+
+        dump += mFocusResolver.dump();
+        dump += dumpPointerCaptureStateLocked();
+
+        if (!mTouchStatesByDisplay.empty()) {
+            dump += StringPrintf(INDENT "TouchStatesByDisplay:\n");
+            for (const std::pair<int32_t, TouchState>& pair : mTouchStatesByDisplay) {
+                const TouchState& state = pair.second;
+                dump += StringPrintf(INDENT2 "%d: down=%s, split=%s, deviceId=%d, source=0x%08x\n",
+                                     state.displayId, toString(state.down), toString(state.split),
+                                     state.deviceId, state.source);
+                if (!state.windows.empty()) {
+                    dump += INDENT3 "Windows:\n";
+                    for (size_t i = 0; i < state.windows.size(); i++) {
+                        const TouchedWindow& touchedWindow = state.windows[i];
+                        dump += StringPrintf(INDENT4
+                                             "%zu: name='%s', pointerIds=0x%0x, targetFlags=0x%x\n",
+                                             i, touchedWindow.windowHandle->getName().c_str(),
+                                             touchedWindow.pointerIds.value,
+                                             touchedWindow.targetFlags);
+                    }
+                } else {
+                    dump += INDENT3 "Windows: <none>\n";
+                }
+                // TODO MIUI portalWindows in touch state was disappeared. so commented this
+                /*if (!state.portalWindows.empty()) {
+                    dump += INDENT3 "Portal windows:\n";
+                    for (size_t i = 0; i < state.portalWindows.size(); i++) {
+                        const sp<InputWindowHandle> portalWindowHandle = state.portalWindows[i];
+                        dump += StringPrintf(INDENT4 "%zu: name='%s'\n", i,
+                                             portalWindowHandle->getName().c_str());
+                    }
+                }*/
+            }
+        } else {
+            dump += INDENT "TouchStates: <no displays touched>\n";
+        }
+
+        if (mDragState) {
+            dump += StringPrintf(INDENT "DragState:\n");
+            mDragState->dump(dump, INDENT2);
+        }
+
+        if (!mWindowHandlesByDisplay.empty()) {
+            for (auto& it : mWindowHandlesByDisplay) {
+                const std::vector<sp<WindowInfoHandle>> windowHandles = it.second;
+                dump += StringPrintf(INDENT "Display: %" PRId32 "\n", it.first);
+                if (windowHandles.empty()) {
+                    dump += INDENT2 "Windows: <none>\n";
+                    continue;
+                }
+                dump += INDENT2 "Windows:\n";
+                for (size_t i = 0; i < windowHandles.size(); i++) {
+                    const sp<WindowInfoHandle>& windowHandle = windowHandles[i];
+                    const WindowInfo* windowInfo = windowHandle->getInfo();
+                    auto inputConfig = windowInfo->inputConfig;
+                    // TODO MIUI 'portalToDisplayId', 'paused','hasWallpaper' in window info was
+                    // disappeared. so delete this
+                    dump += StringPrintf(INDENT3 "%zu: name='%s', id=%" PRId32 ", displayId=%d, "
+                                                 "focusable=%s, "
+                                                 "visible=%s, alpha=%.2f, "
+                                                 "flags=%s, type=%s, "
+                                                 "frame=[%d,%d][%d,%d], globalScale=%f, "
+                                                 "applicationInfo.name=%s, "
+                                                 "applicationInfo.token=%s, "
+                                                 "touchableRegion=",
+                                         i, windowInfo->name.c_str(), windowInfo->id,
+                                         windowInfo->displayId,
+                                         toString(inputConfig.test(
+                                                 WindowInfo::InputConfig::NOT_FOCUSABLE)),
+                                         toString(!inputConfig.test(
+                                                 WindowInfo::InputConfig::NOT_VISIBLE)),
+                                         windowInfo->alpha,
+                                         windowInfo->layoutParamsFlags.string().c_str(),
+                                         ftl::enum_string(windowInfo->layoutParamsType).c_str(),
+                                         windowInfo->frameLeft, windowInfo->frameTop,
+                                         windowInfo->frameRight, windowInfo->frameBottom,
+                                         windowInfo->globalScaleFactor,
+                                         windowInfo->applicationInfo.name.c_str(),
+                                         toString(windowInfo->applicationInfo.token).c_str());
+                    dump += dumpRegion(windowInfo->touchableRegion);
+                    // TODO MIUI because inputFeature was deleted, dump inputConfig instead of it
+                    dump += StringPrintf(", inputConfig=%s", inputConfig.string().c_str());
+                    dump += StringPrintf(", ownerPid=%d, ownerUid=%d, "
+                                         "dispatchingTimeout=%" PRId64
+                                         "ms, trustedOverlay=%s, hasToken=%s, "
+                                         "touchOcclusionMode=%s\n",
+                                         windowInfo->ownerPid, windowInfo->ownerUid,
+                                         millis(windowInfo->dispatchingTimeout),
+                                         toString(inputConfig.test(
+                                                 WindowInfo::InputConfig::TRUSTED_OVERLAY)),
+                                         toString(windowInfo->token != nullptr),
+                                         toString(windowInfo->touchOcclusionMode).c_str());
+                    windowInfo->transform.dump(dump, "transform", INDENT4);
+                }
+            }
+        } else {
+            dump += INDENT "Displays: <none>\n";
+        }
+    }
+
+    if (targetFlags & OUT_DUMP_ERROREVENTS) {
+        nsecs_t currentTime = now();
+        // Dump event currently being dispatched.
+        if (mPendingEvent) {
+            dump += INDENT "PendingEvent:\n";
+            dump += INDENT2;
+            dump += mPendingEvent->getDescription();
+            dump += StringPrintf(", age=%" PRId64 "ms\n",
+                                 ns2ms(currentTime - mPendingEvent->eventTime));
+        } else {
+            dump += INDENT "PendingEvent: <none>\n";
+        }
+
+        // Dump inbound events from oldest to newest.
+        if (!mInboundQueue.empty()) {
+            dump += StringPrintf(INDENT "InboundQueue: length=%zu\n", mInboundQueue.size());
+            for (std::shared_ptr<EventEntry>& entry : mInboundQueue) {
+                dump += INDENT2;
+                dump += entry->getDescription();
+                dump += StringPrintf(", age=%" PRId64 "ms\n",
+                                     ns2ms(currentTime - entry->eventTime));
+            }
+        } else {
+            dump += INDENT "InboundQueue: <empty>\n";
+        }
+
+        if (!mReplacedKeys.empty()) {
+            dump += INDENT "ReplacedKeys:\n";
+            for (const std::pair<KeyReplacement, int32_t>& pair : mReplacedKeys) {
+                const KeyReplacement& replacement = pair.first;
+                int32_t newKeyCode = pair.second;
+                dump += StringPrintf(INDENT2 "originalKeyCode=%d, deviceId=%d -> newKeyCode=%d\n",
+                                     replacement.keyCode, replacement.deviceId, newKeyCode);
+            }
+        } else {
+            dump += INDENT "ReplacedKeys: <empty>\n";
+        }
+
+        if (!mConnectionsByToken.empty()) {
+            dump += INDENT "Connections:\n";
+            for (const auto& [token, connection] : mConnectionsByToken) {
+                dump += StringPrintf(INDENT2 "%i: channelName='%s', windowName='%s', "
+                                             "status=%s, monitor=%s, responsive=%s\n",
+                                     connection->inputChannel->getFd().get(),
+                                     connection->getInputChannelName().c_str(),
+                                     connection->getWindowName().c_str(),
+                                     ftl::enum_string(connection->status).c_str(),
+                                     toString(connection->monitor),
+                                     toString(connection->responsive));
+
+                if (!connection->outboundQueue.empty()) {
+                    dump += StringPrintf(INDENT3 "OutboundQueue: length=%zu\n",
+                                         connection->outboundQueue.size());
+                    dump += dumpQueue(connection->outboundQueue, currentTime);
+
+                } else {
+                    dump += INDENT3 "OutboundQueue: <empty>\n";
+                }
+
+                if (!connection->waitQueue.empty()) {
+                    dump += StringPrintf(INDENT3 "WaitQueue: length=%zu\n",
+                                         connection->waitQueue.size());
+                    dump += dumpQueue(connection->waitQueue, currentTime);
+                } else {
+                    dump += INDENT3 "WaitQueue: <empty>\n";
+                }
+            }
+        } else {
+            dump += INDENT "Connections: <none>\n";
+        }
+
+        if (isAppSwitchPendingLocked()) {
+            dump += StringPrintf(INDENT "AppSwitch: pending, due in %" PRId64 "ms\n",
+                                 ns2ms(mAppSwitchDueTime - now()));
+        } else {
+            dump += INDENT "AppSwitch: not pending\n";
+        }
+
+        dump += INDENT "Configuration:\n";
+        dump += StringPrintf(INDENT2 "KeyRepeatDelay: %" PRId64 "ms\n",
+                             ns2ms(mConfig.keyRepeatDelay));
+        dump += StringPrintf(INDENT2 "KeyRepeatTimeout: %" PRId64 "ms\n",
+                             ns2ms(mConfig.keyRepeatTimeout));
+        dump += mLatencyTracker.dump(INDENT2);
+        dump += mLatencyAggregator.dump(INDENT2);
+    }
+    MiInputDispatcherStub::addAnrState(time, dump);
+}
+// END
 
 } // namespace android::inputdispatcher

@@ -38,6 +38,16 @@ void WindowInfo::addTouchableRegion(const Rect& region) {
     touchableRegion.orSelf(region);
 }
 
+// MIUI ADD: START Activity Embedding
+void WindowInfo:: addMiuiEmbeddedMidRegion(const Rect& region){
+    miuiEmbeddedMidRegion.orSelf(region);
+}
+
+void WindowInfo:: addMiuiEmbeddedHotRegion(const Rect& region) {
+    miuiEmbeddedHotRegion.orSelf(region);
+}
+// END
+
 bool WindowInfo::touchableRegionContainsPoint(int32_t x, int32_t y) const {
     return touchableRegion.contains(x, y);
 }
@@ -122,6 +132,11 @@ status_t WindowInfo::writeToParcel(android::Parcel* parcel) const {
         parcel->writeInt32(displayId) ?:
         applicationInfo.writeToParcel(parcel) ?:
         parcel->write(touchableRegion) ?:
+        // MIUI ADD: START Activity Embedding
+        parcel->write(miuiEmbeddedMidRegion) ?:
+        parcel->write(miuiEmbeddedHotRegion) ?:
+        parcel->writeBool(isNeedMiuiEmbeddedEventMapping) ?:
+        // END
         parcel->writeBool(replaceTouchableRegionWithCrop) ?:
         parcel->writeStrongBinder(touchableRegionCropHandle.promote()) ?:
         parcel->writeStrongBinder(windowToken) ?:
@@ -174,6 +189,11 @@ status_t WindowInfo::readFromParcel(const android::Parcel* parcel) {
         parcel->readInt32(&displayId) ?:
         applicationInfo.readFromParcel(parcel) ?:
         parcel->read(touchableRegion) ?:
+        // MIUI ADD: START Activity Embedding
+        parcel->read(miuiEmbeddedMidRegion) ?:
+        parcel->read(miuiEmbeddedHotRegion) ?:
+        parcel->readBool(&isNeedMiuiEmbeddedEventMapping) ?:
+        // END
         parcel->readBool(&replaceTouchableRegionWithCrop) ?:
         parcel->readNullableStrongBinder(&touchableRegionCropHandleSp) ?:
         parcel->readNullableStrongBinder(&windowToken) ?:

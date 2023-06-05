@@ -54,6 +54,9 @@ void MessageQueue::Handler::handleMessage(const Message&) {
     const nsecs_t frameTime = systemTime();
     auto& compositor = mQueue.mCompositor;
 
+    // MIUI ADD:
+    compositor.updateTime(mVsyncTimeStamp);
+
     if (!compositor.commit(frameTime, mVsyncId, mExpectedVsyncTime)) {
         return;
     }
@@ -105,6 +108,9 @@ void MessageQueue::setInjector(sp<EventThreadConnection> connection) {
 
 void MessageQueue::vsyncCallback(nsecs_t vsyncTime, nsecs_t targetWakeupTime, nsecs_t readyTime) {
     ATRACE_CALL();
+    // MIUI ADD:
+    mHandler->mVsyncTimeStamp = targetWakeupTime;
+
     // Trace VSYNC-sf
     mVsync.value = (mVsync.value + 1) % 2;
 

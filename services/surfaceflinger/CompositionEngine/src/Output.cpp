@@ -51,7 +51,10 @@
 #ifdef QTI_UNIFIED_DRAW
 #include <vendor/qti/hardware/display/composer/3.1/IQtiComposerClient.h>
 #endif
+// MIUI ADD:
+#include "MiuiSurfaceFlingerInspectorStub.h"
 #include "TracedOrdinal.h"
+#include "MiSurfaceFlingerStub.h"
 
 using aidl::android::hardware::graphics::composer3::Composition;
 
@@ -247,6 +250,25 @@ void Output::setLayerFilter(ui::LayerFilter filter) {
     dirtyEntireOutput();
 }
 
+#if MI_SCREEN_PROJECTION
+// MIUI ADD: START
+void Output::setDiffScreenProjection(uint32_t isScreenProjection) {
+    MiSurfaceFlingerStub::setDiffScreenProjection(isScreenProjection, this);
+    dirtyEntireOutput();
+}
+
+void Output::setLastFrame(uint32_t isLastFrame) {
+    MiSurfaceFlingerStub::setLastFrame(isLastFrame, this);
+    dirtyEntireOutput();
+}
+
+void Output::setCastMode(uint32_t isCastMode) {
+    MiSurfaceFlingerStub::setCastMode(isCastMode, this);
+    dirtyEntireOutput();
+}
+// END
+#endif
+
 void Output::setColorTransform(const compositionengine::CompositionRefreshArgs& args) {
     auto& colorTransformMatrix = editState().colorTransformMatrix;
     if (!args.colorTransformMatrix || colorTransformMatrix == args.colorTransformMatrix) {
@@ -393,8 +415,12 @@ bool Output::includesLayer(ui::LayerFilter filter) const {
 }
 
 bool Output::includesLayer(const sp<LayerFE>& layerFE) const {
+#if MI_SCREEN_PROJECTION
+    return MiSurfaceFlingerStub::includesLayer(layerFE, this);
+#else
     const auto* layerFEState = layerFE->getCompositionState();
     return layerFEState && includesLayer(layerFEState->outputFilter);
+#endif
 }
 
 std::unique_ptr<compositionengine::OutputLayer> Output::createOutputLayer(
@@ -434,6 +460,10 @@ void Output::present(const compositionengine::CompositionRefreshArgs& refreshArg
     ATRACE_CALL();
     ALOGV(__FUNCTION__);
 
+#if MI_SCREEN_PROJECTION
+    if (MiSurfaceFlingerStub::isNeedSkipPresent(this)) return;
+#endif
+
     updateColorProfile(refreshArgs);
     updateCompositionState(refreshArgs);
     planComposition();
@@ -449,10 +479,14 @@ void Output::present(const compositionengine::CompositionRefreshArgs& refreshArg
         prepareFrame();
     }
 
+    // MIUI ADD:
+    MiuiSurfaceFlingerInspectorStub::monitorFrameComposition("prepareFrame", getName());
     devOptRepaintFlash(refreshArgs);
     finishFrame(refreshArgs, std::move(result));
     postFramebuffer();
     renderCachedSets(refreshArgs);
+    // MIUI ADD:
+    MiuiSurfaceFlingerInspectorStub::monitorFrameComposition("doComposition", getName());
 }
 
 void Output::rebuildLayerStacks(const compositionengine::CompositionRefreshArgs& refreshArgs,
@@ -461,6 +495,11 @@ void Output::rebuildLayerStacks(const compositionengine::CompositionRefreshArgs&
     ALOGV(__FUNCTION__);
 
     auto& outputState = editState();
+
+
+#if MI_SCREEN_PROJECTION
+    MiSurfaceFlingerStub::rebuildLayerStacks(this);
+#endif
 
     // Do nothing if this output is not enabled or there is no need to perform this update
     if (!outputState.isEnabled || CC_LIKELY(!refreshArgs.updatingOutputGeometryThisFrame)) {
@@ -496,6 +535,17 @@ void Output::collectVisibleLayers(const compositionengine::CompositionRefreshArg
     setReleasedLayers(refreshArgs);
 
     finalizePendingOutputLayers();
+
+    MiSurfaceFlingerStub::updateMiFodFlag(this, refreshArgs);
+
+    // MIUI ADD: START
+    for (auto* outputLayer : getOutputLayersOrderedByZ()) {
+            MiuiSurfaceFlingerInspectorStub::monitorSurfaceIfNeeded(
+                    String8(outputLayer->getLayerFE().getDebugName()),
+                    outputLayer->editState().visibleRegion.getBounds()
+                );
+    }
+    // END
 }
 
 void Output::ensureOutputLayerIfVisible(sp<compositionengine::LayerFE>& layerFE,
@@ -682,6 +732,10 @@ void Output::ensureOutputLayerIfVisible(sp<compositionengine::LayerFE>& layerFE,
         return;
     }
 
+#if MI_SCREEN_PROJECTION
+    MiSurfaceFlingerStub::ensureOutputLayerIfVisible(this, layerFEState);
+#endif
+
     Region visibleNonShadowRegion = visibleRegion.subtract(shadowRegion);
 
     // The layer is visible. Either reuse the existing outputLayer if we have
@@ -726,7 +780,15 @@ void Output::updateCompositionState(const compositionengine::CompositionRefreshA
 
     mLayerRequestingBackgroundBlur = findLayerRequestingBackgroundComposition();
     bool forceClientComposition = mLayerRequestingBackgroundBlur != nullptr;
-
+#ifdef CURTAIN_ANIM
+    MiSurfaceFlingerStub::updateCurtainAnimClientComposition(&forceClientComposition);
+#endif
+// MIUI ADD: HDR Dimmer
+    bool hdrDimmerClientComposition = false;
+#ifdef MI_SF_FEATURE
+    hdrDimmerClientComposition = MiSurfaceFlingerStub::getHdrDimmerClientComposition();
+#endif
+// END
     bool hasSecureCamera = false;
     bool hasSecureDisplay = false;
     bool needsProtected = false;
@@ -741,11 +803,27 @@ void Output::updateCompositionState(const compositionengine::CompositionRefreshA
              needsProtected = true;
          }
     }
+#ifdef MI_FEATURE_ENABLE
+    bool GameBackGround = false;
     for (auto* layer : getOutputLayersOrderedByZ()) {
+       updateMiCompositionState(GameBackGround, layer, refreshArgs);
+#else
+    for (auto* layer : getOutputLayersOrderedByZ()) {
+#endif
+
+#ifdef MI_FEATURE_ENABLE
         layer->updateCompositionState(refreshArgs.updatingGeometryThisFrame,
                                       refreshArgs.devOptForceClientComposition ||
-                                              forceClientComposition,
+                                              forceClientComposition ||
+                                              (refreshArgs.layersInfo == 0x00000001)
+                                              || hdrDimmerClientComposition,
                                       refreshArgs.internalDisplayRotationFlags);
+#else
+        layer->updateCompositionState(refreshArgs.updatingGeometryThisFrame,
+                                      refreshArgs.devOptForceClientComposition ||
+                                              forceClientComposition
+                                      refreshArgs.internalDisplayRotationFlags);
+#endif
 
         if (mLayerRequestingBackgroundBlur == layer) {
             forceClientComposition = false;
@@ -865,7 +943,12 @@ compositionengine::OutputLayer* Output::findLayerRequestingBackgroundComposition
         if (compState->isOpaque) {
             continue;
         }
+#ifdef MI_SF_FEATURE
+        if (compState->backgroundBlurRadius > 0 || compState->blurRegions.size() > 0
+            || compState->shadowType == 3) {
+#else
         if (compState->backgroundBlurRadius > 0 || compState->blurRegions.size() > 0) {
+#endif
             layerRequestingBgComposition = layer;
         }
     }
@@ -1214,6 +1297,9 @@ std::optional<base::unique_fd> Output::composeSurfaces(
     ALOGV(__FUNCTION__);
 
     const auto& outputState = getState();
+
+    // MIUI+ send SecureWin state
+    MiSurfaceFlingerStub::handleSecureProxy(this, outputState.layerFilter.layerStack.id);
     const TracedOrdinal<bool> hasClientComposition = {"hasClientComposition",
                                                       outputState.usesClientComposition};
     if (!hasClientComposition) {
@@ -1233,6 +1319,15 @@ std::optional<base::unique_fd> Output::composeSurfaces(
     renderengine::DisplaySettings clientCompositionDisplay;
     clientCompositionDisplay.physicalDisplay = outputState.framebufferSpace.getContent();
     clientCompositionDisplay.clip = outputState.layerStackSpace.getContent();
+#ifdef CURTAIN_ANIM
+    MiSurfaceFlingerStub::getCurtainStatus(this, &clientCompositionDisplay);
+#endif
+#ifdef MI_SF_FEATURE
+    // MIUI ADD: HDR Dimmer
+    MiSurfaceFlingerStub::getHdrDimmerState(this, &clientCompositionDisplay);
+    // END
+#endif
+
     clientCompositionDisplay.orientation =
             ui::Transform::toRotationFlags(outputState.displaySpace.getOrientation());
     clientCompositionDisplay.outputDataspace = mDisplayColorProfile->hasWideColorGamut()
@@ -1253,10 +1348,26 @@ std::optional<base::unique_fd> Output::composeSurfaces(
             static_cast<aidl::android::hardware::graphics::composer3::RenderIntent>(
                     outputState.renderIntent);
 
+#ifdef MI_SF_FEATURE
+    clientCompositionDisplay.useBlurCover = MiSurfaceFlingerStub::getMiSecurityDisplayState(this) && !outputState.isSecure;
+#endif
+
     // Compute the global color transform matrix.
     clientCompositionDisplay.colorTransform = outputState.colorTransformMatrix;
     clientCompositionDisplay.deviceHandlesColorTransform =
             outputState.usesDeviceComposition || getSkipColorTransform();
+
+#ifdef MI_FEATURE_ENABLE
+    // MIUI ADD: Added just for Global HBM Dither (J2S-T)
+    bool mGlobalHBMDitherEnabled = MiSurfaceFlingerStub::isGlobalHBMDitherEnabled();
+    if (mGlobalHBMDitherEnabled) {
+        if ((!outputState.usesDeviceComposition && !getSkipColorTransform()) || (refreshArgs.layersInfo == 0x00000001)) {
+        ALOGW("use gpu colorTransform in hbm scene\n");
+        clientCompositionDisplay.colorTransform = *refreshArgs.gpuColorTransformMatrix;
+        }
+    }
+    // MIUI ADD: END
+#endif
 
     // Generate the client composition requests for the layers on this output.
     auto& renderEngine = getCompositionEngine().getRenderEngine();
@@ -1279,7 +1390,10 @@ std::optional<base::unique_fd> Output::composeSurfaces(
             ATRACE_NAME("ClientCompositionCacheHit");
             outputCompositionState.reusedClientComposition = true;
             setExpensiveRenderingExpected(false);
-            return base::unique_fd();
+
+            // MIUI MOD: AOSP
+            // return base::unique_fd();
+            return base::unique_fd(std::move(fd));
         }
         ATRACE_NAME("ClientCompositionCacheMiss");
         mClientCompositionRequestCache->add(tex->getBuffer()->getId(), clientCompositionDisplay,
@@ -1541,6 +1655,26 @@ void Output::resetCompositionStrategy() {
 bool Output::getSkipColorTransform() const {
     return true;
 }
+
+#if MI_FEATURE_ENABLE
+inline void Output::updateMiCompositionState(bool GameBackGround, android::compositionengine::OutputLayer* layer, const compositionengine::CompositionRefreshArgs& refreshArgs){
+    std::string currentLayerNameStr = layer->getLayerFE().getDebugName();
+    std::string gameLayerNameStr = refreshArgs.gamePackageName;
+    auto* compositionState = layer->getLayerFE().editCompositionState();
+
+     /*When game go to background, disable GCP*/
+    if (currentLayerNameStr.find("Background") != std::string::npos) {
+        GameBackGround = true;
+    }
+    if (!GameBackGround && currentLayerNameStr.find(gameLayerNameStr) != std::string::npos) {
+        compositionState->layerClass = refreshArgs.gameColorMode;
+    }
+
+    if (refreshArgs.gameColorMode) {
+        compositionState->forceClientComposition = false;
+    }
+}
+#endif
 
 compositionengine::Output::FrameFences Output::presentAndGetFrameFences() {
     compositionengine::Output::FrameFences result;

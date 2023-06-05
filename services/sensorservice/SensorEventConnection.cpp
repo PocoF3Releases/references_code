@@ -25,6 +25,9 @@
 #include "vec.h"
 #include "SensorEventConnection.h"
 #include "SensorDevice.h"
+#ifdef MI_SENSORSERVICE_FEATURE_ENABLE
+#include <MiSensorServiceStub.h>
+#endif
 
 #define UNUSED(x) (void)(x)
 
@@ -213,6 +216,16 @@ bool SensorService::SensorEventConnection::hasOneShotSensors() const {
 String8 SensorService::SensorEventConnection::getPackageName() const {
     return mPackageName;
 }
+
+#if MI_SCREEN_PROJECTION
+/**
+ * MI ADD:
+ * return the op package name
+ */
+const String16 SensorService::SensorEventConnection::getOpPackageName() const {
+    return mOpPackageName;
+}
+#endif
 
 void SensorService::SensorEventConnection::setFirstFlushPending(int32_t handle,
                                 bool value) {
@@ -439,8 +452,13 @@ status_t SensorService::SensorEventConnection::sendEvents(
 }
 
 bool SensorService::SensorEventConnection::hasSensorAccess() {
+#if MI_SENSORSERVICE_FEATURE_ENABLE
+    return (mService->isUidActive(mUid) || MiSensorServiceStub::isonwhitelist(getPackageName()))
+        && !mService->mSensorPrivacyPolicy->isSensorPrivacyEnabled();
+#else
     return mService->isUidActive(mUid)
         && !mService->mSensorPrivacyPolicy->isSensorPrivacyEnabled();
+#endif
 }
 
 bool SensorService::SensorEventConnection::noteOpIfRequired(const sensors_event_t& event) {

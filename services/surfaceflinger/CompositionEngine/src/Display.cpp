@@ -43,6 +43,7 @@
 #pragma clang diagnostic pop // ignored "-Wconversion"
 
 #include "DisplayHardware/PowerAdvisor.h"
+#include "MiSurfaceFlingerStub.h"
 
 using aidl::android::hardware::graphics::composer3::Capability;
 using aidl::android::hardware::graphics::composer3::DisplayCapability;
@@ -114,6 +115,10 @@ void Display::disconnect() {
 void Display::setColorTransform(const compositionengine::CompositionRefreshArgs& args) {
     Output::setColorTransform(args);
     const auto halDisplayId = HalDisplayId::tryCast(mId);
+    if (MiSurfaceFlingerStub::hookMiSetColorTransform(args, halDisplayId, mIsDisconnected)) {
+        return;
+    }
+
     if (mIsDisconnected || !halDisplayId || CC_LIKELY(!args.colorTransformMatrix)) {
         return;
     }
@@ -197,7 +202,7 @@ std::unique_ptr<compositionengine::OutputLayer> Display::createOutputLayer(
 #ifdef QTI_DISPLAY_CONFIG_ENABLED
         if (layerFE->getCompositionState()->outputFilter.toInternalDisplay && mDisplayConfigIntf) {
             const auto physicalDisplayId = PhysicalDisplayId::tryCast(mId);
-            if (physicalDisplayId) {
+            if (physicalDisplayId && strstr(outputLayer->getLayerFE().getDebugName(),"RoundCorner") != nullptr) {
                 const auto hwcDisplayId = hwc.fromPhysicalDisplayId(*physicalDisplayId);
                 mDisplayConfigIntf->SetLayerAsMask(static_cast<uint32_t>(*hwcDisplayId),
                                                    outputLayer->getHwcLayer()->getId());

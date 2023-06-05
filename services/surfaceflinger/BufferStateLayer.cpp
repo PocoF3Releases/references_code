@@ -34,7 +34,12 @@
 #include "FrameTracer/FrameTracer.h"
 #include "TimeStats/TimeStats.h"
 
+// MIUI ADD
+#include "MiSurfaceFlingerStub.h"
 #define EARLY_RELEASE_ENABLED false
+// MIUI ADD:
+#include "MiuiSurfaceFlingerInspectorStub.h"
+// END
 
 namespace android {
 
@@ -358,6 +363,8 @@ bool BufferStateLayer::setBuffer(std::shared_ptr<renderengine::ExternalTexture>&
     ATRACE_CALL();
 
     if (!buffer) {
+        // MIUI ADD:
+        ALOGI("setBuffer but null. %s", getName().c_str());
         return false;
     }
 
@@ -404,7 +411,11 @@ bool BufferStateLayer::setBuffer(std::shared_ptr<renderengine::ExternalTexture>&
             mLastClientCompositionFence = nullptr;
         }
     }
-
+    // MIUI ADD:
+    if(mDrawingState.frameNumber > frameNumber) {
+        ALOGI("setBuffer drawingN:%" PRId64 " frN:%" PRId64 " %s",
+           mDrawingState.frameNumber, frameNumber, getName().c_str());
+    }
     mDrawingState.frameNumber = frameNumber;
     mDrawingState.releaseBufferListener = bufferData.releaseBufferListener;
     mDrawingState.buffer = std::move(buffer);
@@ -725,6 +736,14 @@ status_t BufferStateLayer::updateActiveBuffer() {
     mBufferInfo.mBuffer = s.buffer;
     mBufferInfo.mFence = s.acquireFence;
     mBufferInfo.mFrameNumber = s.frameNumber;
+    // MIUI ADD: dynamic SurfaceFlinger Log
+    if(MiSurfaceFlingerStub::isDynamicSfLog()) {
+        ALOGI("sf.updateActiveBuffer bufId:%" PRId64 " frN:%" PRId64
+            " layerId:%d preRelease:%s",
+            s.buffer->getBuffer()->getId(), s.frameNumber,
+            getSequence(), mPreviousReleaseCallbackId.to_string().c_str());
+    }
+    // END
 
     return NO_ERROR;
 }
@@ -817,6 +836,7 @@ void BufferStateLayer::gatherBufferInfo() {
     mBufferInfo.mFenceTime = std::make_shared<FenceTime>(s.acquireFence);
     mBufferInfo.mFence = s.acquireFence;
     mBufferInfo.mTransform = s.bufferTransform;
+    MiSurfaceFlingerStub::changeLayerDataSpace(this);
     auto lastDataspace = mBufferInfo.mDataspace;
     mBufferInfo.mDataspace = translateDataspace(s.dataspace);
     if (lastDataspace != mBufferInfo.mDataspace) {
@@ -888,6 +908,9 @@ void BufferStateLayer::decrementPendingBufferCount() {
                 pendingBuffers);
     }
     tracePendingBufferCount(pendingBuffers);
+    // MIUI ADD:
+    MiuiSurfaceFlingerInspectorStub::recordBufferTxCount(mBlastTransactionName.c_str(), pendingBuffers);
+    // END
 }
 
 void BufferStateLayer::tracePendingBufferCount(int32_t pendingBuffers) {

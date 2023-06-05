@@ -141,6 +141,10 @@ public:
 
     // Debugging
     virtual void dump(std::string& result) const = 0;
+
+#if MI_FEATURE_ENABLE
+    uint32_t miFodLayer{0};
+#endif
 };
 
 } // namespace compositionengine

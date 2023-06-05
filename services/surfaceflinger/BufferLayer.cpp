@@ -58,6 +58,7 @@
 
 #include "smomo_interface.h"
 #include "layer_extn_intf.h"
+#include "MiSurfaceFlingerStub.h"
 
 namespace android {
 
@@ -75,6 +76,9 @@ BufferLayer::BufferLayer(const LayerCreationArgs& args)
 
     mPotentialCursor = args.flags & ISurfaceComposerClient::eCursorWindow;
     mProtectedByApp = args.flags & ISurfaceComposerClient::eProtectedByApp;
+    // BSP-Game: add Game Fps Stat
+    MiSurfaceFlingerStub::createFpsStat(this);
+    // END
 
     if (mFlinger->mLayerExt) {
         mLayerClass = mFlinger->mLayerExt->GetLayerClass(mName);
@@ -92,6 +96,9 @@ BufferLayer::~BufferLayer() {
     const int32_t layerId = getSequence();
     mFlinger->mTimeStats->onDestroy(layerId);
     mFlinger->mFrameTracer->onDestroy(layerId);
+    // BSP-Game: add Game Fps Stat
+    MiSurfaceFlingerStub::destroyFpsStat(this);
+    // END
 }
 
 void BufferLayer::useSurfaceDamage() {
@@ -414,6 +421,9 @@ void BufferLayer::onPostComposition(const DisplayDevice* display,
                                                presentFence,
                                                FrameTracer::FrameEvent::PRESENT_FENCE);
             mFrameTracker.setActualPresentFence(std::shared_ptr<FenceTime>(presentFence));
+            // BSP-Game: add Game Fps Stat
+            MiSurfaceFlingerStub::insertFrameFenceTime(this, std::shared_ptr<FenceTime>(presentFence));
+            // END
         } else if (const auto displayId = PhysicalDisplayId::tryCast(display->getId());
                    displayId && mFlinger->getHwComposer().isConnected(*displayId)) {
             // The HWC doesn't support present fences, so use the refresh
@@ -425,6 +435,9 @@ void BufferLayer::onPostComposition(const DisplayDevice* display,
                                                    mCurrentFrameNumber, actualPresentTime,
                                                    FrameTracer::FrameEvent::PRESENT_FENCE);
             mFrameTracker.setActualPresentTime(actualPresentTime);
+            // BSP-Game: add Game Fps Stat
+            MiSurfaceFlingerStub::insertFrameTime(this, actualPresentTime);
+            // END
         }
     }
 
@@ -825,6 +838,12 @@ bool BufferLayer::bufferNeedsFiltering() const {
 const std::shared_ptr<renderengine::ExternalTexture>& BufferLayer::getExternalTexture() const {
     return mBufferInfo.mBuffer;
 }
+
+#ifdef MI_FEATURE_ENABLE
+bool BufferLayer::needsInputInfo() const {
+    return !mPotentialCursor && !MiSurfaceFlingerStub::filterUnnecessaryInput(this);
+}
+#endif
 
 } // namespace android
 

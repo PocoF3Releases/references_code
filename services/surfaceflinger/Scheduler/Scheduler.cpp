@@ -25,6 +25,7 @@
 #include <android/hardware/configstore/1.0/ISurfaceFlingerConfigs.h>
 #include <android/hardware/configstore/1.1/ISurfaceFlingerConfigs.h>
 #include <configstore/Utils.h>
+#include <ftl/fake_guard.h>
 #include <gui/WindowInfo.h>
 #include <system/window.h>
 #include <ui/DisplayStatInfo.h>
@@ -48,6 +49,7 @@
 #include "SurfaceFlingerProperties.h"
 #include "VSyncPredictor.h"
 #include "VSyncReactor.h"
+#include "MiSurfaceFlingerStub.h"
 
 #define RETURN_IF_INVALID_HANDLE(handle, ...)                        \
     do {                                                             \
@@ -94,9 +96,13 @@ void Scheduler::startTimers() {
 }
 
 void Scheduler::setRefreshRateConfigs(std::shared_ptr<RefreshRateConfigs> configs) {
+    // The current RefreshRateConfigs instance may outlive this call, so unbind its idle timer.
     {
-        // The current RefreshRateConfigs instance may outlive this call, so unbind its idle timer.
-        std::scoped_lock lock(mRefreshRateConfigsLock);
+        // mRefreshRateConfigsLock is not locked here to avoid the deadlock
+        // as the callback can attempt to acquire the lock before stopIdleTimer can finish
+        // the execution. It's safe to FakeGuard as main thread is the only thread that
+        // writes to the mRefreshRateConfigs.
+        ftl::FakeGuard guard(mRefreshRateConfigsLock);
         if (mRefreshRateConfigs) {
             mRefreshRateConfigs->stopIdleTimer();
             mRefreshRateConfigs->clearIdleTimerCallbacks();
@@ -105,7 +111,15 @@ void Scheduler::setRefreshRateConfigs(std::shared_ptr<RefreshRateConfigs> config
     {
         // Clear state that depends on the current instance.
         std::scoped_lock lock(mPolicyLock);
+        // MI ADD: START
+        bool idleTimerSkip = MiSurfaceFlingerStub::isDualBuitinDisp() ? mPolicy.isIdleTimerSkip : false;
+        // END
         mPolicy = {};
+        // MI ADD: START
+        if (idleTimerSkip) {
+            mPolicy.isIdleTimerSkip = idleTimerSkip;
+        }
+        // END
     }
 
     std::scoped_lock lock(mRefreshRateConfigsLock);
@@ -410,6 +424,10 @@ bool Scheduler::injectVSync(nsecs_t when, nsecs_t expectedVSyncTime, nsecs_t dea
 }
 
 void Scheduler::enableHardwareVsync() {
+#if MI_FEATURE_ENABLE
+    if (mQsyncDisableVsyncPeriod)
+        return;
+#endif
     std::lock_guard<std::mutex> lock(mHWVsyncLock);
     if (!mPrimaryHWVsyncEnabled && mHWVsyncAvailable) {
         mVsyncSchedule->getTracker().resetModel();
@@ -419,6 +437,10 @@ void Scheduler::enableHardwareVsync() {
 }
 
 void Scheduler::disableHardwareVsync(bool makeUnavailable) {
+#if MI_FEATURE_ENABLE
+    if (mQsyncDisableVsyncPeriod)
+        return;
+#endif
     std::lock_guard<std::mutex> lock(mHWVsyncLock);
     if (mPrimaryHWVsyncEnabled) {
         mSchedulerCallback.setVsyncEnabled(false);
@@ -430,6 +452,10 @@ void Scheduler::disableHardwareVsync(bool makeUnavailable) {
 }
 
 void Scheduler::resyncToHardwareVsync(bool makeAvailable, Fps refreshRate, bool force_resync) {
+#if MI_FEATURE_ENABLE
+    if (mQsyncDisableVsyncPeriod)
+        return;
+#endif
     {
         std::lock_guard<std::mutex> lock(mHWVsyncLock);
         if (makeAvailable) {
@@ -479,9 +505,16 @@ void Scheduler::resync() {
 }
 
 void Scheduler::setVsyncPeriod(nsecs_t period, bool force_resync) {
+#if MI_FEATURE_ENABLE
+    if (period <= 0 || mQsyncDisableVsyncPeriod) return;
+#else
     if (period <= 0) return;
-
+#endif
     std::lock_guard<std::mutex> lock(mHWVsyncLock);
+    if (MiSurfaceFlingerStub::isMinIdleFps(period)) {
+        period = MiSurfaceFlingerStub::setMinIdleFpsPeriod(period);
+    }
+
     mVsyncSchedule->getController().startPeriodTransition(period);
 
     if (!mPrimaryHWVsyncEnabled || force_resync) {
@@ -493,6 +526,10 @@ void Scheduler::setVsyncPeriod(nsecs_t period, bool force_resync) {
 
 void Scheduler::addResyncSample(nsecs_t timestamp, std::optional<nsecs_t> hwcVsyncPeriod,
                                 bool* periodFlushed) {
+#if MI_FEATURE_ENABLE
+    if (mQsyncDisableVsyncPeriod)
+        return;
+#endif
     bool needsHwVsync = false;
     *periodFlushed = false;
     { // Scope for the lock
@@ -562,6 +599,9 @@ void Scheduler::chooseRefreshRateForContent() {
     const auto configs = holdRefreshRateConfigs();
     if (!configs->canSwitch()) return;
 
+    //xiaomi DFPS control add
+    if (!MiSurfaceFlingerStub::allowAospVrr() && !MiSurfaceFlingerStub::isCTS()) return;
+
     ATRACE_CALL();
 
     LayerHistory::Summary summary = mLayerHistory.summarize(*configs, systemTime());
@@ -578,7 +618,7 @@ void Scheduler::onTouchHint() {
         mTouchTimer->reset();
 
         std::scoped_lock lock(mRefreshRateConfigsLock);
-        mRefreshRateConfigs->resetIdleTimer(/*kernelOnly*/ true);
+        mRefreshRateConfigs->resetIdleTimer(/*kernelOnly*/ false);
     }
 }
 
@@ -596,6 +636,32 @@ void Scheduler::setDisplayPowerState(bool normal) {
     // Clear Layer History to get fresh FPS detection
     mLayerHistory.clear();
 }
+
+#if MI_FEATURE_ENABLE
+std::string Scheduler::setVideoCodecFpsSwitchStateName(VideoCodecFpsSwitchState state) {
+    switch(state) {
+        case VideoCodecFpsSwitchState::NoChange: return "nochange";
+        case VideoCodecFpsSwitchState::Change: return "change";
+        default: return "Unknown";
+    }
+}
+void Scheduler::setVideoCodecFpsSwitchState(VideoCodecFpsSwitchState state) {
+    ALOGV("%s state %s", __func__, setVideoCodecFpsSwitchStateName(state).c_str());
+
+    {
+        std::lock_guard<std::mutex> lock(mPolicyLock);
+        ALOGV("%s old state %s", __func__, setVideoCodecFpsSwitchStateName(mPolicy.videoCodec).c_str());
+        if (mPolicy.isVideoTimerSkip) {
+            state = VideoCodecFpsSwitchState::NoChange;
+            ALOGV("Skip VideoCodecFpsSwitch");
+        }
+    }
+
+    applyPolicy(&Policy::videoCodec, state);
+    ALOGV("%s after policy state %s", __func__, setVideoCodecFpsSwitchStateName(state).c_str());
+    ATRACE_INT("setVideoCodecFpsSwitchState", static_cast<int>(state));
+}
+#endif
 
 void Scheduler::kernelIdleTimerCallback(TimerState state) {
     ATRACE_INT("ExpiredKernelIdleTimer", static_cast<int>(state));
@@ -626,6 +692,22 @@ void Scheduler::kernelIdleTimerCallback(TimerState state) {
 }
 
 void Scheduler::idleTimerCallback(TimerState state) {
+#if MI_FEATURE_ENABLE
+    {
+        std::lock_guard<std::mutex> lock(mPolicyLock);
+        if (mPolicy.isIdleTimerSkip) {
+            state = TimerState::Reset;
+            ALOGV("Skip idleTimerCallback");
+        }
+        if (TimerState::Expired == state) {
+            mPolicy.isIdleState = true;
+        }
+        else {
+            mPolicy.isIdleState = false;
+        }
+    }
+#endif
+
     if (mHandleIdleTimeout) {
         applyPolicy(&Policy::idleTimer, state);
     }
@@ -633,6 +715,15 @@ void Scheduler::idleTimerCallback(TimerState state) {
 }
 
 void Scheduler::touchTimerCallback(TimerState state) {
+#if MI_FEATURE_ENABLE
+    {
+        std::lock_guard<std::mutex> lock(mPolicyLock);
+        if (mPolicy.isTouchTimerSkip) {
+            state = TimerState::Reset;
+            ALOGV("Skip touchTimerCallback");
+        }
+    }
+#endif
     const TouchState touch = state == TimerState::Reset ? TouchState::Active : TouchState::Inactive;
     // Touch event will boost the refresh rate to performance.
     // Clear layer history to get fresh FPS detection.
@@ -715,14 +806,14 @@ auto Scheduler::applyPolicy(S Policy::*statePtr, T&& newState) -> GlobalSignals 
                 dispatchCachedReportedMode();
             }
         } else {
-            // Need a null pointer check for mPolicy since it's null during boot up
+        // Need a null pointer check for mPolicy since it's null during boot up
             std::string str = "UpdateRefreshRate " + (!mPolicy.mode ? "NA" :
-                              std::to_string(mPolicy.mode->getFps().getIntValue())) + " to " +
-                              std::to_string(newMode->getFps().getIntValue());
+                                      std::to_string(mPolicy.mode->getFps().getIntValue())) + " to " +
+                                      std::to_string(newMode->getFps().getIntValue());
             ATRACE_NAME(str.c_str());
 
             mPolicy.mode = newMode;
-
+            ALOGV("%s refreshRateChanged %s", __func__, str.c_str());
             refreshRateChanged = true;
         }
     }
@@ -760,11 +851,16 @@ auto Scheduler::chooseDisplayMode() -> std::pair<DisplayModePtr, GlobalSignals> 
 
 DisplayModePtr Scheduler::getPreferredDisplayMode() {
     std::lock_guard<std::mutex> lock(mPolicyLock);
+#ifdef MI_FEATURE_ENABLE
+    mPolicy.mode =  mRefreshRateConfigs->getMaxRefreshRateByPolicy();
+    return mPolicy.mode;
+#else
     // Make sure the stored mode is up to date.
     if (mPolicy.mode) {
         mPolicy.mode = chooseDisplayMode().first;
     }
     return mPolicy.mode;
+#endif
 }
 
 void Scheduler::onNewVsyncPeriodChangeTimeline(const hal::VsyncPeriodChangeTimeline& timeline) {
@@ -825,5 +921,12 @@ void Scheduler::updateThermalFps(float fps) {
     mThermalFps = fps;
     mLayerHistory.updateThermalFps(fps);
 }
+
+#if MI_FEATURE_ENABLE
+void Scheduler::qsyncDisableVsync(bool disableVsync) {
+    ATRACE_CALL();
+    mQsyncDisableVsyncPeriod = disableVsync;
+}
+#endif
 
 } // namespace android::scheduler

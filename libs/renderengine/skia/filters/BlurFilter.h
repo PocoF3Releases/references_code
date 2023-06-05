@@ -20,6 +20,9 @@
 #include <SkImage.h>
 #include <SkRuntimeEffect.h>
 #include <SkSurface.h>
+#include<SkImageFilters.h>
+#include<SkMaskFilter.h>
+#include <cutils/properties.h>
 
 using namespace std;
 
@@ -40,6 +43,13 @@ public:
     // Execute blur, saving it to a texture
     virtual sk_sp<SkImage> generate(GrRecordingContext* context, const uint32_t radius,
                             const sk_sp<SkImage> blurInput, const SkRect& blurRect) const = 0;
+#ifdef MIUI_BLUR
+    void setSaturation();
+    void setFrost();
+    bool isCTS() const;
+    sk_sp<SkImage> makeSaturation(GrRecordingContext* context, sk_sp<SkImage> tmpBlur,
+            SkSamplingOptions linear, SkImageInfo scaledInfo, uint32_t blurRadius) const;
+#endif
 
     /**
      * Draw the blurred content (from the generate method) into the canvas.
@@ -55,7 +65,12 @@ public:
                                 const uint32_t blurRadius, const float blurAlpha,
                                 const SkRect& blurRect, sk_sp<SkImage> blurredImage,
                                 sk_sp<SkImage> input);
-
+#ifdef MI_SF_FEATURE
+    void drawBlurShadow(GrRecordingContext* context, SkCanvas* canvas, const SkRRect& effectRegion,
+                        SkRect& blurShadowRect, sk_sp<SkImage> input);
+    void drawAtmosphereLamp(GrRecordingContext* context, SkCanvas* canvas, const SkRRect& effectRegion,
+                        SkRect& blurShadowRect, sk_sp<SkImage> input);
+#endif
     float getMaxCrossFadeRadius() const;
 
 private:
@@ -65,6 +80,13 @@ private:
 
     // Optional blend used for crossfade only if mMaxCrossFadeRadius > 0
     const sk_sp<SkRuntimeEffect> mMixEffect;
+#ifdef MIUI_BLUR
+    sk_sp<SkRuntimeEffect> mSaturationEffect;
+protected:
+    sk_sp<SkShader> mNoiseShader;
+    float mNoiseCoeff;
+    bool mSupportedHdrDim = false;
+#endif
 };
 
 } // namespace skia

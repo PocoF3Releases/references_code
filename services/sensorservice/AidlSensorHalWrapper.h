@@ -90,6 +90,8 @@ private:
             mEventBuffer;
 
     ndk::ScopedAIBinder_DeathRecipient mDeathRecipient;
+    bool isVirtualInjectSensorData = false;
+    sensors_event_t virtualSensorEvent;
 };
 
 } // namespace android

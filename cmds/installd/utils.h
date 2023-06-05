@@ -26,6 +26,8 @@
 #include <unistd.h>
 #include <utime.h>
 
+#include <selinux/android.h>
+
 #include <cutils/multiuser.h>
 
 #include <installd_constants.h>
@@ -37,6 +39,10 @@
 #define BYPASS_QUOTA 0
 #define BYPASS_SDCARDFS 0
 
+// MIUI ADD: START
+#define MAX_DIR_LIST_BYTES (NAME_MAX * 4 * 16)
+// END
+
 namespace android {
 namespace installd {
 
@@ -44,6 +50,14 @@ constexpr const char* kXattrInodeCache = "user.inode_cache";
 constexpr const char* kXattrInodeCodeCache = "user.inode_code_cache";
 constexpr const char* kXattrCacheGroup = "user.cache_group";
 constexpr const char* kXattrCacheTombstone = "user.cache_tombstone";
+// MIUI ADD: START
+//refer to PackageInstaller.SPEED_INSTALL_EXTERNAL_PATH
+constexpr const char* kMntSpeedInstall = "siexternal";
+
+int transfer(const char * src, const char * target_base, const char * target_relative, bool copy, uid_t target_uid,
+        gid_t target_gid, mode_t target_mode, const char * target_se_info, bool ignore_set_perm_err);
+int list_files(const char * path, size_t start, size_t max_count, std::vector<std::string> * list, int64_t * offset);
+// MIUI END
 
 std::string create_data_path(const char* volume_uuid);
 

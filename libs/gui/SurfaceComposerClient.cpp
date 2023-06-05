@@ -201,7 +201,12 @@ JankDataListener::~JankDataListener() {
 // ANDROID_SINGLETON_STATIC_INSTANCE only allows a reference to an instance.
 
 // 0 is an invalid callback id
-TransactionCompletedListener::TransactionCompletedListener() : mCallbackIdCounter(1) {}
+// MIUI MOD: START
+//TransactionCompletedListener::TransactionCompletedListener() : mCallbackIdCounter(1) {}
+TransactionCompletedListener::TransactionCompletedListener() : mCallbackIdCounter(1) {
+    setMinSchedulerPolicy(SCHED_FIFO, 2);
+}
+// END
 
 int64_t TransactionCompletedListener::getNextIdLocked() {
     return mCallbackIdCounter++;
@@ -957,6 +962,8 @@ void SurfaceComposerClient::Transaction::cacheBuffers() {
 
 status_t SurfaceComposerClient::Transaction::apply(bool synchronous, bool oneWay) {
     if (mStatus != NO_ERROR) {
+        // MIUI ADD:
+        ALOGE("apply error. mStatus:%d", (int)mStatus);
         return mStatus;
     }
 
@@ -1043,7 +1050,6 @@ status_t SurfaceComposerClient::Transaction::apply(bool synchronous, bool oneWay
     mStatus = NO_ERROR;
     return NO_ERROR;
 }
-
 // ---------------------------------------------------------------------------
 
 sp<IBinder> SurfaceComposerClient::createDisplay(const String8& displayName, bool secure) {
@@ -1221,13 +1227,16 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setFlags
     if ((mask & layer_state_t::eLayerOpaque) || (mask & layer_state_t::eLayerHidden) ||
         (mask & layer_state_t::eLayerSecure) || (mask & layer_state_t::eLayerSkipScreenshot) ||
         (mask & layer_state_t::eEnableBackpressure) ||
-        (mask & layer_state_t::eLayerIsDisplayDecoration)) {
+        (mask & layer_state_t::eLayerIsDisplayDecoration)
+#if MI_SCREEN_PROJECTION
+         || (mask & layer_state_t::eLayerCast)
+#endif
+        ) {
         s->what |= layer_state_t::eFlagsChanged;
     }
     s->flags &= ~mask;
     s->flags |= (flags & mask);
     s->mask |= mask;
-
     registerSurfaceControlForCallback(sc);
     return *this;
 }
@@ -1274,6 +1283,39 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setAlpha
     registerSurfaceControlForCallback(sc);
     return *this;
 }
+
+#if MI_SCREEN_PROJECTION
+// MIUI ADD: START
+SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setScreenProjection(
+        const sp<SurfaceControl>& sc, int32_t screenFlags) {
+    layer_state_t* s = getLayerState(sc);
+    if (!s) {
+        mStatus = BAD_INDEX;
+        return *this;
+    }
+    s->what |= layer_state_t::eScreenProjected;
+    s->screenFlags = screenFlags;
+    return *this;
+}
+#endif
+
+#if MI_VIRTUAL_DISPLAY_FRAMERATE
+// MIUI ADD:
+void SurfaceComposerClient::Transaction::setLimitedFrameRate(const sp<IBinder>& token, uint32_t frameRate) {
+    DisplayState& s(getDisplayState(token));
+    s.limitedFrameRate = frameRate;
+    s.what |= DisplayState::eLimitedFrameRateChanged;
+}
+// END
+#endif
+
+#ifdef MI_SF_FEATURE
+void SurfaceComposerClient::Transaction::setMiSecurityDisplay(const sp<IBinder>& token, bool isSecurity) {
+    DisplayState& s(getDisplayState(token));
+    s.isDisplaySecurity = isSecurity;
+    s.what |= DisplayState::eIsDisplaySecurityChanged;
+}
+#endif
 
 SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setLayerStack(
         const sp<SurfaceControl>& sc, ui::LayerStack layerStack) {
@@ -1808,6 +1850,58 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setShado
     return *this;
 }
 
+#ifdef MI_SF_FEATURE
+SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setShadowSettings(
+        const sp<SurfaceControl>& sc, int shadowType, float length, const half4& color,
+        float offsetX, float offsetY, float outset, int32_t numOfLayers) {
+    layer_state_t* s = getLayerState(sc);
+    if (!s) {
+        mStatus = BAD_INDEX;
+        return *this;
+    }
+    s->what |= layer_state_t::eShadowChanged;
+    s->shadowType = shadowType;
+    s->shadowLength = length;
+    s->shadowColor = color;
+    s->shadowOffset[0] = offsetX;
+    s->shadowOffset[1] = offsetY;
+    s->shadowOutset = outset;
+    s->shadowLayers = numOfLayers;
+    return *this;
+}
+#endif
+
+#ifdef MI_SF_FEATURE
+// MIUI ADD: HDR Dimmer
+SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setHdrDimmer(
+        const sp<SurfaceControl>& sc, bool enable, const std::vector<std::vector<float>>& brightRegions,
+        const std::vector<std::vector<float>>& dimRegions) {
+    layer_state_t* s = getLayerState(sc);
+    if (!s) {
+        mStatus = BAD_INDEX;
+        return *this;
+    }
+    s->what |= layer_state_t::eHdrDimmerChanged;
+    s->hdrDimmerEnabled = enable;
+    s->hdrBrightRegion = brightRegions;
+    s->hdrDimRegion = dimRegions;
+    return *this;
+}
+
+SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setHdrDimmerRatio(
+        const sp<SurfaceControl>& sc, float ratio) {
+    layer_state_t* s = getLayerState(sc);
+    if (!s) {
+        mStatus = BAD_INDEX;
+        return *this;
+    }
+    s->what |= layer_state_t::eHdrDimmerRatioChanged;
+    s->hdrDimmerRatio = ratio;
+    return *this;
+}
+// END
+#endif
+
 SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setFrameRate(
         const sp<SurfaceControl>& sc, float frameRate, int8_t compatibility,
         int8_t changeFrameRateStrategy) {
@@ -1956,7 +2050,6 @@ DisplayState& SurfaceComposerClient::Transaction::getDisplayState(const sp<IBind
     }
     return mDisplayStates.editItemAt(static_cast<size_t>(index));
 }
-
 status_t SurfaceComposerClient::Transaction::setDisplaySurface(const sp<IBinder>& token,
         const sp<IGraphicBufferProducer>& bufferProducer) {
     if (bufferProducer.get() != nullptr) {
@@ -2007,6 +2100,20 @@ void SurfaceComposerClient::Transaction::setDisplaySize(const sp<IBinder>& token
     s.height = height;
     s.what |= DisplayState::eDisplaySizeChanged;
 }
+
+#if MI_DEFER_GESTURE_ANIM
+void SurfaceComposerClient::Transaction::deferAnimation(const sp<SurfaceControl>& sc, int num) {
+    layer_state_t* s = getLayerState(sc);
+    if (!s) {
+        mStatus = BAD_INDEX;
+        return ;
+    }
+    s->deferAnimation = num;
+    if (mIsAutoTimestamp) {
+        mDesiredPresentTime = systemTime();
+    }
+}
+#endif
 
 // ---------------------------------------------------------------------------
 
@@ -2395,6 +2502,16 @@ status_t SurfaceComposerClient::setDisplayBrightness(const sp<IBinder>& displayT
     return status.transactionError();
 }
 
+// MIUI ADD: START
+status_t SurfaceComposerClient::setDisplayBrightnessWithDimLayer(const sp<IBinder>& displayToken,
+        const gui::DisplayBrightness& brightness, bool hdrBoost, float dimmerFactor) {
+    binder::Status status =
+            ComposerServiceAIDL::getComposerService()->setDisplayBrightnessWithDimLayer(displayToken,
+                    brightness, hdrBoost, dimmerFactor);
+    return status.transactionError();
+}
+// END
+
 status_t SurfaceComposerClient::addHdrLayerInfoListener(
         const sp<IBinder>& displayToken, const sp<gui::IHdrLayerInfoListener>& listener) {
     binder::Status status =
@@ -2431,6 +2548,23 @@ std::optional<DisplayDecorationSupport> SurfaceComposerClient::getDisplayDecorat
     return support;
 }
 
+#ifdef CURTAIN_ANIM
+status_t SurfaceComposerClient::enableCurtainAnim(bool isEnable) {
+    return ComposerService::getComposerService()->enableCurtainAnim(isEnable);
+}
+status_t SurfaceComposerClient::setCurtainAnimRate(float rate) {
+    return ComposerService::getComposerService()->setCurtainAnimRate(rate);
+}
+#endif
+
+#ifdef MI_SF_FEATURE
+// MIUI ADD: HDR Dimmer
+status_t SurfaceComposerClient::enableHdrDimmer(bool enable, float factor) {
+    return ComposerService::getComposerService()->enableHdrDimmer(enable, factor);
+}
+// END
+#endif
+
 int SurfaceComposerClient::getGPUContextPriority() {
     return ComposerService::getComposerService()->getGPUContextPriority();
 }
@@ -2448,6 +2582,27 @@ status_t SurfaceComposerClient::removeWindowInfosListener(
     return WindowInfosListenerReporter::getInstance()
             ->removeWindowInfosListener(windowInfosListener, ComposerService::getComposerService());
 }
+
+status_t SurfaceComposerClient::setFpsVideoToDisplay(
+        uint32_t cmd, Parcel *data) {
+    return ComposerService::getComposerService()->setFrameRateVideoToDisplay(cmd, data);
+}
+
+//MIUI ADD: START
+bool SurfaceComposerClient::checkLayerNum() {
+    bool outNumber = false;
+    ComposerService::getComposerService()->checkLayerNum(&outNumber);
+    return outNumber;
+}
+//END
+
+//MIUI ADD: START
+status_t SurfaceComposerClient::onFrameDropped(int32_t droppedFrameCount,
+        int64_t intendedVsyncTime, String8 windowName) {
+    return ComposerService::getComposerService()->producerFrameDropped(droppedFrameCount,
+            intendedVsyncTime, windowName);
+}
+//END
 
 // ----------------------------------------------------------------------------
 

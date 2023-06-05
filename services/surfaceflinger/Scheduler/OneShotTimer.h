@@ -39,7 +39,7 @@ public:
 
     OneShotTimer(std::string name, const Interval& interval, const ResetCallback& resetCallback,
                  const TimeoutCallback& timeoutCallback,
-                 std::unique_ptr<Clock> clock = std::make_unique<SteadyClock>());
+                 std::unique_ptr<android::Clock> clock = std::make_unique<android::SteadyClock>());
     ~OneShotTimer();
 
     // Initializes and turns on the idle timer.
@@ -50,6 +50,13 @@ public:
     void reset();
 
     std::string dump() const;
+
+#ifdef MI_FEATURE_ENABLE
+    void setInterval(Interval interval);
+    const Interval getInterval() {
+        return mInterval;
+    }
+#endif
 
 private:
     // Enum to track in what state is the timer.

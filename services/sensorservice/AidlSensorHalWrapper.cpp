@@ -155,8 +155,6 @@ void convertToSensorEvent(const Event &src, sensors_event_t *dst) {
 
         case SensorType::HINGE_ANGLE:
         case SensorType::DEVICE_ORIENTATION:
-        case SensorType::LIGHT:
-        case SensorType::PRESSURE:
         case SensorType::PROXIMITY:
         case SensorType::RELATIVE_HUMIDITY:
         case SensorType::AMBIENT_TEMPERATURE:
@@ -187,6 +185,8 @@ void convertToSensorEvent(const Event &src, sensors_event_t *dst) {
             break;
         }
 
+        case SensorType::LIGHT:
+        case SensorType::PRESSURE:
         case SensorType::POSE_6DOF: { // 15 floats
             for (size_t i = 0; i < 15; ++i) {
                 dst->data[i] = src.payload.get<Event::EventPayload::pose6DOF>().values[i];
@@ -367,8 +367,6 @@ void convertFromSensorEvent(const sensors_event_t &src, Event *dst) {
         }
 
         case SensorType::DEVICE_ORIENTATION:
-        case SensorType::LIGHT:
-        case SensorType::PRESSURE:
         case SensorType::PROXIMITY:
         case SensorType::RELATIVE_HUMIDITY:
         case SensorType::AMBIENT_TEMPERATURE:
@@ -401,6 +399,8 @@ void convertFromSensorEvent(const sensors_event_t &src, Event *dst) {
             break;
         }
 
+        case SensorType::LIGHT:
+        case SensorType::PRESSURE:
         case SensorType::POSE_6DOF: { // 15 floats
             Event::EventPayload::Pose6Dof pose6DOF;
             for (size_t i = 0; i < 15; ++i) {
@@ -613,6 +613,20 @@ ssize_t AidlSensorHalWrapper::pollFmq(sensors_event_t *buffer, size_t maxNumEven
     ssize_t eventsRead = 0;
     size_t availableEvents = mEventQueue->availableToRead();
 
+    if (isVirtualInjectSensorData) {
+        uint32_t eventFlagState = 0;
+        if (mEventQueueFlag != nullptr) {
+            mEventQueueFlag->wait(asBaseType(INTERNAL_WAKE), &eventFlagState);
+        }
+        buffer[0].type = virtualSensorEvent.type;
+        buffer[0].data[0] = virtualSensorEvent.data[0];
+        buffer[0].data[1] = virtualSensorEvent.data[1];
+        buffer[0].data[2] = virtualSensorEvent.data[2];
+        buffer[0].sensor = virtualSensorEvent.sensor;
+        buffer[0].timestamp = virtualSensorEvent.timestamp;
+        return 1;
+    }
+
     if (availableEvents == 0) {
         uint32_t eventFlagState = 0;
 
@@ -695,6 +709,39 @@ status_t AidlSensorHalWrapper::flush(int32_t sensorHandle) {
 status_t AidlSensorHalWrapper::injectSensorData(const sensors_event_t *event) {
     if (mSensors == nullptr) return NO_INIT;
 
+    bool sendWake = false;
+    if (event->version == 0xFFFF) {
+        isVirtualInjectSensorData = true;
+        sendWake = true;
+    }
+
+    if (event->version == 0xFFFE) {
+        isVirtualInjectSensorData = false;
+        sendWake = true;
+    }
+
+    if (event->version == 0xFFFD) {
+        ALOGI("AidlSensorHalWrapper::injectSensorData: type: %d, data: %f, %f, %f", event->type,
+              event->data[0], event->data[1], event->data[2]);
+        if (mSensors != nullptr) {
+            std::vector<sensor_t> sensorsFound = getSensorsList();
+            for (size_t i = 0; i < sensorsFound.size(); i++) {
+                if (event->type == sensorsFound[i].type) {
+                    memcpy(&virtualSensorEvent, event, sizeof(sensors_event_t));
+                    virtualSensorEvent.sensor = sensorsFound[i].handle;
+                    ALOGI("AidlSensorHalWrapper::injectSensorData: handle [%d] found for "
+                            "sensor %d",
+                            sensorsFound[i].handle, event->type);
+                    break;
+                }
+            }
+        }
+        sendWake = true;
+    }
+
+    if (sendWake && mEventQueueFlag != nullptr)
+        mEventQueueFlag->wake(asBaseType(INTERNAL_WAKE));
+
     Event ev;
     convertFromSensorEvent(*event, &ev);
     return convertToStatus(mSensors->injectSensorData(ev));
@@ -726,7 +773,9 @@ status_t AidlSensorHalWrapper::registerDirectChannel(const sensors_direct_mem_t 
             .type = type,
             .format = format,
             .size = static_cast<int32_t>(memory->size),
-            .memoryHandle = makeToAidl(memory->handle),
+            // MIUI MOD: AOSP
+            // .memoryHandle = makeToAidl(memory->handle),
+            .memoryHandle = dupToAidl(memory->handle),
     };
 
     return convertToStatus(mSensors->registerDirectChannel(mem, channelHandle));

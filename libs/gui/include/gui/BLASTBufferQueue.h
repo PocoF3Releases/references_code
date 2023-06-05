@@ -29,6 +29,7 @@
 #include <system/window.h>
 #include <thread>
 #include <queue>
+#include <cutils/properties.h>
 
 namespace android {
 
@@ -59,7 +60,6 @@ protected:
 
 private:
     const wp<BLASTBufferQueue> mBLASTBufferQueue;
-
     uint64_t mCurrentFrameNumber = 0;
 
     Mutex mMutex;
@@ -128,6 +128,13 @@ public:
      */
     void setTransactionHangCallback(std::function<void(bool)> callback);
 
+    // MIUI ADD:
+    bool adjustMaxDequeuedBufferCountForProducer(int);
+    // MIUI ADD: dynamic ViewRootImpl and BlastBufferQueue Log
+    bool setDynamicLog(int);
+    bool isDynamicLog();
+    // END
+
     virtual ~BLASTBufferQueue();
 
 private:
@@ -173,6 +180,11 @@ private:
     int mNumUndequeued GUARDED_BY(mMutex) = 0;
     int32_t mNumFrameAvailable GUARDED_BY(mMutex) = 0;
     int32_t mNumAcquired GUARDED_BY(mMutex) = 0;
+
+    // MIUI ADD: dynamic ViewRootImpl and BlastBufferQueue Log
+    bool mPropDynamicLog = false;
+    bool mDynamicLog = false;
+
 
     // Keep a reference to the submitted buffers so we can release when surfaceflinger drops the
     // buffer or the buffer has been presented and a new buffer is ready to be presented.

@@ -39,8 +39,7 @@
 #include <ui/HdrCapabilities.h>
 #include <ui/StaticDisplayInfo.h>
 #include <utils/Log.h>
-
-// ---------------------------------------------------------------------------
+#include <gui/MiSurfaceComposerStub.h>
 
 using namespace aidl::android::hardware::graphics;
 
@@ -119,6 +118,22 @@ public:
                     data, &reply);
         }
     }
+
+     status_t setFrameRateVideoToDisplay(uint32_t cmd, Parcel *data) {
+        return MiSurfaceComposerStub::setFrameRateVideoToDisplay(cmd, data,
+            ISurfaceComposer::getInterfaceDescriptor(), remote(), BnSurfaceComposer::SET_VIDEO_DECODER_INFO);
+    }
+
+#if MI_SCREEN_PROJECTION
+    // MIUI ADD: START
+    virtual void setMiuiTransactionState(const Vector<MiuiDisplayState>& miuiDisplays, uint32_t flags,
+                                     int64_t desiredPresentTime) {
+        MiSurfaceComposerStub::setMiuiTransactionState(miuiDisplays,flags,desiredPresentTime,
+                                             remote(), ISurfaceComposer::getInterfaceDescriptor(),
+                                                     BnSurfaceComposer::SET_MIUI_TRANSACTION_STATE);
+    }
+    // END
+#endif
 
     void bootFinished() override {
         Parcel data, reply;
@@ -926,6 +941,82 @@ public:
         return NO_ERROR;
     }
 
+#ifdef CURTAIN_ANIM
+    status_t enableCurtainAnim(bool isEnable) override {
+        Parcel data, reply;
+        status_t error = data.writeInterfaceToken(ISurfaceComposer::getInterfaceDescriptor());
+        if (error != NO_ERROR) {
+            ALOGE("enableCurtainAnim: failed to write interface token: %d", error);
+            return error;
+        }
+        error = data.writeBool(isEnable);
+        if (error != NO_ERROR) {
+            ALOGE("enableCurtainAnim: failed to write bool: %d", error);
+            return error;
+        }
+
+        error = remote()->transact(BnSurfaceComposer::ENABLE_CURTAIN_ANIM, data, &reply,
+                                   IBinder::FLAG_ONEWAY);
+        if (error != NO_ERROR) {
+            ALOGE("enableCurtainAnim: failed to transact: %d", error);
+            return error;
+        }
+        return NO_ERROR;
+    }
+    status_t setCurtainAnimRate(float rate) override {
+        Parcel data, reply;
+        status_t error = data.writeInterfaceToken(ISurfaceComposer::getInterfaceDescriptor());
+        if (error != NO_ERROR) {
+            ALOGE("setCurtainAnimRate: failed to write interface token: %d", error);
+            return error;
+        }
+        error = data.writeFloat(rate);
+        if (error != NO_ERROR) {
+            ALOGE("setCurtainAnimRate: failed to write float: %d", error);
+            return error;
+        }
+
+        error = remote()->transact(BnSurfaceComposer::SET_CURTAIN_ANIM_RATE, data, &reply,
+                                   IBinder::FLAG_ONEWAY);
+        if (error != NO_ERROR) {
+            ALOGE("setCurtainAnimRate: failed to transact: %d", error);
+            return error;
+        }
+        return NO_ERROR;
+    }
+#endif
+
+#ifdef MI_SF_FEATURE
+    // MIUI ADD: HDR Dimmer
+    status_t enableHdrDimmer(bool enable, float factor) override {
+        Parcel data, reply;
+        status_t error = data.writeInterfaceToken(ISurfaceComposer::getInterfaceDescriptor());
+        if (error != NO_ERROR) {
+            ALOGE("enableHdrDimmer: failed to write interface token: %d", error);
+            return error;
+        }
+        error = data.writeBool(enable);
+        if (error != NO_ERROR) {
+            ALOGE("enableHdrDimmer: failed to write enable: %d", error);
+            return error;
+        }
+        error = data.writeFloat(factor);
+        if (error != NO_ERROR) {
+            ALOGE("enableHdrDimmer: failed to write factor: %d", error);
+            return error;
+        }
+
+        error = remote()->transact(BnSurfaceComposer::ENABLE_HDR_DIMMER, data, &reply,
+                                   IBinder::FLAG_ONEWAY);
+        if (error != NO_ERROR) {
+            ALOGE("enableHdrDimmer: failed to transact: %d", error);
+            return error;
+        }
+        return NO_ERROR;
+    }
+    // END
+#endif
+
     status_t setFrameRate(const sp<IGraphicBufferProducer>& surface, float frameRate,
                           int8_t compatibility, int8_t changeFrameRateStrategy) override {
         Parcel data, reply;
@@ -1037,6 +1128,56 @@ public:
 
         return NO_ERROR;
     }
+
+    //MIUI ADD: START
+    status_t checkLayerNum(bool* outNumber) const override {
+        Parcel data, reply;
+        status_t error = data.writeInterfaceToken(ISurfaceComposer::getInterfaceDescriptor());
+        if (error != NO_ERROR) {
+            ALOGE("checkLayerNum: failed to write interface token: %d", error);
+            return error;
+        }
+        error = remote()->transact(BnSurfaceComposer::CHECK_LAYER_NUMBER, data, &reply);
+        if (error != NO_ERROR) {
+            return error;
+        }
+        error = reply.readBool(outNumber);
+        return error;
+    }
+    // END
+
+    //MIUI ADD: START
+    virtual status_t producerFrameDropped(int32_t count, int64_t intendedVsyncTime, String8 name) {
+        Parcel data, reply;
+        status_t error = data.writeInterfaceToken(ISurfaceComposer::getInterfaceDescriptor());
+        if (error != NO_ERROR) {
+            ALOGE("producerFrameDropped: failed to write interface token: %d", error);
+            return error;
+        }
+        error = data.writeInt32(count);
+        if (error != NO_ERROR) {
+            ALOGE("producerFrameDropped: failed to write count: %d", error);
+            return error;
+        }
+        error = data.writeInt64(intendedVsyncTime);
+        if (error != NO_ERROR) {
+            ALOGE("producerFrameDropped: failed to write intendedVsyncTime: %d", error);
+            return error;
+        }
+        error = data.writeString8(name);
+        if (error != NO_ERROR) {
+            ALOGE("producerFrameDropped: failed to write name: %d", error);
+            return error;
+        }
+        error = remote()->transact(BnSurfaceComposer::PRODUCER_FRAME_DROPPED, data, &reply,
+                                   IBinder::FLAG_ONEWAY);
+        if (error != NO_ERROR) {
+            ALOGE("producerFrameDropped: failed to transact: %d", error);
+            return error;
+        }
+        return NO_ERROR;
+    }
+    // END
 };
 
 // Out-of-line virtual method definition to trigger vtable emission in this
@@ -1121,6 +1262,35 @@ status_t BnSurfaceComposer::onTransact(
                                        uncachedBuffer, hasListenerCallbacks, listenerCallbacks,
                                        transactionId);
         }
+
+        // MIUI ADD: START
+        case SET_VIDEO_DECODER_INFO: {
+            CHECK_INTERFACE(ISurfaceComposer, data, reply);
+            setFrameRateVideoToDisplay(code, &const_cast<Parcel&>(data));
+            return NO_ERROR;
+        }
+#if MI_SCREEN_PROJECTION
+        case SET_MIUI_TRANSACTION_STATE: {
+            CHECK_INTERFACE(ISurfaceComposer, data, reply);
+            size_t count = data.readUint32();
+            if (count > data.dataSize()) {
+                return BAD_VALUE;
+            }
+
+            MiuiDisplayState d;
+            Vector<MiuiDisplayState> displays;
+            displays.setCapacity(count);
+            for (size_t i = 0; i < count; i++) {
+                if (d.read(data) == BAD_VALUE) {
+                    return BAD_VALUE;
+                }
+                displays.add(d);
+            }
+            setMiuiTransactionState(displays, data.readUint32(), data.readInt64());
+            return NO_ERROR;
+        }
+        // END
+#endif
         case BOOT_FINISHED: {
             CHECK_INTERFACE(ISurfaceComposer, data, reply);
             bootFinished();
@@ -1649,6 +1819,52 @@ status_t BnSurfaceComposer::onTransact(
             }
             return error;
         }
+#ifdef CURTAIN_ANIM
+        case ENABLE_CURTAIN_ANIM: {
+            CHECK_INTERFACE(ISurfaceComposer, data, reply);
+
+            bool isEnable;
+            status_t error = data.readBool(&isEnable);
+            if (error != NO_ERROR) {
+                ALOGE("enableCurtainAnim: failed to read isEnable: %d", error);
+                return error;
+            }
+            return enableCurtainAnim(isEnable);
+        }
+        case SET_CURTAIN_ANIM_RATE: {
+            CHECK_INTERFACE(ISurfaceComposer, data, reply);
+
+            float rate;
+            status_t error = data.readFloat(&rate);
+            if (error != NO_ERROR) {
+                ALOGE("setCurtainAnimRate: failed to read rate: %d", error);
+                return error;
+            }
+            return setCurtainAnimRate(rate);
+        }
+#endif
+#ifdef MI_SF_FEATURE
+        // MIUI ADD: HDR Dimmer
+        case ENABLE_HDR_DIMMER: {
+            CHECK_INTERFACE(ISurfaceComposer, data, reply);
+
+            bool enable;
+            status_t error = data.readBool(&enable);
+            if (error != NO_ERROR) {
+                ALOGE("enableHdrDimmer: failed to read enable: %d", error);
+                return error;
+            }
+
+            float factor;
+            error = data.readFloat(&factor);
+            if (error != NO_ERROR) {
+                ALOGE("enableHdrDimmer: failed to read factor: %d", error);
+                return error;
+            }
+            return enableHdrDimmer(enable, factor);
+        }
+        // END
+#endif
         case SET_FRAME_RATE: {
             CHECK_INTERFACE(ISurfaceComposer, data, reply);
             sp<IBinder> binder;
@@ -1771,6 +1987,41 @@ status_t BnSurfaceComposer::onTransact(
 
             return setOverrideFrameRate(uid, frameRate);
         }
+        // MIUI ADD: START
+        case CHECK_LAYER_NUMBER: {
+            CHECK_INTERFACE(ISurfaceComposer, data, reply);
+            bool result;
+            status_t error = checkLayerNum(&result);
+            if (error == NO_ERROR) {
+                reply->writeBool(result);
+            }
+            return error;
+        }
+        // END
+        // MIUI ADD: START
+        case PRODUCER_FRAME_DROPPED: {
+            CHECK_INTERFACE(ISurfaceComposer, data, reply);
+            int32_t count;
+            status_t error = data.readInt32(&count);
+            if (error != NO_ERROR) {
+                ALOGE("producerFrameDropped: failed to read count,: %d", error);
+                return error;
+            }
+            int64_t intendedVsyncTime;
+            error = data.readInt64(&intendedVsyncTime);
+            if (error != NO_ERROR) {
+                ALOGE("producerFrameDropped: failed to read intendedVsyncTime,: %d", error);
+                return error;
+            }
+            String8 name;
+            error = data.readString8(&name);
+            if (error != NO_ERROR) {
+                ALOGE("producerFrameDropped: failed to read name,: %d", error);
+                return error;
+            }
+            return producerFrameDropped(count, intendedVsyncTime, name);
+        }
+        // END
         default: {
             return BBinder::onTransact(code, data, reply, flags);
         }

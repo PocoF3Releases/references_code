@@ -37,6 +37,7 @@
 
 #include "DisplayDevice.h"
 #include "SurfaceFlinger.h"
+#include "MiSurfaceFlingerStub.h"
 
 namespace android {
 // ---------------------------------------------------------------------------
@@ -56,7 +57,10 @@ std::vector<compositionengine::LayerFE::LayerSettings> EffectLayer::prepareClien
     if (!layerSettings) {
         return {};
     }
-
+#ifdef MI_SF_FEATURE
+    MiSurfaceFlingerStub::prepareMiuiShadowClientComposition(*layerSettings,
+                                                targetSettings.viewport, this);
+#endif
     // set the shadow for the layer if needed
     prepareShadowClientComposition(*layerSettings, targetSettings.viewport);
 
@@ -65,7 +69,11 @@ std::vector<compositionengine::LayerFE::LayerSettings> EffectLayer::prepareClien
         // Set color for color fill settings.
         layerSettings->source.solidColor = getColor().rgb;
         results.push_back(*layerSettings);
+#ifdef MI_SF_FEATURE
+    } else if (hasBlur() || drawShadows() || drawMiuiShadows()) {
+#else
     } else if (hasBlur() || drawShadows()) {
+#endif
         layerSettings->skipContentDraw = true;
         results.push_back(*layerSettings);
     }

@@ -36,8 +36,11 @@ namespace skia {
 class KawaseBlurFilter: public BlurFilter {
 public:
     // Maximum number of render passes
+#ifdef MIUI_BLUR
+    static constexpr uint32_t kMaxPasses = 6;
+#else
     static constexpr uint32_t kMaxPasses = 4;
-
+#endif
     explicit KawaseBlurFilter();
     virtual ~KawaseBlurFilter(){}
 

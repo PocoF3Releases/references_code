@@ -94,6 +94,9 @@ public:
     void setUidStateForConnection(void* ident, SensorService::UidState state);
 
     bool isReconnecting() const { return mHalWrapper->mReconnecting; }
+#ifdef HAS_SENSOR_CONTROL
+    void setUidControlStateForConnection(void* ident, bool enable);
+#endif
 
     bool isSensorActive(int handle) const;
 
@@ -187,7 +190,10 @@ private:
     enum DisabledReason : uint8_t {
         // UID becomes idle (e.g. app goes to background).
         DISABLED_REASON_UID_IDLE = 0,
-
+        
+#ifdef HAS_SENSOR_CONTROL
+        DISABLE_REASON_SENSOR_CONTROL,
+#endif        
         // Sensors are restricted for all clients.
         DISABLED_REASON_SERVICE_RESTRICTED,
         DISABLED_REASON_MAX,

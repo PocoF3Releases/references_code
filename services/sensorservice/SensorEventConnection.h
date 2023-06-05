@@ -68,7 +68,10 @@ public:
     bool needsWakeLock();
     void resetWakeLockRefCount();
     String8 getPackageName() const;
-
+#if MI_SCREEN_PROJECTION
+    // MI ADD:
+    const String16 getOpPackageName() const;
+#endif
     uid_t getUid() const { return mUid; }
     // cap/uncap existing connection depending on the state of the mic toggle.
     void onMicSensorAccessChanged(bool isMicToggleOn);

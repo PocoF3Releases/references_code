@@ -67,6 +67,12 @@ public:
     void destroyDirectChannel(int channelNativeHandle);
     int configureDirectChannel(int channelNativeHandle, int sensorHandle, int rateLevel);
     int setOperationParameter(int handle, int type, const Vector<float> &floats, const Vector<int32_t> &ints);
+#if MI_SCREEN_PROJECTION
+    // MIUI ADD: START
+    void setSensorDisableApp(const String8& packageName);
+    void removeSensorDisableApp(const String8& packageName);
+    // END
+#endif
 
 private:
     // DeathRecipient interface

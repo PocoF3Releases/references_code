@@ -33,8 +33,20 @@
 #include <utils/Thread.h>
 
 #include "InputDevice.h"
+// MIUI ADD:
+#include "stubs/MiInputReaderStub.h"
 
 using android::base::StringPrintf;
+
+// MIUI ADD : START
+#ifdef MIUI_BUILD
+// we should modify ALOGD working way on miui version, let ALOGD control by dumpsys input debuglog
+#undef ALOGD
+#define ALOGD(...)                              \
+    if (MiInputReaderStub::getInputReaderAll()) \
+    __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+#endif
+// END
 
 namespace android {
 
@@ -54,6 +66,9 @@ InputReader::InputReader(std::shared_ptr<EventHubInterface> eventHub,
         mDisableVirtualKeysTimeout(LLONG_MIN),
         mNextTimeout(LLONG_MAX),
         mConfigurationChangesToRefresh(0) {
+    // MIUI ADD: START
+    MiInputReaderStub::init(this);
+    // END
     refreshConfigurationLocked(0);
     updateGlobalMetaStateLocked();
 }
@@ -91,6 +106,9 @@ void InputReader::loopOnce() {
 
         uint32_t changes = mConfigurationChangesToRefresh;
         if (changes) {
+            // MIUI ADD:
+            MiInputReaderStub::loopOnceChanges(changes);
+
             mConfigurationChangesToRefresh = 0;
             timeoutMillis = 0;
             refreshConfigurationLocked(changes);
@@ -201,6 +219,8 @@ void InputReader::addDeviceLocked(nsecs_t when, int32_t eventHubId) {
               device->getSources());
     }
 
+    MiInputReaderStub::addDeviceLocked(device);
+
     mDevices.emplace(eventHubId, device);
     // Add device to device to EventHub ids map.
     const auto mapIt = mDeviceToEventHubIdsMap.find(device);
@@ -264,6 +284,10 @@ void InputReader::removeDeviceLocked(nsecs_t when, int32_t eventHubId) {
     if (device->hasEventHubDevices()) {
         device->configure(when, &mConfig, 0);
     }
+
+    // MIUI ADD:
+    MiInputReaderStub::removeDeviceLocked(device);
+
     device->reset(when);
 }
 
@@ -330,6 +354,11 @@ int32_t InputReader::nextInputDeviceIdLocked() {
 void InputReader::handleConfigurationChangedLocked(nsecs_t when) {
     // Reset global meta state because it depends on the list of all configured devices.
     updateGlobalMetaStateLocked();
+
+    // MIUI ADD:
+    if(MiInputReaderStub::handleConfigurationChangedLockedIntercept(when)) {
+        return;
+    }
 
     // Enqueue configuration changed.
     NotifyConfigurationChangedArgs args(mContext.getNextId(), when);

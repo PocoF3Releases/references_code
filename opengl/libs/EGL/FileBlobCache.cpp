@@ -24,6 +24,7 @@
 #include <unistd.h>
 
 #include <log/log.h>
+#include <cutils/properties.h>
 
 // Cache file header
 static const char* cacheFileMagic = "EGL$";
@@ -47,6 +48,10 @@ static uint32_t crc32c(const uint8_t* buf, size_t len) {
     return r;
 }
 
+//MIUI ADD: START
+int getPreCacheFd(const std::string& filename);
+//END
+
 FileBlobCache::FileBlobCache(size_t maxKeySize, size_t maxValueSize, size_t maxTotalSize,
         const std::string& filename)
         : BlobCache(maxKeySize, maxValueSize, maxTotalSize)
@@ -54,7 +59,10 @@ FileBlobCache::FileBlobCache(size_t maxKeySize, size_t maxValueSize, size_t maxT
     if (mFilename.length() > 0) {
         size_t headerSize = cacheFileHeaderSize;
 
-        int fd = open(mFilename.c_str(), O_RDONLY, 0);
+        //MIUI MOD: START
+        //int fd = open(mFilename.c_str(), O_RDONLY, 0);
+        int fd = getPreCacheFd(filename);
+        //END
         if (fd == -1) {
             if (errno != ENOENT) {
                 ALOGE("error opening cache file %s: %s (%d)", mFilename.c_str(),
@@ -184,5 +192,62 @@ void FileBlobCache::writeToFile() {
         close(fd);
     }
 }
+
+//MIUI ADD: START
+void getPreCacheAppList(std::vector<std::string> &preCachePkgs) {
+    char appStr1[92];
+    property_get("persist.sys.precache.appstrs1", appStr1, "");
+    char appStr2[92];
+    property_get("persist.sys.precache.appstrs2", appStr2, "");
+    char appStr3[92];
+    property_get("persist.sys.precache.appstrs3", appStr3, "");
+    std::string str = std::string(appStr1) 
+        + std::string(",") + std::string(appStr2) 
+        + std::string(",") + std::string(appStr3);
+    ALOGE("pre_cache appList: %s", str.c_str());
+    if(str.length() > 0){
+        char delim = ',';
+        std::size_t prePos = 0;
+        std::size_t curPos = str.find(delim);
+        while (curPos != std::string::npos)
+        {
+            if(curPos > prePos){
+                preCachePkgs.push_back(str.substr(prePos, curPos - prePos));
+            }
+            prePos = curPos + 1;
+            curPos = str.find(delim, prePos);
+        }
+        if(prePos != str.size()){
+            preCachePkgs.push_back(str.substr(prePos));
+        }
+    }
+}
+
+int getPreCacheFd(const std::string& filename) {
+    int preFd = -1;
+    if(property_get_bool("persist.sys.precache.enable", true)){
+        static std::vector<std::string> preCachePkgs;
+        getPreCacheAppList(preCachePkgs);
+        auto iter = preCachePkgs.begin();
+        while(preCachePkgs.end() != iter && -1 == filename.find(*iter)) ++iter;
+        if(preCachePkgs.end() != iter){
+            std::string cacheName = -1 != filename.find("opengl") ?
+            std::string("com.android.opengl.shaders_cache") :
+            std::string("com.android.skia.shaders_cache");
+        std::string preCacheFile =
+            std::string("/product/etc/shader_cache/") + *iter + std::string("/") + cacheName;
+            struct stat preBuf, originBuf;
+            if(0 == stat(preCacheFile.c_str(), &preBuf)){
+                int rs = stat(filename.c_str(), &originBuf);
+                if(-1 == rs || originBuf.st_size < preBuf.st_size){
+                    preFd = open(preCacheFile.c_str(), O_RDONLY, 0);
+                    ALOGE("pre_cache: %s == %d", preCacheFile.c_str(), preFd);
+                }
+            }
+        }
+    }
+    return -1 == preFd ? open(filename.c_str(), O_RDONLY, 0) : preFd;
+}
+//END
 
 }

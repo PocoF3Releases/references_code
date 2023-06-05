@@ -228,8 +228,14 @@ Rect OutputLayer::calculateOutputDisplayFrame() const {
 
     // Some HWCs may clip client composited input to its displayFrame. Make sure
     // that this does not cut off the shadow.
+#ifdef MI_SF_FEATURE
+    if (layerState.forceClientComposition &&
+            (layerState.shadowRadius > 0.0f || layerState.shadowLength > 0.0f)) {
+        const auto outset = fmaxf(layerState.shadowRadius, layerState.shadowLength);
+#else
     if (layerState.forceClientComposition && layerState.shadowRadius > 0.0f) {
         const auto outset = layerState.shadowRadius;
+#endif
         geomLayerBounds.left -= outset;
         geomLayerBounds.top -= outset;
         geomLayerBounds.right += outset;
@@ -438,6 +444,14 @@ void OutputLayer::writeOutputDependentGeometryStateToHWC(HWC2::Layer* hwcLayer,
               getLayerFE().getDebugName(), sourceCrop.left, sourceCrop.top, sourceCrop.right,
               sourceCrop.bottom, to_string(error).c_str(), static_cast<int32_t>(error));
     }
+
+#if MI_FEATURE_ENABLE
+    if (miFodLayer) {
+        z = z | miFodLayer;
+        ALOGV("%s layer[%s] set Z %u miFodLayer 0x%x",
+                __FUNCTION__, getLayerFE().getDebugName(), z, miFodLayer);
+    }
+#endif
 
     if (auto error = hwcLayer->setZOrder(z); error != hal::Error::NONE) {
         ALOGE("[%s] Failed to set Z %u: %s (%d)", getLayerFE().getDebugName(), z,

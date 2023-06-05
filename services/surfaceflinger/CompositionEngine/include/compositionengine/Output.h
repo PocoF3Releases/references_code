@@ -65,6 +65,9 @@ class Output {
 public:
     using ReleasedLayers = std::vector<wp<LayerFE>>;
     using UniqueFELayerStateMap = std::unordered_map<LayerFE*, LayerFECompositionState*>;
+    // MIUI+ send SecureWin state
+    void* mOutputExtra = nullptr;
+
 
     // A helper class for enumerating the output layers using a C++11 ranged-based for loop
     template <typename T>
@@ -190,6 +193,14 @@ public:
     // Sets the filter for this output. See Output::includesLayer.
     virtual void setLayerFilter(ui::LayerFilter) = 0;
 
+#if MI_SCREEN_PROJECTION
+    // MIUI ADD: START
+    virtual void setDiffScreenProjection(uint32_t isScreenProjection) = 0;
+    virtual void setCastMode(uint32_t isCastMode) = 0;
+    virtual void setLastFrame(uint32_t isLastFrame) = 0;
+    // END
+#endif
+
     // Sets the output color mode
     virtual void setColorProfile(const ColorProfile&) = 0;
 
@@ -249,7 +260,7 @@ public:
 
     // Gets an output layer in Z order given its index
     virtual OutputLayer* getOutputLayerOrderedByZByIndex(size_t) const = 0;
-
+public:
     // A helper function for enumerating all the output layers in Z order using
     // a C++11 range-based for loop.
     auto getOutputLayersOrderedByZ() const { return OutputLayersEnumerator(*this); }

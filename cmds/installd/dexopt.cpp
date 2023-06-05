@@ -66,6 +66,9 @@
 #include "unique_file.h"
 #include "utils.h"
 
+// MIUI ADD:
+#include "InstalldStub.h"
+
 using android::base::Basename;
 using android::base::EndsWith;
 using android::base::GetBoolProperty;
@@ -1824,11 +1827,27 @@ int dexopt(const char* dex_path, uid_t uid, const char* pkgname, const char* ins
     // Check if we're dealing with a secondary dex file and if we need to compile it.
     std::string oat_dir_str;
     std::vector<std::string> context_dex_paths;
+
+    // MIUI MOD : START
+    // if (is_secondary_dex) {
+    int secondaryId = 0;
+    std::string package_name = pkgname;
     if (is_secondary_dex) {
+        int length = strlen(pkgname);
+        std::string temp = pkgname;
+        std::string pkg_len = temp.substr(length-2);
+        int len = stoi(pkg_len);
+        std::string id = temp.substr(len, length-len-2);
+        package_name = temp.substr(0, len);
+        secondaryId  = stoi(id);
+        // END
         if (!get_class_loader_context_dex_paths(class_loader_context, uid, &context_dex_paths)) {
             *error_msg = "Failed acquiring context dex paths";
             return -1;  // We had an error, logged in the process method.
         }
+        // MIUI ADD : START
+        pkgname = package_name.c_str();
+        // END
         SecondaryDexOptProcessResult sec_dex_result = process_secondary_dex_dexopt(dex_path,
                 pkgname, dexopt_flags, volume_uuid, uid,instruction_set, compiler_filter,
                 &is_public, &dexopt_needed, &oat_dir_str, downgrade, class_loader_context,
@@ -1837,6 +1856,10 @@ int dexopt(const char* dex_path, uid_t uid, const char* pkgname, const char* ins
             oat_dir = oat_dir_str.c_str();
             if (dexopt_needed == NO_DEXOPT_NEEDED) {
                 *completed = true;
+                // MIUI ADD : START
+                int result = 0;
+                InstalldStub::send_mi_dexopt_result(pkgname, secondaryId, result);
+                // END
                 return 0;  // Nothing to do, report success.
             }
         } else if (sec_dex_result == kSecondaryDexOptProcessCancelled) {
@@ -1938,9 +1961,16 @@ int dexopt(const char* dex_path, uid_t uid, const char* pkgname, const char* ins
     // Decide whether to use dex2oat64.
     bool use_dex2oat64 = false;
     // Check whether the device even supports 64-bit ABIs.
+    // MIUI MOD : START
     if (!GetProperty("ro.product.cpu.abilist64", "").empty()) {
-      use_dex2oat64 = GetBoolProperty("dalvik.vm.dex2oat64.enabled", false);
+        use_dex2oat64 = GetBoolProperty("dalvik.vm.dex2oat64.enabled", false);
     }
+    //if (!GetProperty("ro.product.cpu.abilist64", "").empty() &&
+    //         strcmp(instruction_set, "arm64") == 0) {
+    //    use_dex2oat64 = GetBoolProperty("dalvik.vm.dex2oat64.enabled", true);
+    //}
+    //END
+
     const char* dex2oat_bin = select_execution_binary(
         (use_dex2oat64 ? kDex2oat64Path : kDex2oat32Path),
         (use_dex2oat64 ? kDex2oatDebug64Path : kDex2oatDebug32Path),
@@ -1951,12 +1981,22 @@ int dexopt(const char* dex_path, uid_t uid, const char* pkgname, const char* ins
     LOG(VERBOSE) << "DexInv: --- BEGIN '" << dex_path << "' ---";
 
     RunDex2Oat runner(dex2oat_bin, execv_helper.get());
+    // MIUI MOD: START
+    // runner.Initialize(out_oat.GetUniqueFile(), out_vdex.GetUniqueFile(), out_image.GetUniqueFile(),
+    //                   in_dex, in_vdex, dex_metadata, reference_profile, class_loader_context,
+    //                   join_fds(context_input_fds), swap_fd.get(), instruction_set, compiler_filter,
+    //                   debuggable, boot_complete, for_restore,target_sdk_version,
+    //                   enable_hidden_api_checks, generate_compact_dex, use_jitzygote_image,
+    //                   compilation_reason);
     runner.Initialize(out_oat.GetUniqueFile(), out_vdex.GetUniqueFile(), out_image.GetUniqueFile(),
                       in_dex, in_vdex, dex_metadata, reference_profile, class_loader_context,
                       join_fds(context_input_fds), swap_fd.get(), instruction_set, compiler_filter,
-                      debuggable, boot_complete, for_restore, target_sdk_version,
+                      debuggable, boot_complete, for_restore,
+                      (dexopt_flags & DEXOPT_MULTI_ARCH) != 0, target_sdk_version,
                       enable_hidden_api_checks, generate_compact_dex, use_jitzygote_image,
                       compilation_reason);
+    // MIUI ADD:
+    bool use_async_dexopt = GetBoolProperty("pm.dexopt.async.enabled", true);
 
     bool cancelled = false;
     pid_t pid = dexopt_status_->check_cancellation_and_fork(&cancelled);
@@ -1980,6 +2020,14 @@ int dexopt(const char* dex_path, uid_t uid, const char* pkgname, const char* ins
         }
 
         runner.Exec(DexoptReturnCodes::kDex2oatExec);
+    // MIUI ADD: START
+    } else if (use_async_dexopt && (strcmp(compiler_filter, "speed") == 0 ||
+                strcmp(compiler_filter, "speed-profile") == 0) &&
+                strcmp(compilation_reason, "install") != 0 &&
+                strcmp(compilation_reason, "update") != 0) {
+        std::string kPackageName = pkgname;
+        InstalldStub::dexopt_async(kPackageName, pid, secondaryId);
+    // END
     } else {
         int res = wait_child_with_timeout(pid, kLongTimeoutMs);
         bool cancelled = dexopt_status_->check_if_killed_and_remove_dexopt_pid(pid);

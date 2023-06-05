@@ -24,6 +24,8 @@
 #include <renderengine/RenderEngine.h>
 #include <utils/Trace.h>
 
+#include "MiSurfaceFlingerStub.h"
+
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wconversion"
@@ -102,6 +104,7 @@ void CompositionEngine::present(CompositionRefreshArgs& args) {
 
         for (const auto& output : args.outputs) {
             output->prepare(args, latchedLayers);
+            MiSurfaceFlingerStub::queryPrimaryDisplayLayersInfo(output, args.layersInfo);
         }
     }
 

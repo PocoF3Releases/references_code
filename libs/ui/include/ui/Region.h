@@ -51,7 +51,10 @@ public:
     inline  bool        isEmpty() const     { return getBounds().isEmpty(); }
     inline  bool        isRect() const      { return mStorage.size() == 1; }
 
-    inline  Rect        getBounds() const   { return mStorage[mStorage.size() - 1]; }
+    // MIUI MOD: START
+    // inline  Rect        getBounds() const   { return mStorage[mStorage.size() - 1]; }
+    inline  Rect        getBounds() const   { return mStorage.size() > 0 ? mStorage[mStorage.size() - 1] : Rect(0, 0); }
+    // END
     inline  Rect        bounds() const      { return getBounds(); }
 
             bool        contains(const Point& point) const;

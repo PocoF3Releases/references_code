@@ -267,6 +267,10 @@ public:
     // TODO(b/182939859): Remove special cases for primary display.
     virtual hal::HWDisplayId getPrimaryHwcDisplayId() const = 0;
     virtual PhysicalDisplayId getPrimaryDisplayId() const = 0;
+    //MIUI ADD
+    virtual hal::HWDisplayId getSecondaryHwcDisplayId() const = 0;
+    virtual PhysicalDisplayId getSecondaryDisplayId() const = 0;
+    //MIUI STOP
     virtual bool isHeadless() const = 0;
 
     virtual std::optional<PhysicalDisplayId> toPhysicalDisplayId(hal::HWDisplayId) const = 0;
@@ -448,13 +452,26 @@ public:
         LOG_ALWAYS_FATAL_IF(!mPrimaryHwcDisplayId, "Missing HWC primary display");
         return *mPrimaryHwcDisplayId;
     }
+//MIUI ADD
+    hal::HWDisplayId getSecondaryHwcDisplayId() const override {
+        LOG_ALWAYS_FATAL_IF(!mSecondaryHwcDisplayId, "Missing HWC secondary display");
+        return *mSecondaryHwcDisplayId;
+    }
+//MIUI STOP
 
     PhysicalDisplayId getPrimaryDisplayId() const override {
         const auto id = toPhysicalDisplayId(getPrimaryHwcDisplayId());
         LOG_ALWAYS_FATAL_IF(!id, "Missing primary display");
         return *id;
     }
-
+    
+//MIUI ADD
+    PhysicalDisplayId getSecondaryDisplayId() const override {
+        const auto id = toPhysicalDisplayId(getSecondaryHwcDisplayId());
+        LOG_ALWAYS_FATAL_IF(!id, "Missing secondary display");
+        return *id;
+    }
+//MIUI STOP
     virtual bool isHeadless() const override { return !mPrimaryHwcDisplayId; }
 
     std::optional<PhysicalDisplayId> toPhysicalDisplayId(hal::HWDisplayId) const override;
@@ -507,6 +524,9 @@ private:
 
     std::unordered_map<hal::HWDisplayId, PhysicalDisplayId> mPhysicalDisplayIdMap;
     std::optional<hal::HWDisplayId> mPrimaryHwcDisplayId;
+    //MIUI ADD
+    std::optional<hal::HWDisplayId> mSecondaryHwcDisplayId;
+    //MIUI STOP
     bool mHasMultiDisplaySupport = false;
 
     const size_t mMaxVirtualDisplayDimension;

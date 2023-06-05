@@ -150,9 +150,21 @@ public:
         Geometry active_legacy;
         Geometry requested_legacy;
         int32_t z;
-
         ui::LayerStack layerStack;
 
+        // MIUI ADD:
+        int32_t screenFlags;
+#ifdef MI_SF_FEATURE
+        renderengine::MiuiShadowSettings shadowSettings;
+#endif
+#ifdef MI_SF_FEATURE
+        // MIUI ADD: HDR Dimmer
+        bool hdrDimmerEnabled = false;
+        std::vector<std::vector<float>> hdrBrightRegion;
+        std::vector<std::vector<float>> hdrDimRegion;
+        float hdrDimmerRatio = 1.0;
+        // END
+#endif
         uint32_t flags;
         uint8_t reserved[2];
         int32_t sequence; // changes when visible regions can change
@@ -643,6 +655,11 @@ public:
     // Clears and returns the masked bits.
     uint32_t clearTransactionFlags(uint32_t mask);
 
+   // Deprecated, please use composi tionengine::Output::belongsInOutput()
+   // instead.
+   // TODO(lpique): Move the remaining callers (screencap) to the new function.
+   bool belongsToDisplay(ui::LayerStack  layerStack) const { return getLayerStack() == layerStack; }
+
     FloatRect getBounds(const Region& activeTransparentRegion) const;
     FloatRect getBounds() const;
 
@@ -760,7 +777,11 @@ public:
     half4 getColor() const;
     int32_t getBackgroundBlurRadius() const;
     bool drawShadows() const { return mEffectiveShadowRadius > 0.f; };
-
+#ifdef MI_SF_FEATURE
+    virtual bool hasVisibleChildren() const;
+    bool drawMiuiShadows() const { return mDrawingState.shadowSettings.shadowType != 0
+                                      && mDrawingState.shadowSettings.length > 0.f; };
+#endif
     // Returns the transform hint set by Window Manager on the layer or one of its parents.
     // This traverses the current state because the data is needed when creating
     // the layer(off drawing thread) and the hint should be available before the producer
@@ -901,6 +922,26 @@ public:
     void setSmomoLayerStackId();
     uint32_t getSmomoLayerStackId();
 
+#if MI_SCREEN_PROJECTION
+    //MIUI ADD:
+    bool setScreenFlags(int32_t screenFlags);
+#endif
+
+#ifdef MI_SF_FEATURE
+    bool setShadowType(int shadowType);
+    bool setShadowLength(float length);
+    bool setShadowColor(const half4& color);
+    bool setShadowOffset(float offsetX, float offsetY);
+    bool setShadowOutset(float outSet);
+    bool setShadowLayers(int32_t numOfLayers);
+    // MIUI ADD: HDR Dimmer
+    bool setHdrDimmer(bool enable, std::vector<std::vector<float>> brightRegion,
+                      std::vector<std::vector<float>> dimRegion);
+    bool setHdrDimmerRatio(float ratio);
+    virtual bool canDrawHdrDim() const { return true; }
+    // END
+#endif
+
 protected:
     friend class impl::SurfaceInterceptor;
 
@@ -911,6 +952,8 @@ protected:
     friend class SetFrameRateTest;
     friend class TransactionFrameTracerTest;
     friend class TransactionSurfaceFrameTest;
+
+    friend class MiSurfaceFlingerImpl;
 
     virtual void setInitialValuesForClone(const sp<Layer>& clonedFrom);
     virtual std::optional<compositionengine::LayerFE::LayerSettings> prepareClientComposition(
@@ -981,6 +1024,7 @@ protected:
 
     // constant
     sp<SurfaceFlinger> mFlinger;
+
 
     bool mPremultipliedAlpha{true};
     const std::string mName;
@@ -1112,6 +1156,9 @@ private:
     FloatRect mScreenBounds;
 
     bool mGetHandleCalled = false;
+#ifdef MI_FEATURE_ENABLE
+    bool mNonZeroAlpha = false;
+#endif
 
     // Tracks the process and user id of the caller when creating this layer
     // to help debugging.
@@ -1144,6 +1191,9 @@ private:
     uint32_t smomoLayerStackId = UINT32_MAX;
 public:
     nsecs_t getPreviousGfxInfo();
+    // BSP-Game: add Game Fps Stat
+    void* mFpsStat = nullptr;
+    // END
 };
 
 std::ostream& operator<<(std::ostream& stream, const Layer::FrameRate& rate);

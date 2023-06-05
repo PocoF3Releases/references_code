@@ -165,6 +165,9 @@ namespace DisplayConfig {
 class ClientInterface;
 }
 #endif
+#include "MiSurfaceFlingerStub.h"
+// MIUI ADD:
+#include "MiuiSurfaceFlingerInspectorStub.h"
 
 #include <aidl/android/hardware/graphics/common/DisplayDecorationSupport.h>
 #include <aidl/android/hardware/graphics/composer3/DisplayCapability.h>
@@ -194,6 +197,7 @@ using namespace hardware::configstore;
 using namespace hardware::configstore::V1_0;
 using namespace sysprop;
 
+using namespace fps_approx_ops;
 using aidl::android::hardware::graphics::common::DisplayDecorationSupport;
 using aidl::android::hardware::graphics::composer3::Capability;
 using aidl::android::hardware::graphics::composer3::DisplayCapability;
@@ -389,6 +393,7 @@ int64_t callbackClientId = -1;
 ::DisplayConfig::ClientInterface *mDisplayConfigIntf = nullptr;
 DisplayConfigCallbackHandler *mDisplayConfigCallbackhandler = nullptr;
 #endif
+
 
 std::string decodeDisplayColorSetting(DisplayColorSetting displayColorSetting) {
     switch(displayColorSetting) {
@@ -615,6 +620,11 @@ SurfaceFlinger::SurfaceFlinger(Factory& factory) : SurfaceFlinger(factory, SkipI
     mUseAdvanceSfOffset = atoi(value);
     ALOGI_IF(mUseAdvanceSfOffset, "Enable Advance SF Phase Offset");
 
+    property_get("ro.vendor.display.switch_resolution.support", value, "0");
+    mSwitchResolutionSupport = atoi(value);
+
+    mModeChangeOpt = property_get_bool("ro.vendor.display.mode_change_optimize.enable", false);
+
     const size_t defaultListSize = ISurfaceComposer::MAX_LAYERS;
     auto listSize = property_get_int32("debug.sf.max_igbp_list_size", int32_t(defaultListSize));
     mMaxGraphicBufferProducerListSize = (listSize > 0) ? size_t(listSize) : defaultListSize;
@@ -805,6 +815,11 @@ void SurfaceFlinger::destroyDisplay(const sp<IBinder>& displayToken) {
         ALOGE("%s: Invalid display token %p", __func__, displayToken.get());
         return;
     }
+    auto display = getDisplayDeviceLocked(displayToken);
+    if (display) {
+        ALOGD("%s:display token %p displayId=%s", __func__, displayToken.get(),
+            to_string(display->getPhysicalId()).c_str());
+    }
 
     const DisplayDeviceState& state = mCurrentState.displays.valueAt(index);
     if (state.physical) {
@@ -988,6 +1003,7 @@ void SurfaceFlinger::bootFinished() {
                 DisplayDeviceState& curState = mCurrentState.displays.editValueAt(index);
                 DisplayDeviceState& drawState = mDrawingState.displays.editValueAt(index);
                 setFrameBufferSizeForScaling(getDefaultDisplayDeviceLocked(), curState, drawState);
+                MiSurfaceFlingerStub::saveDefaultResolution(getDefaultDisplayDeviceLocked()->getSupportedModes());
             }
         }
 
@@ -1087,15 +1103,20 @@ void SurfaceFlinger::init() {
     mMaxRenderTargetSize =
             std::min(getRenderEngine().getMaxTextureSize(), getRenderEngine().getMaxViewportDims());
 
+#ifndef MI_SF_SETAFFINITY
     // Set SF main policy after initializing RenderEngine which has its own policy.
     if (!SetTaskProfiles(0, {"SFMainPolicy"})) {
         ALOGW("Failed to set main task profile");
     }
+#endif
 
     mCompositionEngine->setTimeStats(mTimeStats);
     mCompositionEngine->setHwComposer(getFactory().createHWComposer(mHwcServiceName));
     mCompositionEngine->getHwComposer().setCallback(*this);
     ClientCache::getInstance().setRenderEngine(&getRenderEngine());
+
+    // Put the init() as early as possible -- make sure MiSurfaceFlingerImpl::mFlinger initialized before its use
+    MiSurfaceFlingerStub::init(this);
 
     enableLatchUnsignaledConfig = getLatchUnsignaledConfig();
 
@@ -1106,6 +1127,7 @@ void SurfaceFlinger::init() {
     mAllowHwcForWFD = base::GetBoolProperty("vendor.display.vds_allow_hwc"s, false);
     mAllowHwcForVDS = mAllowHwcForWFD && base::GetBoolProperty("debug.sf.enable_hwc_vds"s, false);
     mFirstApiLevel = android::base::GetIntProperty("ro.product.first_api_level", 0);
+    mBackPanel = base::GetBoolProperty("ro.vendor.display.BackPanel", false);
 
     // Process any initial hotplug and resulting display changes.
     processDisplayHotplugEventsLocked();
@@ -1154,6 +1176,10 @@ void SurfaceFlinger::init() {
             !getHwComposer().hasCapability(Capability::PRESENT_FENCE_IS_NOT_RELIABLE);
     mStartPropertySetThread = getFactory().createStartPropertySetThread(presentFenceReliable);
 
+    if (mUseFbScaling && mSwitchResolutionSupport) {
+        MiSurfaceFlingerStub::setFrameBufferSizeforResolutionChange(display);
+    }
+
     if (mStartPropertySetThread->Start() != NO_ERROR) {
         ALOGE("Run StartPropertySetThread failed!");
     }
@@ -1194,6 +1220,12 @@ void SurfaceFlinger::init() {
 
     mRETid = getRenderEngine().getRETid();
     mSFTid = gettid();
+
+#ifdef MI_FEATURE_ENABLE
+    // MIUI ADD: Added just for Global HBM Dither (J2S-T)
+    mGlobalHBMDitherEnabled = MiSurfaceFlingerStub::isGlobalHBMDitherEnabled();
+    // MIUI ADD: END
+#endif
 
     ALOGV("Done initializing");
 }
@@ -1470,7 +1502,16 @@ status_t SurfaceFlinger::getDynamicDisplayInfo(const sp<IBinder>& displayToken,
                 mVsyncConfiguration->getConfigsForRefreshRate(Fps::fromValue(outMode.refreshRate));
         outMode.appVsyncOffset = vsyncConfigSet.late.appOffset;
         outMode.sfVsyncOffset = vsyncConfigSet.late.sfOffset;
+#ifdef MI_FEATURE_ENABLE
+        if (!MiSurfaceFlingerStub::isNormalModeGroup(mode->getGroup())) {
+            outMode.group = mode->getGroup() & 0xFF;
+        }
+        else {
+            outMode.group = mode->getGroup();
+        }
+#else
         outMode.group = mode->getGroup();
+#endif
 
         // This is how far in advance a buffer must be queued for
         // presentation at a given time.  If you want a buffer to appear
@@ -1619,7 +1660,8 @@ status_t SurfaceFlinger::setActiveModeFromBackdoor(const sp<IBinder>& displayTok
 void SurfaceFlinger::updateInternalStateWithChangedMode() {
     ATRACE_CALL();
 
-    const auto display = getDefaultDisplayDeviceLocked();
+    const auto display = MiSurfaceFlingerStub::isDualBuitinDisp() ?
+            MiSurfaceFlingerStub::getActiveDisplayDevice() : getDefaultDisplayDeviceLocked();
     if (!display) {
         return;
     }
@@ -1653,6 +1695,31 @@ void SurfaceFlinger::updateInternalStateWithChangedMode() {
     mRefreshRateStats->setRefreshRate(refreshRate);
     updatePhaseConfiguration(refreshRate);
 
+    if (display->mRefreshRateOverlay) {
+        Fps refreshRateTemp = refreshRate;
+        bool isDdicAutoMode = false;
+        bool isDdicIdleMode = false;
+        bool isQsyncMode = MiSurfaceFlingerStub::isQsyncEnabled();
+        if (MiSurfaceFlingerStub::isSceneExist(AOD_SCENE)) {
+            refreshRateTemp = Fps::fromValue(MiSurfaceFlingerStub::MI_FPS_MIN_30HZ);
+        } else {
+            // TODO: reset to aosp style, adapt to miui style later
+            const auto preferredRefreshRate = upcomingModeInfo.mode;
+            isDdicAutoMode = MiSurfaceFlingerStub::isDdicAutoModeGroup(preferredRefreshRate->getGroup());
+            isDdicIdleMode = MiSurfaceFlingerStub::isDdicIdleModeGroup(preferredRefreshRate->getGroup());
+            if (isDdicIdleMode) {
+                if (MiSurfaceFlingerStub::getDdicMinFpsByGroup(preferredRefreshRate->getGroup()) == MiSurfaceFlingerStub::MI_FPS_MIN_10HZ) {
+                    refreshRateTemp = Fps::fromValue(MiSurfaceFlingerStub::MI_FPS_MIN_10HZ);
+                } else {
+                    refreshRateTemp = Fps::fromValue(MiSurfaceFlingerStub::MI_FPS_MIN_1HZ);
+                }
+            }
+        }
+        display->mRefreshRateOverlay->changeRefreshRate(refreshRateTemp, isDdicAutoMode || isQsyncMode);
+        if (display->mSecondRefreshRateOverlay)
+            display->mSecondRefreshRateOverlay->changeRefreshRate(refreshRateTemp, isDdicAutoMode || isQsyncMode);
+    }
+
     if (upcomingModeInfo.event != DisplayModeEvent::None) {
         mScheduler->onPrimaryDisplayModeChanged(mAppConnectionHandle, upcomingModeInfo.mode);
     }
@@ -1678,7 +1745,8 @@ void SurfaceFlinger::setActiveModeInHwcIfNeeded() {
     std::optional<PhysicalDisplayId> displayToUpdateImmediately;
 
     for (const auto& iter : mDisplays) {
-        const auto& display = iter.second;
+        const auto& display = MiSurfaceFlingerStub::isDualBuitinDisp() ?
+                MiSurfaceFlingerStub::getActiveDisplayDevice() : iter.second;
         if (!display || !display->isInternal()) {
             continue;
         }
@@ -2243,6 +2311,10 @@ status_t SurfaceFlinger::getDisplayBrightnessSupport(const sp<IBinder>& displayT
         return NAME_NOT_FOUND;
     }
     *outSupport = getHwComposer().hasDisplayCapability(*displayId, DisplayCapability::BRIGHTNESS);
+
+    MiSurfaceFlingerStub::disableOutSupport(outSupport);
+    ALOGD("%s: %s", __func__, *outSupport ? "support" : "unsupport");
+
     return NO_ERROR;
 }
 
@@ -2378,6 +2450,56 @@ status_t SurfaceFlinger::getDisplayDecorationSupport(
     return NO_ERROR;
 }
 
+status_t SurfaceFlinger::setFrameRateVideoToDisplay(
+            uint32_t cmd, Parcel *data) {
+    s_VideoDecoderInfo videoDecoderInfo;
+    int32_t caseId = data->readInt32();
+    int32_t DolbyVisionStatus = 0;
+
+    switch ((enum VideoToDisplayEvent)caseId) {
+        case V2D_MSG_FRAMERATE: {
+            videoDecoderInfo.state = data->readInt32();// state
+            videoDecoderInfo.intfps = data->readUint32();// int fps
+            videoDecoderInfo.floatfps = data->readFloat();// float fps
+            videoDecoderInfo.fromplayer = data->readBool();// from player
+            videoDecoderInfo.tid = data->readUint32();// tid
+            MiSurfaceFlingerStub::updateVideoDecoderInfo(&videoDecoderInfo);
+            ALOGD("setFrameRateVideoToDisplay state:%d intfps:%u  floatfps:%f fromplayer:%d tid:%u",  
+                videoDecoderInfo.state,videoDecoderInfo.intfps,videoDecoderInfo.floatfps,videoDecoderInfo.fromplayer,videoDecoderInfo.tid);
+        } break;
+        case V2D_MSG_DV: {
+            DolbyVisionStatus = data->readInt32();
+            ALOGD("DV_DISPLAY: %s case %d value %d", __func__, caseId, DolbyVisionStatus);
+            MiSurfaceFlingerStub::setDVStatus(DolbyVisionStatus);
+        } break;
+        default:
+            ALOGE("Unsupport cmd %d", caseId);
+            break;
+    }
+
+    return NO_ERROR;
+}
+
+//MIUI ADD: START
+status_t SurfaceFlinger::checkLayerNum(bool* outNumber) const {
+    if (!outNumber) {
+        return BAD_VALUE;
+    }
+    *outNumber = (mNumLayers >= 3500);
+    return NO_ERROR;
+}
+//END
+
+//MIUI ADD: START
+status_t SurfaceFlinger::producerFrameDropped(int32_t droppedFrameCount __attribute__((unused)),
+                                              int64_t intendedVsyncTime __attribute__((unused)),
+                                              String8 windowName __attribute__((unused))) {
+    MiuiSurfaceFlingerInspectorStub::producerFrameDropped(droppedFrameCount,
+            intendedVsyncTime, windowName);
+    return NO_ERROR;
+}
+//END
+
 // ----------------------------------------------------------------------------
 
 sp<IDisplayEventConnection> SurfaceFlinger::createDisplayEventConnection(
@@ -2391,9 +2513,12 @@ sp<IDisplayEventConnection> SurfaceFlinger::createDisplayEventConnection(
 }
 
 void SurfaceFlinger::scheduleCommit(FrameHint hint) {
-    if (hint == FrameHint::kActive) {
+    if (hint == FrameHint::kActive && MiSurfaceFlingerStub::isResetIdleTimer()) {
         mScheduler->resetIdleTimer();
+        MiSurfaceFlingerStub::setLayerRealUpdateFlag(LAYER_REAL_UPDATE_SCENE_1, false);
+        MiSurfaceFlingerStub::setLayerRealUpdateFlag(LAYER_REAL_UPDATE_SCENE_2, false);
     }
+
     notifyDisplayUpdateImminent();
     mScheduler->scheduleFrame();
 }
@@ -2799,7 +2924,11 @@ bool SurfaceFlinger::commit(nsecs_t frameTime, int64_t vsyncId, nsecs_t expected
     // If we are in the middle of a mode change and the fence hasn't
     // fired yet just wait for the next commit.
     if (mSetActiveModePending) {
+#ifdef MI_FEATURE_ENABLE
+        if (framePending && !mModeChangeOpt) {
+#else
         if (framePending) {
+#endif
             mScheduler->scheduleFrame();
             return false;
         }
@@ -2887,6 +3016,7 @@ bool SurfaceFlinger::commit(nsecs_t frameTime, int64_t vsyncId, nsecs_t expected
         mLayerTracing.notify(mVisibleRegionsDirty, frameTime);
     }
 
+#ifndef MI_SF_SETAFFINITY
 #ifdef PASS_COMPOSITOR_TID
     if (!mTidSentSuccessfully && mBootFinished && mDisplayExtnIntf) {
         bool sfTid = mDisplayExtnIntf->SendCompositorTid(composer::PerfHintType::kSurfaceFlinger,
@@ -2898,6 +3028,7 @@ bool SurfaceFlinger::commit(nsecs_t frameTime, int64_t vsyncId, nsecs_t expected
             mTidSentSuccessfully = true;
         }
     }
+#endif
 #endif
 
     persistDisplayBrightness(mustComposite);
@@ -2922,6 +3053,29 @@ void SurfaceFlinger::composite(nsecs_t frameTime, int64_t vsyncId)
     const auto& displays = FTL_FAKE_GUARD(mStateLock, mDisplays);
     refreshArgs.outputs.reserve(displays.size());
     for (const auto& [_, display] : displays) {
+#if MI_VIRTUAL_DISPLAY_FRAMERATE
+        // MIUI ADD:
+        if(MiSurfaceFlingerStub::skipComposite(display)) {
+            continue;
+        }
+        // END
+#endif
+        // MIUI+ send SecureWin state
+        MiSurfaceFlingerStub::updateOutputExtra(
+            display->getCompositionDisplay(),
+            isInternalDisplay(display),
+            display->getSequenceId());
+#ifdef CURTAIN_ANIM
+        MiSurfaceFlingerStub::updateCurtainStatus(display->getCompositionDisplay());
+#endif
+#ifdef MI_SF_FEATURE
+        // MIUI ADD: HDR Dimmer
+        if (MiSurfaceFlingerStub::getHdrDimmerSupported() && !display->isVirtual()) {
+            MiSurfaceFlingerStub::updateHdrDimmerState(
+                display->getCompositionDisplay(), (int)mDisplayColorSetting);
+        }
+        // END
+#endif
         refreshArgs.outputs.push_back(display->getCompositionDisplay());
     }
     mDrawingState.traverseInZOrder([&refreshArgs](Layer* layer) {
@@ -2945,10 +3099,21 @@ void SurfaceFlinger::composite(nsecs_t frameTime, int64_t vsyncId)
     refreshArgs.blursAreExpensive = mBlursAreExpensive;
     refreshArgs.internalDisplayRotationFlags = DisplayDevice::getPrimaryDisplayRotationFlags();
 
-    if (CC_UNLIKELY(mDrawingState.colorMatrixChanged)) {
+#ifdef MI_FEATURE_ENABLE
+    // MIUI ADD: Added just for Global HBM Dither (J2S-T)
+    if (mGlobalHBMDitherEnabled) {
         refreshArgs.colorTransformMatrix = mDrawingState.colorMatrix;
-        mDrawingState.colorMatrixChanged = false;
+        refreshArgs.gpuColorTransformMatrix = mCurrentGPUColorMatrix;
+    // MIUI ADD: END
+    } else {
+#endif
+        if (CC_UNLIKELY(mDrawingState.colorMatrixChanged)) {
+            refreshArgs.colorTransformMatrix = mDrawingState.colorMatrix;
+            mDrawingState.colorMatrixChanged = false;
+        }
+#ifdef MI_FEATURE_ENABLE
     }
+#endif
 
     refreshArgs.devOptForceClientComposition = mDebugDisableHWC;
 
@@ -2957,6 +3122,8 @@ void SurfaceFlinger::composite(nsecs_t frameTime, int64_t vsyncId)
         refreshArgs.devOptFlashDirtyRegionsDelay = std::chrono::milliseconds(mDebugFlashDelay);
     }
 
+    MiSurfaceFlingerStub::setGameArgs(refreshArgs);
+
     const auto expectedPresentTime = mExpectedPresentTime.load();
     const auto prevVsyncTime = mScheduler->getPreviousVsyncFrom(expectedPresentTime);
     const auto hwcMinWorkDuration = mVsyncConfiguration->getCurrentConfigs().hwcMinWorkDuration;
@@ -2964,6 +3131,9 @@ void SurfaceFlinger::composite(nsecs_t frameTime, int64_t vsyncId)
     refreshArgs.previousPresentFence = mPreviousPresentFences[0].fenceTime;
     refreshArgs.scheduledFrameTime = mScheduler->getScheduledFrameTime();
     refreshArgs.expectedPresentTime = expectedPresentTime;
+
+    // MIUI ADD:
+    MiuiSurfaceFlingerInspectorStub::markStartMonitorFrame();
 
     // Store the present time just before calling to the composition engine so we could notify
     // the scheduler.
@@ -2987,10 +3157,14 @@ void SurfaceFlinger::composite(nsecs_t frameTime, int64_t vsyncId)
         scheduleComposite(FrameHint::kNone);
     }
 
+    MiSurfaceFlingerStub::checkLayerStack();
+
     postFrame();
     postComposition();
 
     const bool prevFrameHadClientComposition = mHadClientComposition;
+    // MIUI ADD:
+    MiuiSurfaceFlingerInspectorStub::monitorFrameComposition("postComposition", "");
 
     mHadClientComposition = mHadDeviceComposition = mReusedClientComposition = false;
     TimeStats::ClientCompositionRecord clientCompositionRecord;
@@ -3003,6 +3177,25 @@ void SurfaceFlinger::composite(nsecs_t frameTime, int64_t vsyncId)
                 (state.strategyPrediction != CompositionStrategyPredictionState::DISABLED);
         clientCompositionRecord.predictionSucceeded |=
                 (state.strategyPrediction == CompositionStrategyPredictionState::SUCCESS);
+// MI ADD: START
+// set sf main thread to big cores only when sf has ClientComposition
+#ifdef MI_SF_SETAFFINITY
+        if (display->isPrimary()) {
+            if (state.usesClientComposition) {
+                if (!mPrevFrameComposeHadClient) {
+                    MiSurfaceFlingerStub::setAffinity(1);
+                    MiSurfaceFlingerStub::setreAffinity(mRETid);
+                    mPrevFrameComposeHadClient = true;
+                }
+            } else {
+                if (mPrevFrameComposeHadClient) {
+                    MiSurfaceFlingerStub::setAffinity(0);
+                    mPrevFrameComposeHadClient = false;
+                }
+            }
+        }
+#endif
+// END
     }
 
     clientCompositionRecord.hadClientComposition = mHadClientComposition;
@@ -3034,6 +3227,12 @@ void SurfaceFlinger::composite(nsecs_t frameTime, int64_t vsyncId)
         mPowerAdvisor->sendActualWorkDuration(flingerDuration, mPowerHintSessionData.presentEnd);
     }
 }
+
+// MIUI ADD: START
+void SurfaceFlinger::updateTime(nsecs_t intendedVsyncTimeStamp) {
+    mIntendedVsyncTimeStamp = intendedVsyncTimeStamp;
+}
+// END
 
 void SurfaceFlinger::updateLayerGeometry() {
     ATRACE_CALL();
@@ -3243,6 +3442,9 @@ void SurfaceFlinger::postComposition() {
 
     mPreviousPresentFences[1] = mPreviousPresentFences[0];
 
+    //BSP-Display add:
+    MiSurfaceFlingerStub::setOrientationStatustoDF();
+
     sp<DisplayDevice> vSyncSource = mNextVsyncSource;
     if (mNextVsyncSource == NULL) {
         vSyncSource = mActiveVsyncSource;
@@ -3261,6 +3463,9 @@ void SurfaceFlinger::postComposition() {
                                  glCompositionDoneFenceTime);
 
     const DisplayStatInfo stats = mScheduler->getDisplayStatInfo(now);
+
+    // MIUI ADD:
+    MiuiSurfaceFlingerInspectorStub::checkFrameDropped(mIntendedVsyncTimeStamp, stats.vsyncPeriod);
 
     // We use the CompositionEngine::getLastFrameRefreshTimestamp() which might
     // be sampled a little later than when we started doing work for this frame,
@@ -3660,17 +3865,22 @@ void SurfaceFlinger::updateVsyncSource()
 
     if (mNextVsyncSource == NULL) {
         // Switch off vsync for the last enabled source
+        ALOGD("Switch off vsync for the last enabled source");
         mScheduler->disableHardwareVsync(true);
         mScheduler->onScreenReleased(mAppConnectionHandle);
     } else if (mNextVsyncSource && (mActiveVsyncSource == NULL)) {
+        ALOGD("resyncToHardwareVsync %d", mNextVsyncSource->isPrimary());
         mScheduler->onScreenAcquired(mAppConnectionHandle);
         nsecs_t vsync = getVsyncPeriodFromHWC();
         mScheduler->resyncToHardwareVsync(true, Fps::fromPeriodNsecs(vsync));
     } else if ((mNextVsyncSource != NULL) &&
         (mActiveVsyncSource != NULL)) {
         // Switch vsync to the new source
-        mScheduler->disableHardwareVsync(true);
-        mScheduler->resyncToHardwareVsync(true, Fps::fromPeriodNsecs(getVsyncPeriodFromHWC()));
+        if (mNextVsyncSource->isPrimary() && !mActiveVsyncSource->isPrimary()) {
+            ALOGD("Switch vsync to the new source %d", mNextVsyncSource->isPrimary());
+            mScheduler->disableHardwareVsync(true);
+            mScheduler->resyncToHardwareVsync(true, Fps::fromPeriodNsecs(getVsyncPeriodFromHWC()));
+        }
     }
 }
 
@@ -3980,6 +4190,17 @@ sp<DisplayDevice> SurfaceFlinger::setupNewDisplayDeviceInternal(
     display->setDisplayName(state.displayName);
     display->setFlags(state.flags);
 
+#if MI_SCREEN_PROJECTION
+    MiSurfaceFlingerStub::setupNewDisplayDeviceInternal(display, state);
+#endif
+#if MI_VIRTUAL_DISPLAY_FRAMERATE
+    // MIUI ADD:
+    MiSurfaceFlingerStub::setLimitedFrameRate(display, state);
+    // END
+#endif
+#ifdef MI_SF_FEATURE
+    MiSurfaceFlingerStub::setNewMiSecurityDisplayState(display, state);
+#endif
     return display;
 }
 
@@ -4129,6 +4350,10 @@ void SurfaceFlinger::processDisplayAdded(const wp<IBinder>& displayToken,
 
 void SurfaceFlinger::processDisplayRemoved(const wp<IBinder>& displayToken) {
     auto display = getDisplayDeviceLocked(displayToken);
+    if (display && display->isPrimary()) {
+        ALOGE("%s:display token is Primary displayId=%s", __func__, to_string(display->getPhysicalId()).c_str());
+        return;
+    }
     if (display) {
         display->disconnect();
 
@@ -4237,6 +4462,14 @@ void SurfaceFlinger::processDisplayChanged(const wp<IBinder>& displayToken,
                 }
             }
         }
+#if MI_VIRTUAL_DISPLAY_FRAMERATE
+        // MIUI ADD:
+        MiSurfaceFlingerStub::updateLimitedFrameRate(display, currentState, drawingState);
+        // END
+#endif
+#ifdef MI_SF_FEATURE
+        MiSurfaceFlingerStub::setMiSecurityDisplayState(display, currentState, drawingState);
+#endif
     }
 }
 
@@ -4273,32 +4506,31 @@ void SurfaceFlinger::setFrameBufferSizeForScaling(sp<DisplayDevice> displayDevic
     auto display = displayDevice->getCompositionDisplay();
     int newWidth = currentState.layerStackSpaceRect.width();
     int newHeight = currentState.layerStackSpaceRect.height();
-    int currentWidth = drawingState.layerStackSpaceRect.width();
-    int currentHeight = drawingState.layerStackSpaceRect.height();
     int displayWidth = displayDevice->getWidth();
     int displayHeight = displayDevice->getHeight();
-    bool update_needed = false;
 
-    if (newWidth != currentWidth || newHeight != currentHeight) {
-        update_needed = true;
+    ALOGE("[setFrameBufferSizeForScaling]: newWidth: %d  newHeight: %d \n", newWidth, newHeight);
+    ALOGE("[setFrameBufferSizeForScaling]: displayWidth: %d  displayHeight: %d \n", displayWidth, displayHeight);
+
+    if (newWidth != displayWidth || newHeight != displayHeight) {
         if (!((newWidth > newHeight && displayWidth > displayHeight) ||
             (newWidth < newHeight && displayWidth < displayHeight))) {
             std::swap(newWidth, newHeight);
         }
     }
 
-    if (displayDevice->getWidth() == newWidth && displayDevice->getHeight() == newHeight &&
-        !update_needed) {
-        displayDevice->setProjection(currentState.orientation, currentState.layerStackSpaceRect,
-                                     currentState.orientedDisplaySpaceRect);
-        return;
-    }
-
     if (newWidth > 0 && newHeight > 0) {
         currentState.width =  newWidth;
         currentState.height = newHeight;
     }
+
     currentState.orientedDisplaySpaceRect =  currentState.layerStackSpaceRect;
+
+    if (displayWidth == newWidth && displayHeight == newHeight) {
+        displayDevice->setProjection(currentState.orientation, currentState.layerStackSpaceRect,
+        currentState.orientedDisplaySpaceRect);
+        return;
+    }
 
     if (mBootStage == BootStage::FINISHED) {
         displayDevice->setDisplaySize(currentState.width, currentState.height);
@@ -4523,6 +4755,13 @@ void SurfaceFlinger::buildWindowInfos(std::vector<WindowInfo>& outWindowInfos,
                                       std::vector<DisplayInfo>& outDisplayInfos) {
     ftl::SmallMap<ui::LayerStack, DisplayDevice::InputInfo, 4> displayInputInfos;
 
+    // MIUI ADD:
+    const auto display = getDefaultDisplayDevice();
+    const auto layerStack = display->getLayerStack();
+    const auto info = display->getInputInfo();
+    displayInputInfos.try_emplace(layerStack, info);
+    // END
+
     for (const auto& [_, display] : FTL_FAKE_GUARD(mStateLock, mDisplays)) {
         const auto layerStack = display->getLayerStack();
         const auto info = display->getInputInfo();
@@ -4536,9 +4775,10 @@ void SurfaceFlinger::buildWindowInfos(std::vector<WindowInfo>& outWindowInfos,
         // to receive input takes precedence.
         auto& otherInfo = it->second;
         if (otherInfo.receivesInput) {
-            ALOGW_IF(display->receivesInput(),
-                     "Multiple displays claim to accept input for the same layer stack: %u",
-                     layerStack.id);
+            // MIUI MOD:
+            // ALOGW_IF(display->receivesInput(),
+            //          "Multiple displays claim to accept input for the same layer stack: %u",
+            //          layerStack.id);
         } else {
             otherInfo = info;
         }
@@ -4547,6 +4787,12 @@ void SurfaceFlinger::buildWindowInfos(std::vector<WindowInfo>& outWindowInfos,
     static size_t sNumWindowInfos = 0;
     outWindowInfos.reserve(sNumWindowInfos);
     sNumWindowInfos = 0;
+    // MIUI ADD: START
+    if (!displayInputInfos.get(ui::DEFAULT_LAYER_STACK)) {
+        ALOGD("buildWindowInfos try add DEFAULT_LAYER_STACK inputInfo");
+        displayInputInfos.try_emplace(ui::DEFAULT_LAYER_STACK, getDefaultDisplayDevice()->getInputInfo());
+    }
+    // END
 
     mDrawingState.traverseInReverseZOrder([&](Layer* layer) {
         if (!layer->needsInputInfo()) return;
@@ -4843,6 +5089,11 @@ bool SurfaceFlinger::latchBuffers() {
         for (const auto& layer : mLayersWithQueuedFrames) {
             if (layer->latchBuffer(visibleRegions, latchTime, expectedPresentTime)) {
                 mLayersPendingRefresh.push_back(layer);
+                // MIUI ADD: START
+                MiuiSurfaceFlingerInspectorStub::markBufferLatched(
+                        String8(layer->getName().c_str()));
+                // END
+
                 newDataLatched = true;
             }
             layer->useSurfaceDamage();
@@ -4995,7 +5246,11 @@ int SurfaceFlinger::flushPendingTransactionQueues(
                 setTransactionFlags(eTransactionFlushNeeded);
                 break;
             }
-            transaction.traverseStatesWithBuffers([&](const layer_state_t& state) {
+#if MI_DEFER_GESTURE_ANIM
+                    transaction.traverseStatesNeedCache([&](const layer_state_t& state) {
+#else
+                    transaction.traverseStatesWithBuffers([&](const layer_state_t& state) {
+#endif
                 const bool frameNumberChanged = state.bufferData->flags.test(
                         BufferData::BufferDataChange::frameNumberChanged);
                 if (frameNumberChanged) {
@@ -5076,7 +5331,11 @@ bool SurfaceFlinger::flushTransactionQueues(int64_t vsyncId) {
                     }
                     mPendingTransactionQueues[transaction.applyToken].push(std::move(transaction));
                 } else {
+#if MI_DEFER_GESTURE_ANIM
+                    transaction.traverseStatesNeedCache([&](const layer_state_t& state) {
+#else
                     transaction.traverseStatesWithBuffers([&](const layer_state_t& state) {
+#endif
                         const bool frameNumberChanged = state.bufferData->flags.test(
                                 BufferData::BufferDataChange::frameNumberChanged);
                         if (frameNumberChanged) {
@@ -5230,6 +5489,11 @@ auto SurfaceFlinger::transactionIsReadyToBeApplied(TransactionState& transaction
             sp<IBinder>, uint64_t, SpHash<IBinder>>& bufferLayersReadyToPresent,
         size_t totalTXapplied, bool tryApplyUnsignaled) const -> TransactionReadiness {
     ATRACE_FORMAT("transactionIsReadyToBeApplied vsyncId: %" PRId64, info.vsyncId);
+    // MIUI ADD: START
+    if(!transaction.inputWindowCommands.focusRequests.empty()) {
+        ALOGI("transactionIsReadyToBeApplied focusRequest transactionId:%" PRId64, transaction.id);
+    }
+    // END
     const nsecs_t expectedPresentTime = mExpectedPresentTime.load();
     // Do not present if the desiredPresentTime has not passed unless it is more than one second
     // in the future. We ignore timestamps more than 1 second in the future for stability reasons.
@@ -5266,13 +5530,31 @@ auto SurfaceFlinger::transactionIsReadyToBeApplied(TransactionState& transaction
         if (!layer) {
             continue;
         }
+        // MIUI ADD: dynamic SurfaceFlinger Log
+        if(s.hasBufferChanges() && MiSurfaceFlingerStub::isDynamicSfLog()) {
+            ALOGI("sf.transactionIsReadyToBeApplied vsyncId: %" PRId64 " tranId:%" PRId64
+                " bufDateFrN:%s drawingFrN:%" PRIu64 " layerName:%s",
+                info.vsyncId, transaction.id,
+                s.bufferData->generateReleaseCallbackId().to_string().c_str(),
+                layer->getDrawingState().frameNumber,
+                layer->getName().c_str());
+        }
+        // END
 
         if (s.hasBufferChanges() && s.bufferData->hasBarrier &&
             ((layer->getDrawingState().frameNumber) < s.bufferData->barrierFrameNumber)) {
             const bool willApplyBarrierFrame =
                 (bufferLayersReadyToPresent.find(s.surface) != bufferLayersReadyToPresent.end()) &&
                 (bufferLayersReadyToPresent.at(s.surface) >= s.bufferData->barrierFrameNumber);
-            if (!willApplyBarrierFrame) {
+            // MIUI MOD: START
+            // if (!willApplyBarrierFrame) {
+            bool toPresent = (bufferLayersReadyToPresent.find(s.surface) != bufferLayersReadyToPresent.end());
+            ALOGD("transaction hasBarrier DrawingFrN:%" PRId64 " barrierFrN:%" PRId64 " bufToP:%s %s",
+                layer->getDrawingState().frameNumber, s.bufferData->barrierFrameNumber,
+                (toPresent ? std::to_string(bufferLayersReadyToPresent.at(s.surface)).c_str() : "empty"),
+                layer->getName().c_str());
+            if (toPresent && !willApplyBarrierFrame) {
+            // END
                 ATRACE_NAME("NotReadyBarrier");
                 return TransactionReadiness::NotReadyBarrier;
             }
@@ -5316,13 +5598,26 @@ auto SurfaceFlinger::transactionIsReadyToBeApplied(TransactionState& transaction
             s.bufferData->invalid=true;
         }
 
+#if MI_DEFER_GESTURE_ANIM
+        if (s.hasBufferChanges() || s.deferAnimation > 0) {
+#else
         if (s.hasBufferChanges()) {
+#endif
             // If backpressure is enabled and we already have a buffer to commit, keep the
             // transaction in the queue.
             const bool hasPendingBuffer = bufferLayersReadyToPresent.find(s.surface) !=
                 bufferLayersReadyToPresent.end();
+#if MI_DEFER_GESTURE_ANIM
+            const bool deferAnimation = s.deferAnimation > 0 &&
+                    (desiredPresentTime + mVsyncPeriod * s.deferAnimation >
+                    mIntendedVsyncTimeStamp);
+            if ((layer->backpressureEnabled() || deferAnimation)
+                    && hasPendingBuffer && isAutoTimestamp) {
+#else
             if (layer->backpressureEnabled() && hasPendingBuffer && isAutoTimestamp) {
+#endif
                 ATRACE_NAME("hasPendingBuffer");
+                MiSurfaceFlingerStub::signalLayerUpdate(LAYER_REAL_UPDATE_SCENE_1, layer);
                 return TransactionReadiness::NotReady;
             }
 
@@ -5332,6 +5627,10 @@ auto SurfaceFlinger::transactionIsReadyToBeApplied(TransactionState& transaction
                 }
             }
         }
+        // MIUI ADD: START
+        MiuiSurfaceFlingerInspectorStub::markTransactionStateChanged(String8(layer->getName().c_str()), s.what);
+        MiuiSurfaceFlingerInspectorStub::markTransactionHandled(String8(layer->getName().c_str()));
+        // END
     }
     return fenceUnsignaled ? TransactionReadiness::ReadyUnsignaled : TransactionReadiness::Ready;
 }
@@ -5392,7 +5691,10 @@ status_t SurfaceFlinger::setTransactionState(
         bool isAutoTimestamp, const client_cache_t& uncacheBuffer, bool hasListenerCallbacks,
         const std::vector<ListenerCallbacks>& listenerCallbacks, uint64_t transactionId) {
     ATRACE_CALL();
-
+    if(!inputWindowCommands.focusRequests.empty()) {
+        ALOGI("setTransactionState focusRequest transactionId:%" PRId64 " frontWin:%s",
+                transactionId, inputWindowCommands.focusRequests.front().windowName.c_str());
+    }
     uint32_t permissions =
         callingThreadHasUnscopedSurfaceFlingerAccess() ?
         layer_state_t::Permission::ACCESS_SURFACE_FLINGER : 0;
@@ -5435,7 +5737,18 @@ status_t SurfaceFlinger::setTransactionState(
     state.traverseStatesWithBuffers([&](const layer_state_t& state) {
         sp<Layer> layer = fromHandle(state.surface).promote();
         if (layer != nullptr) {
+            MiSurfaceFlingerStub::setLayerRealUpdateFlag(LAYER_REAL_UPDATE_SCENE_2, false);
             layer->getPreviousGfxInfo();
+            MiSurfaceFlingerStub::signalLayerUpdate(LAYER_REAL_UPDATE_SCENE_2, layer);
+            // MIUI ADD: dynamic SurfaceFlinger Log
+            if(MiSurfaceFlingerStub::isDynamicSfLog()) {
+                ALOGI("sf.setTransactionState tranId:%" PRId64" bufChange:%d bufData:%s"
+                    ", layerId:%d layerCurBufId:%" PRId64,
+                    transactionId, state.hasBufferChanges(),
+                    state.bufferData->generateReleaseCallbackId().to_string().c_str(),
+                    state.layerId, layer->getCurrentBufferId());
+            }
+            // END
         }
         mBufferCountTracker.increment(state.surface->localBinder());
     });
@@ -5455,6 +5768,20 @@ status_t SurfaceFlinger::setTransactionState(
     return NO_ERROR;
 }
 
+#if MI_SCREEN_PROJECTION
+// MIUI ADD: START
+void SurfaceFlinger::setMiuiTransactionState(const Vector<MiuiDisplayState>& miuiDisplays, uint32_t flags,
+                                         int64_t desiredPresentTime) {
+
+    MiSurfaceFlingerStub::setMiuiTransactionState(miuiDisplays,flags,desiredPresentTime);
+}
+
+
+uint32_t SurfaceFlinger::getCastMode() {
+    return MiSurfaceFlingerStub::isCastMode();
+}
+#endif
+
 bool SurfaceFlinger::applyTransactionState(const FrameTimelineInfo& frameTimelineInfo,
                                            Vector<ComposerState>& states,
                                            const Vector<DisplayState>& displays, uint32_t flags,
@@ -5465,10 +5792,31 @@ bool SurfaceFlinger::applyTransactionState(const FrameTimelineInfo& frameTimelin
                                            bool hasListenerCallbacks,
                                            const std::vector<ListenerCallbacks>& listenerCallbacks,
                                            int originPid, int originUid, uint64_t transactionId) {
+#if MI_SCREEN_PROJECTION
+    return applyMiuiTransactionState(frameTimelineInfo, states, {}, displays, flags, inputWindowCommands, desiredPresentTime,
+                              isAutoTimestamp, uncacheBuffer, postTime, permissions, hasListenerCallbacks,
+                              listenerCallbacks, originPid, originUid, transactionId);
+}
+
+bool SurfaceFlinger::applyMiuiTransactionState(const FrameTimelineInfo& frameTimelineInfo,
+                                               Vector<ComposerState>& states,
+                                               const Vector<MiuiDisplayState>& miuiDisplays,
+                                               const Vector<DisplayState>& displays, uint32_t flags,
+                                               const InputWindowCommands& inputWindowCommands,
+                                               const int64_t desiredPresentTime, bool isAutoTimestamp,
+                                               const client_cache_t& uncacheBuffer,
+                                               const int64_t postTime, uint32_t permissions,
+                                               bool hasListenerCallbacks,
+                                               const std::vector<ListenerCallbacks>& listenerCallbacks,
+                                               int originPid, int originUid, uint64_t transactionId) {
+#endif
     uint32_t transactionFlags = 0;
     for (const DisplayState& display : displays) {
         transactionFlags |= setDisplayStateLocked(display);
     }
+#if MI_SCREEN_PROJECTION
+    MiSurfaceFlingerStub::applyMiuiTransactionState(miuiDisplays, &transactionFlags);
+#endif
 
     // start and end registration for listeners w/ no surface so they can get their callback.  Note
     // that listeners with SurfaceControls will start registration during setClientStateLocked
@@ -5534,7 +5882,6 @@ bool SurfaceFlinger::applyTransactionState(const FrameTimelineInfo& frameTimelin
             mAnimTransactionPending = true;
         }
     }
-
     return needsTraversal;
 }
 
@@ -5594,6 +5941,17 @@ uint32_t SurfaceFlinger::setDisplayStateLocked(const DisplayState& s) {
             flags |= eDisplayTransactionNeeded;
         }
     }
+
+#if MI_VIRTUAL_DISPLAY_FRAMERATE
+    // MIUI ADD:
+    MiSurfaceFlingerStub::updateDisplayStateLimitedFrameRate(what, state, s, flags);
+    // END
+#endif
+
+#if MI_SF_FEATURE
+    MiSurfaceFlingerStub::updateMiSecurityDisplayState(what, state, s, flags);
+#endif
+
     if (what & DisplayState::eLayerStackChanged) {
         if (state.layerStack != s.layerStack) {
             state.layerStack = s.layerStack;
@@ -5633,6 +5991,12 @@ uint32_t SurfaceFlinger::setDisplayStateLocked(const DisplayState& s) {
 
     return flags;
 }
+
+#if MI_SCREEN_PROJECTION
+uint32_t SurfaceFlinger::setMiuiDisplayStateLocked(const MiuiDisplayState& s) {
+    return MiSurfaceFlingerStub::setMiuiDisplayStateLocked(s);
+}
+#endif
 
 bool SurfaceFlinger::callingThreadHasUnscopedSurfaceFlingerAccess(bool usePermissionCache) {
     IPCThreadState* ipc = IPCThreadState::self();
@@ -5750,6 +6114,11 @@ uint32_t SurfaceFlinger::setClientStateLocked(const FrameTimelineInfo& frameTime
         if (layer->setColor(s.color))
             flags |= eTraversalNeeded;
     }
+
+#if MI_SCREEN_PROJECTION
+    MiSurfaceFlingerStub::setClientStateLocked(what, layer, &flags, s);
+#endif
+
     if (what & layer_state_t::eColorTransformChanged) {
         if (layer->setColorTransform(s.colorTransform)) {
             flags |= eTraversalNeeded;
@@ -5850,6 +6219,19 @@ uint32_t SurfaceFlinger::setClientStateLocked(const FrameTimelineInfo& frameTime
     if (what & layer_state_t::eShadowRadiusChanged) {
         if (layer->setShadowRadius(s.shadowRadius)) flags |= eTraversalNeeded;
     }
+#ifdef MI_SF_FEATURE
+    MiSurfaceFlingerStub::setShadowClientStateLocked(what, layer, &flags, s);
+#endif
+#ifdef MI_SF_FEATURE
+    // MIUI ADD: HDR Dimmer
+    if (what & layer_state_t::eHdrDimmerChanged) {
+        if (layer->setHdrDimmer(s.hdrDimmerEnabled, s.hdrBrightRegion, s.hdrDimRegion)) flags |= eTraversalNeeded;
+    }
+    if (what & layer_state_t::eHdrDimmerRatioChanged) {
+        if (layer->setHdrDimmerRatio(s.hdrDimmerRatio)) flags |= eTraversalNeeded;
+    }
+    // END
+#endif
     if (what & layer_state_t::eFrameRateSelectionPriority) {
         if (layer->setFrameRateSelectionPriority(s.frameRateSelectionPriority)) {
             flags |= eTraversalNeeded;
@@ -6088,7 +6470,12 @@ status_t SurfaceFlinger::createBufferQueueLayer(LayerCreationArgs& args, PixelFo
 status_t SurfaceFlinger::createBufferStateLayer(LayerCreationArgs& args, sp<IBinder>* handle,
                                                 sp<Layer>* outLayer) {
     args.textureName = getNewTexture();
-    *outLayer = getFactory().createBufferStateLayer(args);
+    // MIUI MOD: Filter unnecessary InputWindowInfo
+    // *outLayer = getFactory().createBufferStateLayer(args);
+    sp<BufferStateLayer> layer = getFactory().createBufferStateLayer(args);
+    *outLayer = layer;
+    MiSurfaceFlingerStub::setFilterInputFlags(layer);
+    // END
     *handle = (*outLayer)->getHandle();
     return NO_ERROR;
 }
@@ -6148,9 +6535,17 @@ void SurfaceFlinger::onInitializeDisplays() {
     d.orientation = ui::ROTATION_0;
     d.orientedDisplaySpaceRect.makeInvalid();
     d.layerStackSpaceRect.makeInvalid();
+#if MI_VIRTUAL_DISPLAY_FRAMERATE
+    // MIUI ADD:
+    MiSurfaceFlingerStub::initLimitedFrameRate(d);
+    // END
+#endif
     d.width = 0;
     d.height = 0;
     displays.add(d);
+
+    //MIUI ADD
+    MiSurfaceFlingerStub::initSecondaryDisplayLocked(displays);
 
     nsecs_t now = systemTime();
 
@@ -6177,13 +6572,14 @@ void SurfaceFlinger::initializeDisplays() {
 }
 
 void SurfaceFlinger::setPowerModeInternal(const sp<DisplayDevice>& display, hal::PowerMode mode) {
+    nsecs_t startTime = systemTime(SYSTEM_TIME_MONOTONIC);
     if (display->isVirtual()) {
         ALOGE("%s: Invalid operation on virtual display", __func__);
         return;
     }
 
     const auto displayId = display->getPhysicalId();
-    ALOGD("Setting power mode %d on display %s", mode, to_string(displayId).c_str());
+    ALOGD("Setting power mode %s(%d) on display %s", to_string(mode).c_str(), mode, to_string(displayId).c_str());
 
     const hal::PowerMode currentMode = display->getPowerMode();
     if (mode == currentMode) {
@@ -6211,6 +6607,7 @@ void SurfaceFlinger::setPowerModeInternal(const sp<DisplayDevice>& display, hal:
     if (mInterceptor->isEnabled()) {
         mInterceptor->savePowerModeUpdate(display->getSequenceId(), static_cast<int32_t>(mode));
     }
+    MiSurfaceFlingerStub::prePowerModeFOD(mode);
     const auto refreshRate = display->refreshRateConfigs().getActiveMode()->getFps();
     if (currentMode == hal::PowerMode::OFF) {
         // Turn on the display
@@ -6354,10 +6751,13 @@ void SurfaceFlinger::setPowerModeInternal(const sp<DisplayDevice>& display, hal:
         mTimeStats->setPowerMode(mode);
         mRefreshRateStats->setPowerMode(mode);
         mScheduler->setDisplayPowerState(mode == hal::PowerMode::ON);
+        MiSurfaceFlingerStub::postPowerModeFOD(mode);
     }
 
     setEarlyWakeUpConfig(display, mode);
-    ALOGD("Finished setting power mode %d on display %s", mode, to_string(displayId).c_str());
+    nsecs_t elapsedTimeUs = (systemTime(SYSTEM_TIME_MONOTONIC) - startTime) / 1000;
+    ALOGD("Finished setting power mode %s(%d) on display %s - %d.%d(ms)", to_string(mode).c_str(),
+            mode, to_string(displayId).c_str(), (int)(elapsedTimeUs / 1000), (int)(elapsedTimeUs % 1000));
 }
 
 void SurfaceFlinger::setPowerModeOnMainThread(const sp<IBinder>& displayToken, int mode) {
@@ -6382,6 +6782,7 @@ void SurfaceFlinger::setPowerMode(const sp<IBinder>& displayToken, int mode) {
         Mutex::Autolock lock(mStateLock);
         display = (getDisplayDeviceLocked(displayToken));
     }
+
     if (!display) {
         ALOGE("Attempt to set power mode %d for invalid display token %p", mode,
                displayToken.get());
@@ -6390,6 +6791,7 @@ void SurfaceFlinger::setPowerMode(const sp<IBinder>& displayToken, int mode) {
          ALOGW("Attempt to set power mode %d for virtual display", mode);
          return;
     }
+    MiSurfaceFlingerStub::updateForceSkipIdleTimer(mode,display->isPrimary());
 
 #ifdef QTI_DISPLAY_CONFIG_ENABLED
     if (mode < 0 || mode > (int)hal::PowerMode::DOZE_SUSPEND) {
@@ -6450,6 +6852,19 @@ status_t SurfaceFlinger::doDump(int fd, const DumpArgs& args, bool asProto) {
     }
     std::string result;
 
+    // MIUI ADD: START
+    if(numArgs && (args[0] == String16("debuglog"))) {
+        bool dynamic = false;
+        if(numArgs >= 2) {
+            dynamic = (args[1] == String16("true"));
+        }
+        StringAppendF(&result, "open SurfaceFlinger debuglog, debuglog %d\n", dynamic);
+        MiSurfaceFlingerStub::setDynamicSfLog(dynamic);
+        write(fd, result.c_str(), result.size());
+        return NO_ERROR;
+    }
+    // END
+
     IPCThreadState* ipc = IPCThreadState::self();
     const int pid = ipc->getCallingPid();
     const int uid = ipc->getCallingUid();
@@ -6474,6 +6889,7 @@ status_t SurfaceFlinger::doDump(int fd, const DumpArgs& args, bool asProto) {
                 {"--vsync"s, dumper(&SurfaceFlinger::dumpVSync)},
                 {"--wide-color"s, dumper(&SurfaceFlinger::dumpWideColorInfo)},
                 {"--frametimeline"s, argsDumper(&SurfaceFlinger::dumpFrameTimeline)},
+                {"--displayfeature"s, dumper(&MiSurfaceFlingerStub::dumpDisplayFeature)},
         };
 
         const auto flag = args.empty() ? ""s : std::string(String8(args[0]));
@@ -6518,6 +6934,8 @@ status_t SurfaceFlinger::doDump(int fd, const DumpArgs& args, bool asProto) {
                 result.append(LayerProtoParser::layerTreeToString(layerTree));
                 result.append("\n");
                 dumpOffscreenLayers(result);
+                result.append("\n");
+                MiSurfaceFlingerStub::dumpDisplayFeature(result);
             }
         }
     }
@@ -6732,8 +7150,8 @@ void SurfaceFlinger::dumpVSync(std::string& result) const {
                   "      present offset: %9" PRId64 " ns\t     VSYNC period: %9" PRId64 " ns\n\n",
                   dispSyncPresentTimeOffset, getVsyncPeriodFromHWC());
 
-    StringAppendF(&result, "(mode override by backdoor: %s)\n\n",
-                  mDebugDisplayModeSetByBackdoor ? "yes" : "no");
+    StringAppendF(&result, "(mode override by backdoor: %s, %d)\n\n",
+                  mDebugDisplayModeSetByBackdoor ? "yes" : "no", mDebugDisplayModeSetByBackdoorLine);
 
     mScheduler->dump(mAppConnectionHandle, result);
     mScheduler->dumpVsync(result);
@@ -6931,6 +7349,10 @@ void SurfaceFlinger::dumpMini(std::string& result) const {
         display->dump(result);
     }
     result.append("\n");
+
+#if MI_SCREEN_PROJECTION
+    result.append(MiSurfaceFlingerStub::getDumpsysInfo());
+#endif
 
     /*
      * HWC layer minidump
@@ -7140,6 +7562,7 @@ void SurfaceFlinger::dumpAllLocked(const DumpArgs& args, std::string& result) co
 
     result.append(mTimeStats->miniDump());
     result.append("\n");
+
 }
 
 mat4 SurfaceFlinger::calculateColorMatrix(float saturation) {
@@ -7160,11 +7583,27 @@ void SurfaceFlinger::updateColorMatrixLocked() {
     mat4 colorMatrix =
             mClientColorMatrix * calculateColorMatrix(mGlobalSaturationFactor) * mDaltonizer();
 
-    if (mCurrentState.colorMatrix != colorMatrix) {
-        mCurrentState.colorMatrix = colorMatrix;
-        mCurrentState.colorMatrixChanged = true;
-        setTransactionFlags(eTransactionNeeded);
+#ifdef MI_FEATURE_ENABLE
+    // MIUI ADD: Added just for Global HBM Dither (J2S-T)
+    if (mGlobalHBMDitherEnabled) {
+        if (mCurrentState.colorMatrix != colorMatrix ||
+            mCurrentGPUColorMatrix != mMiClientColorMatrix *colorMatrix) {
+            mCurrentGPUColorMatrix = mMiClientColorMatrix * colorMatrix;
+            mCurrentState.colorMatrix = colorMatrix;
+            mCurrentState.colorMatrixChanged = true;
+            setTransactionFlags(eTransactionNeeded);
+        }
+    // MIUI ADD: END
+    } else {
+#endif
+        if (mCurrentState.colorMatrix != colorMatrix) {
+            mCurrentState.colorMatrix = colorMatrix;
+            mCurrentState.colorMatrixChanged = true;
+            setTransactionFlags(eTransactionNeeded);
+        }
+#ifdef MI_FEATURE_ENABLE
     }
+#endif
 }
 
 status_t SurfaceFlinger::CheckTransactCodeCredentials(uint32_t code) {
@@ -7194,6 +7633,10 @@ status_t SurfaceFlinger::CheckTransactCodeCredentials(uint32_t code) {
         case ADD_TUNNEL_MODE_ENABLED_LISTENER:
         case REMOVE_TUNNEL_MODE_ENABLED_LISTENER:
         case SET_GLOBAL_SHADOW_SETTINGS:
+#ifdef CURTAIN_ANIM
+        case ENABLE_CURTAIN_ANIM:
+        case SET_CURTAIN_ANIM_RATE:
+#endif
         case ACQUIRE_FRAME_RATE_FLEXIBILITY_TOKEN: {
             // OVERRIDE_HDR_TYPES is used by CTS tests, which acquire the necessary
             // permission dynamically. Don't use the permission cache for this check.
@@ -7233,6 +7676,15 @@ status_t SurfaceFlinger::CheckTransactCodeCredentials(uint32_t code) {
         // Calling setTransactionState is safe, because you need to have been
         // granted a reference to Client* and Handle* to do anything with it.
         case SET_TRANSACTION_STATE:
+        case SET_VIDEO_DECODER_INFO:
+#ifdef MI_SF_FEATURE
+        // MIUI ADD: HDR Dimmer
+        case ENABLE_HDR_DIMMER:
+#endif
+#if MI_SCREEN_PROJECTION
+        // MIUI ADD:
+        case SET_MIUI_TRANSACTION_STATE:
+#endif
         case CREATE_CONNECTION:
         case GET_COLOR_MANAGEMENT:
         case GET_COMPOSITION_PREFERENCE:
@@ -7254,6 +7706,11 @@ status_t SurfaceFlinger::CheckTransactCodeCredentials(uint32_t code) {
         case SET_GAME_CONTENT_TYPE:
         case SET_FRAME_TIMELINE_INFO:
         case GET_GPU_CONTEXT_PRIORITY:
+        // MIUI ADD:
+        case PRODUCER_FRAME_DROPPED:
+        // MIUI ADD: START
+        case CHECK_LAYER_NUMBER:
+        // END
         case GET_MAX_ACQUIRED_BUFFER_COUNT: {
             // This is not sensitive information, so should not require permission control.
             return OK;
@@ -7343,6 +7800,14 @@ status_t SurfaceFlinger::CheckTransactCodeCredentials(uint32_t code) {
         ALOGV("Accessing SurfaceFlinger through backdoor code: %u", code);
         return OK;
     }
+
+#ifdef MI_FEATURE_ENABLE
+    if (code >= 30000 && code <= 35000) {
+        ALOGV("Accessing MiSurfaceFlinger through backdoor code: %u", code);
+        return OK;
+    }
+#endif
+
     ALOGE("Permission Denial: SurfaceFlinger did not recognize request code: %u", code);
     return PERMISSION_DENIED;
 #pragma clang diagnostic pop
@@ -7406,6 +7871,12 @@ status_t SurfaceFlinger::onTransact(uint32_t code, const Parcel& data, Parcel* r
                 reply->writeInt32(0);
                 reply->writeInt32(mDebugDisableHWC);
                 return NO_ERROR;
+            // MIUI ADD: START
+            case 1012: {
+                MiuiSurfaceFlingerInspectorStub::dumpFrameInfo(reply);
+                return NO_ERROR;
+            }
+            // END
             case 1013: {
                 const auto display = getDefaultDisplayDevice();
                 if (!display) {
@@ -7679,9 +8150,11 @@ status_t SurfaceFlinger::onTransact(uint32_t code, const Parcel& data, Parcel* r
                 if(isSupportedConfigSwitch(displayToken, modeId) != NO_ERROR) {
                     return BAD_VALUE;
                 }
+                mDebugDisplayModeSetByBackdoorLine = 1035;
                 mDebugDisplayModeSetByBackdoor = false;
                 const status_t result = setActiveModeFromBackdoor(displayToken, modeId);
                 if (result == NO_ERROR) {
+                    mDebugDisplayModeSetByBackdoorLine = 1035;
                     mDebugDisplayModeSetByBackdoor = true;
                     ATRACE_NAME(std::string("ModeSwitch " + std::to_string(modeId)).c_str());
                 }
@@ -7988,6 +8461,297 @@ status_t SurfaceFlinger::onTransact(uint32_t code, const Parcel& data, Parcel* r
 #endif
                 return NO_ERROR;
             }
+            //BSP-DISPLAY ADD:
+            case 31023: { /*SURFACE_FLINGER_TRANSACTION_DISPLAY_FEATURE_SET_MODE*/
+                int32_t colorMode;
+
+                mDisplayColorSetting = static_cast<DisplayColorSetting>(data.readInt32());
+                if (data.readInt32(&colorMode) == NO_ERROR) {
+                    mForceColorMode = static_cast<ColorMode>(colorMode);
+                }
+
+                MiSurfaceFlingerStub::saveDisplayColorSetting(mDisplayColorSetting);
+                scheduleRepaint();
+                return NO_ERROR;
+            }
+            case 31037: { /*SURFACE_FLINGER_TRANSACTION_DISPLAY_FEATURE_SMART_DFPS*/
+                bool SmartFpsEnable = true;
+                {
+                    Mutex::Autolock lock(mStateLock);
+                    SmartFpsEnable = property_get_bool("persist.sys.miui_optimization", true);
+                }
+                if (SmartFpsEnable) {
+                    return MiSurfaceFlingerStub::enableSmartDfps(data.readInt32());
+                } else {
+                    return NO_ERROR;
+                }
+            }
+            case 31101: { /*SURFACE_FLINGER_TRANSACTION_DISPLAY_FEATURE_PCC*/
+#ifdef MI_FEATURE_ENABLE
+                // MIUI ADD: Added just for Global HBM Dither (J2S-T)
+                Mutex::Autolock _l(mStateLock);
+                if (mGlobalHBMDitherEnabled) {
+                    n = data.readInt32();
+                    mat4 colorMatrix = mat4();
+                    if (n == 0) {
+                        for (size_t i = 0 ; i < 3; i++) {
+                            colorMatrix[i][i] = data.readFloat();
+                        }
+                    }
+
+                    mMiClientColorMatrix = colorMatrix;
+
+                    // Check that supplied matrix's last row is {0,0,0,1} so we can avoid
+                    // the division by w in the fragment shader
+                    float4 lastRow(transpose(mMiClientColorMatrix)[3]);
+                    if (any(greaterThan(abs(lastRow - float4{0, 0, 0, 1}), float4{1e-4f}))) {
+                        ALOGE("The color transform's last row must be (0, 0, 0, 1)");
+                    }
+
+                    updateColorMatrixLocked();
+                }
+#endif
+                return NO_ERROR;
+                // MIUI ADD: END
+            }
+            case 31102: { /*SURFACE_FLINGER_OVERLAY_MSG*/
+                MiSurfaceFlingerStub::updateFodFlag(data.readInt32());
+                return NO_ERROR;
+            }
+            case 31103: {/*SURFACE_FLINGER_STATUSBAR_MSG*/
+                MiSurfaceFlingerStub::updateSystemUIFlag(data.readInt32());
+                return NO_ERROR;
+            }
+            case 31104: {/*TRANSACTION_NOTIFY_BRIGHTNESS*/
+                MiSurfaceFlingerStub::saveFodSystemBacklight(data.readInt32());
+                return NO_ERROR;
+            }
+            case 31106: {/*GAME_HDR_ON_S*/
+                MiSurfaceFlingerStub::updateGameColorSetting(String8(data.readString16()), data.readInt32(), mDisplayColorSetting);
+                return NO_ERROR;
+            }
+            case 31107: {/*IDLE_SCENE_CODE*/
+                int module = data.readInt32();
+                int value = data.readInt32();
+                String8 pkg = String8(data.readString16());
+                ALOGV("module %d, value %d, pkg %s", module, value, pkg.c_str());
+                if (module == 265)
+                    pkg = "QsyncMapScene";
+                MiSurfaceFlingerStub::updateScene(module, value, pkg);
+                return NO_ERROR;
+            }
+            case 31108: {/*GAME_SCENE_CODE*/
+                MiSurfaceFlingerStub::updateGameFlag(data.readInt32());
+                return NO_ERROR;
+            }
+            case 31109: {/*MTK_VIDEO_TYPE_CODE*/
+                return NO_ERROR;
+            }
+            case 31110: {/*SURFACE_FLINGER_TRANSACTION_LOCKSCREEN_APP*/
+                MiSurfaceFlingerStub::notifySaveSurface(String8(data.readString16()));
+                return NO_ERROR;
+            }
+            case 31111: {/*CMD_NOTIFY_TO_SURFACEFLINGER:*/
+                int fingerprintStatus = data.readInt32();
+                int lowBrightnessFOD = data.readInt32();
+                ALOGD("Fingerprint enter state:%d %d", fingerprintStatus, lowBrightnessFOD);
+                MiSurfaceFlingerStub::writeFPStatusToKernel(fingerprintStatus, lowBrightnessFOD);
+                MiSurfaceFlingerStub::updateLHBMFodFlag(fingerprintStatus);
+                return NO_ERROR;
+            }
+            case 31112: {/*SURFACE_FLINGER_LOWLIGHT_MSG*/
+                MiSurfaceFlingerStub::lowBrightnessFOD(data.readInt32());
+                return NO_ERROR;
+            }
+            // BSP-Game: add Game Fps Stat
+            case 31113: { /* SURFACE_FLINGER_GAME_FPS_STAT_MSG */
+                ALOGI("fps stat cmd");
+                sp<Layer> rightLayerSp = MiSurfaceFlingerStub::getGameLayer(String8(data.readString16()).c_str());
+                Layer* rightLayer = rightLayerSp.get();
+                if (rightLayer == nullptr || !MiSurfaceFlingerStub::isFpsStatSupported(rightLayer)) {
+                    ALOGE("get layer's fpsStat failed!");
+                    return INVALID_OPERATION;
+                }
+                // turn on or turn off?
+                bool enable = (data.readInt32() > 0);
+                if (enable && !MiSurfaceFlingerStub::isFpsStatEnabled(rightLayer)) {
+                    ALOGI("start fps stat");
+                    int targetFps = data.readInt32();
+                    int thresh1 = data.readInt32();
+                    int thresh2 = data.readInt32();
+                    MiSurfaceFlingerStub::setBadFpsStandards(rightLayer, targetFps, thresh1, thresh2);
+                    MiSurfaceFlingerStub::enableFpsStat(rightLayer, enable);
+                    return NO_ERROR;
+                }
+                if (!enable && MiSurfaceFlingerStub::isFpsStatEnabled(rightLayer)) {
+                    ALOGI("stop fps stat");
+                    MiSurfaceFlingerStub::enableFpsStat(rightLayer, enable);
+                    MiSurfaceFlingerStub::reportFpsStat(rightLayer, reply);
+                    return NO_ERROR;
+                }
+                return INVALID_OPERATION;
+            }
+            case 31114: { /* SURFACE_FLINGER_GAME_FPS_MONITOR_MSG */
+                sp<Layer> rightLayerSp = MiSurfaceFlingerStub::getGameLayer(String8(data.readString16()).c_str());
+                Layer* rightLayer = rightLayerSp.get();
+                if (rightLayer == nullptr || !MiSurfaceFlingerStub::isFpsStatSupported(rightLayer))
+                    return INVALID_OPERATION;
+
+                bool enable = (data.readInt32() > 0);
+                if (enable && !MiSurfaceFlingerStub::isFpsMonitorRunning(rightLayer)) {
+                    int timeout = data.readInt32();
+                    MiSurfaceFlingerStub::startFpsMonitor(rightLayer, timeout);
+                    return NO_ERROR;
+                }
+                if (!enable && MiSurfaceFlingerStub::isFpsMonitorRunning(rightLayer)) {
+                    MiSurfaceFlingerStub::stopFpsMonitor(rightLayer);
+                    return NO_ERROR;
+                }
+                return INVALID_OPERATION;
+            }
+            // END
+            case 31117: {/*SURFACE_FLINGER_DISPLAY_LOCK_FPS*/
+                int lockFps = 0;
+                bool ddicAutoMode = false;
+                int ddicMinFps = 0;
+                if (data.readInt32(&lockFps) != NO_ERROR) {
+                    err = BAD_TYPE;
+                    ALOGE("Invalid lockFps parameter.");
+                    break;
+                }
+                if (data.readBool(&ddicAutoMode) == NO_ERROR) {
+                    if (ddicAutoMode) {
+                        if (data.readInt32(&ddicMinFps) != NO_ERROR) {
+                            err = BAD_TYPE;
+                            ALOGE("Invalid ddicMinFps parameter.");
+                            break;
+                        }
+                    }
+                }
+                MiSurfaceFlingerStub::updateDisplayLockFps(lockFps, ddicAutoMode, ddicMinFps);
+                return NO_ERROR;
+            }
+            case 31115: {/*SEND_FPS_TO_DISPLAY*/
+                s_VideoDecoderInfo videoDecoderInfo;
+                videoDecoderInfo.state = data.readInt32();// state
+                videoDecoderInfo.intfps = data.readUint32();// int fps
+                videoDecoderInfo.floatfps = data.readFloat();// float fps
+                videoDecoderInfo.fromplayer = data.readBool();// from player
+                videoDecoderInfo.tid = data.readUint32();// tid
+                MiSurfaceFlingerStub::updateVideoDecoderInfo(&videoDecoderInfo);
+                ALOGD("get fps in surfaceflinger state:%d intfps:%u  floatfps:%f fromplayer:%d tid:%u",  videoDecoderInfo.state,videoDecoderInfo.intfps,videoDecoderInfo.floatfps,videoDecoderInfo.fromplayer,videoDecoderInfo.tid);
+                return NO_ERROR;
+            }
+            case 31116: {/*SURFACE_FLINGER_TRANSACTION_DISPLAY_FEATURE_FPS_BULLET_CHAT*/
+                s_VideoInfo videoInfo;
+                videoInfo.bulletchatState = data.readBool();
+                videoInfo.videofps = data.readFloat();
+                videoInfo.width = data.readInt32();
+                videoInfo.height = data.readInt32();
+                videoInfo.compressionRatio = data.readFloat();
+                ALOGD("BulletChat State %d, setFPS:%f, resolution(%d,%d), ratio:%f", videoInfo.bulletchatState, videoInfo.videofps, videoInfo.width, videoInfo.height, videoInfo.compressionRatio);
+                MiSurfaceFlingerStub::updateVideoInfo(&videoInfo);
+                return NO_ERROR;
+            }
+            case 31121: { /*SURFACE_FLINGER_TRANSACTION_DISPLAY_FEATURE_SECONDARY_FRAME_RATE*/
+                //MI ADD: For J18 second-screen to set refresh rate
+                {
+                    Mutex::Autolock lock(mStateLock);
+                    auto display = getVsyncSource();
+                    if (display && display->isPrimary()) {
+                        ALOGD("primary is on state, disable sec fps switch!");
+                        return NO_ERROR;
+                    }
+                }
+                bool SmartFpsEnable = true;
+                {
+                    Mutex::Autolock lock(mStateLock);
+                    SmartFpsEnable = property_get_bool("persist.sys.miui_optimization", true);
+                }
+                if (SmartFpsEnable) {
+                    return MiSurfaceFlingerStub::enableSmartDfps(data.readInt32());
+                } else {
+                    return NO_ERROR;
+                }
+            }
+            // For factory test
+            // mi-factory-tool -f /vendor/etc/factory_cmd_config/display.xml -i "Primary Display Off"
+            case 32000: {
+              int displayIndex = data.readInt32();
+              int powerMode = data.readInt32();
+              std::vector<PhysicalDisplayId> ids = getPhysicalDisplayIds();
+              const size_t size = ids.size();
+              if (size == 0) {
+                  ALOGE("Debug: No display found");
+                  return BAD_VALUE;
+              }
+              if (displayIndex < 0 || (displayIndex + 1) > size) {
+                  ALOGE("Debug: Invalid display index(%d)", displayIndex);
+                  return BAD_VALUE;
+              }
+              ALOGI("Debug: Set display(%d) = %s, power mode = %d",
+                      displayIndex, to_string(ids[displayIndex]).c_str(), powerMode);
+              setPowerMode(getPhysicalDisplayToken(ids[displayIndex]), powerMode);
+              return NO_ERROR;
+            }
+            //END
+            // MIUI+ send SecureWin state
+            case 31200: {
+                MiSurfaceFlingerStub::setSecureProxy(data.readStrongBinder());
+                ALOGD("SurfaceFlinger 31200 reg %d", (MiSurfaceFlingerStub::getSecureProxy() != nullptr));
+                return NO_ERROR;
+            }
+            case 31201: {
+                ALOGD("SurfaceFlinger 31201 unreg , %d", (MiSurfaceFlingerStub::getSecureProxy() != nullptr) );
+                MiSurfaceFlingerStub::setSecureProxy(nullptr);
+                return NO_ERROR;
+            }
+            // END
+            case 31203:{
+#ifdef QTI_DISPLAY_CONFIG_ENABLED
+                int qsyncMode = 0;
+                int pkgSetFps = 0;
+                String8 pkgName;
+                String16 string16Temp;
+                int qsyncBaseTiming = 120;
+                int qsyncMinFps = 0;
+                int vsyncHz = 0;
+
+                if (data.readInt32(&qsyncMode) != NO_ERROR)
+                    qsyncMode = 0;
+
+                if (data.readString16(&string16Temp) != NO_ERROR)
+                    pkgName = "unknown";
+                else
+                    pkgName = String8(string16Temp);
+
+                if (qsyncMode != 0) {
+                    if (data.readInt32(&pkgSetFps) != NO_ERROR)
+                        pkgSetFps = 0;
+
+                    if (data.readInt32(&qsyncBaseTiming) != NO_ERROR)
+                        qsyncBaseTiming = 120;
+
+                    if (data.readInt32(&qsyncMinFps) != NO_ERROR)
+                        qsyncMinFps = 0;
+
+                    if (data.readInt32(&vsyncHz) != NO_ERROR)
+                        vsyncHz = 0;
+                }
+
+                ALOGD("qsync (%s--%d--%d)", pkgName.c_str(), qsyncMode, pkgSetFps);
+                pkgName = "QsyncGameScene";
+                MiSurfaceFlingerStub::updateScene(265, qsyncMode, pkgName);
+                return NO_ERROR;
+                //return MiSurfaceFlingerStub::enableQsync(qsyncMode, pkgName, pkgSetFps, qsyncMinFps, qsyncBaseTiming, vsyncHz);
+#endif
+            }
+            // MIUI ADD START: TurboSched
+            case 33000: {
+                reply->writeInt32(MiuiSurfaceFlingerInspectorStub::getBufferTxCount());
+                return NO_ERROR;
+            }
+            // MIUI ADD END
         }
     }
     return err;
@@ -8133,8 +8897,14 @@ static bool hasCaptureBlackoutContentPermission() {
     IPCThreadState* ipc = IPCThreadState::self();
     const int pid = ipc->getCallingPid();
     const int uid = ipc->getCallingUid();
-    return uid == AID_GRAPHICS || uid == AID_SYSTEM ||
-            PermissionCache::checkPermission(sCaptureBlackoutContent, pid, uid);
+    //MIUI MODE : START
+    //return uid == AID_GRAPHICS || uid == AID_SYSTEM ||
+    //       PermissionCache::checkPermission(sCaptureBlackoutContent, pid, uid);
+    const bool isCallingBySystemui = MiSurfaceFlingerStub::isCallingBySystemui(pid);
+    const bool permission = PermissionCache::checkPermission(sCaptureBlackoutContent, pid, uid);
+    return uid == AID_GRAPHICS || (uid == AID_SYSTEM && !isCallingBySystemui) ||
+            (permission && !isCallingBySystemui);
+    //END
 }
 
 static status_t validateScreenshotPermissions(const CaptureArgs& captureArgs) {
@@ -8486,6 +9256,19 @@ ftl::SharedFuture<FenceResult> SurfaceFlinger::captureScreenCommon(
             renderengine::impl::ExternalTexture>(buffer, getRenderEngine(),
                                                  renderengine::impl::ExternalTexture::Usage::
                                                          WRITEABLE);
+
+    // MIUI ADD: START
+    if (MiSurfaceFlingerStub::isCallingBySystemui(IPCThreadState::self()->getCallingPid())) {
+        traverseLayers = [=](const LayerVector::Visitor& visitor) {
+            traverseLayers([&](Layer* layer) {
+                if (layer->getName().find("MiuiPaperContrastOverlay") == std::string::npos) {
+                    visitor(layer);
+                }
+            });
+        };
+    }
+    // END
+
     return captureScreenCommon(std::move(renderAreaFuture), traverseLayers, texture,
                                false /* regionSampling */, grayscale, captureListener);
 }
@@ -8629,6 +9412,12 @@ ftl::SharedFuture<FenceResult> SurfaceFlinger::renderScreenImpl(
     std::vector<Layer*> renderedLayers;
     bool disableBlurs = false;
     traverseLayers([&](Layer* layer) {
+#ifdef MI_FEATURE_ENABLE
+        if (layer->getName().find("cameraBlackCovered") != std::string::npos)
+        {
+            return;
+        }
+#endif
         if (layer->isSecureDisplay()) {
             return;
         }
@@ -8729,14 +9518,20 @@ void SurfaceFlinger::traverseLayersInLayerStack(ui::LayerStack layerStack, const
     // We loop through the first level of layers without traversing,
     // as we need to determine which layers belong to the requested display.
     for (const auto& layer : mDrawingState.layersSortedByZ) {
-        if (layer->getLayerStack() != layerStack) {
+        if (!layer->belongsToDisplay(layerStack)) {
             continue;
         }
+#if MI_SCREEN_PROJECTION
+        if (MiSurfaceFlingerStub::showContineTraverseLayersInLayerStack(layer)) continue;
+#endif
         // relative layers are traversed in Layer::traverseInZOrder
         layer->traverseInZOrder(LayerVector::StateSet::Drawing, [&](Layer* layer) {
-            if (layer->isInternalDisplayOverlay()) {
+            if (layer->getOutputFilter().toInternalDisplay) {
                 return;
             }
+#if MI_SCREEN_PROJECTION
+        if (MiSurfaceFlingerStub::showContineTraverseLayersInLayerStack(layer)) return;
+#endif
             if (!layer->isVisible()) {
                 return;
             }
@@ -8752,9 +9547,17 @@ status_t SurfaceFlinger::setDesiredDisplayModeSpecsInternal(
         const sp<DisplayDevice>& display,
         const std::optional<scheduler::RefreshRateConfigs::Policy>& policy, bool overridePolicy) {
     Mutex::Autolock lock(mStateLock);
-
-    if (mDebugDisplayModeSetByBackdoor) {
+    ALOGD("setDesiredDisplayModeSpecsInternal comming");
+    if (MiSurfaceFlingerStub::isDualBuitinDisp()) {
+        return MiSurfaceFlingerStub::setDesiredMultiDisplayModeSpecsInternal(display, policy, overridePolicy);
+    }
+    ALOGD("setDesiredDisplayModeSpecsInternal mDebugDisplayModeSetByBackdoor");
+    if (mDebugDisplayModeSetByBackdoor && ((MiSurfaceFlingerStub::isSceneExist(FOD_SCENE) ||
+         MiSurfaceFlingerStub::isSceneExist(MAP_QSYNC_SCENE)) &&
+         policy->primaryRange.max.getIntValue() != policy->primaryRange.min.getIntValue() &&
+         policy->appRequestRange.max.getIntValue() != policy->appRequestRange.min.getIntValue())) {
         // ignore this request as mode is overridden by backdoor
+        MiSurfaceFlingerStub::updateUnsetFps(policy->primaryRange.max.getIntValue());
         return NO_ERROR;
     }
 
@@ -8765,7 +9568,9 @@ status_t SurfaceFlinger::setDesiredDisplayModeSpecsInternal(
         return BAD_VALUE;
     }
     if (setPolicyResult == scheduler::RefreshRateConfigs::CURRENT_POLICY_UNCHANGED) {
-        return NO_ERROR;
+        if (!MiSurfaceFlingerStub::isSceneExist(MAP_QSYNC_SCENE)) {
+            return NO_ERROR;
+        }
     }
 
     scheduler::RefreshRateConfigs::Policy currentPolicy =
@@ -8784,7 +9589,19 @@ status_t SurfaceFlinger::setDesiredDisplayModeSpecsInternal(
     }
 
     const DisplayModePtr preferredDisplayMode = [&] {
+#ifdef MI_FEATURE_ENABLE
+        DisplayModePtr schedulerMode;
+        if (MiSurfaceFlingerStub::isLtpoPanel() && MiSurfaceFlingerStub::isSceneExist(PROMOTION_SCENE)) {
+            if (policy->primaryRange.max.getIntValue() != policy->primaryRange.min.getIntValue()
+                && policy->appRequestRange.max.getIntValue() != policy->appRequestRange.min.getIntValue()) {
+                schedulerMode = MiSurfaceFlingerStub::setPromotionModeId(policy->defaultMode.value());
+            }
+        } else {
+            schedulerMode = mScheduler->getPreferredDisplayMode();
+        }
+#else
         const auto schedulerMode = mScheduler->getPreferredDisplayMode();
+#endif
         if (schedulerMode && schedulerMode->getPhysicalDisplayId() == display->getPhysicalId()) {
             return schedulerMode;
         }
@@ -8803,7 +9620,7 @@ status_t SurfaceFlinger::setDesiredDisplayModeSpecsInternal(
         if (isDisplayExtnEnabled() && getHwcDisplayId(display, &hwcDisplayId)) {
             setDisplayExtnActiveConfig(hwcDisplayId, preferredDisplayMode->getId().value());
             if (mDynamicSfIdleEnabled) {
-                setupIdleTimeoutHandling(hwcDisplayId);
+                setupIdleTimeoutHandling(hwcDisplayId, display->isPrimary());
             }
         }
     } else {
@@ -8854,6 +9671,12 @@ status_t SurfaceFlinger::setDesiredDisplayModeSpecs(
     if (!displayToken) {
         return BAD_VALUE;
     }
+
+    ALOGD("%s: defaultMode %d primaryRefreshRateMin: %f "
+      "primaryRefreshRateMax: %f "
+      "appRequestRefreshRateMin:%f appRequestRefreshRateMax:%f", __FUNCTION__,
+      defaultMode, primaryRefreshRateMin, primaryRefreshRateMax, appRequestRefreshRateMin,
+      appRequestRefreshRateMax);
 
     auto future = mScheduler->schedule([=]() -> status_t {
         const auto display = FTL_FAKE_GUARD(mStateLock, getDisplayDeviceLocked(displayToken));
@@ -8976,6 +9799,27 @@ status_t SurfaceFlinger::setGlobalShadowSettings(const half4& ambientColor, cons
     return NO_ERROR;
 }
 
+#ifdef CURTAIN_ANIM
+status_t SurfaceFlinger::setCurtainAnimRate(float rate) {
+    scheduleRepaint();
+    return MiSurfaceFlingerStub::setCurtainAnimRate(rate);
+}
+
+status_t SurfaceFlinger::enableCurtainAnim(bool isEnable) {
+    return MiSurfaceFlingerStub::enableCurtainAnim(isEnable);
+}
+#endif
+
+#ifdef MI_SF_FEATURE
+// MIUI ADD: HDR Dimmer
+status_t SurfaceFlinger::enableHdrDimmer(bool enable, float factor) {
+    MiSurfaceFlingerStub::enableHdrDimmer(enable, factor);
+    scheduleRepaint();
+    return NO_ERROR;
+}
+// END
+#endif
+
 const std::unordered_map<std::string, uint32_t>& SurfaceFlinger::getGenericLayerMetadataKeyMap()
         const {
     // TODO(b/149500060): Remove this fixed/static mapping. Please prefer taking
@@ -9054,10 +9898,19 @@ void SurfaceFlinger::enableRefreshRateOverlay(bool enable) {
     for (const auto& [ignored, display] : mDisplays) {
         if (display->isInternal()) {
             display->enableRefreshRateOverlay(enable, mRefreshRateOverlaySpinner);
+            if (MiSurfaceFlingerStub::isDualBuitinDisp()) {
+                auto activedisplay = getCurrentVsyncSource();
+                if ((!mUpdateRefreshrateOverlayForFold && display != activedisplay) || (mUpdateRefreshrateOverlayForFold && display == activedisplay)) {
+                    display->mRefreshRateOverlay.reset();
+                    ALOGD("Disable the mRefreshRateOverlay of inactive display");
+                }
+            }
         }
-    }
+   }
+   if (MiSurfaceFlingerStub::isDualBuitinDisp()) {
+        mUpdateRefreshrateOverlayForFold = false;
+   }
 }
-
 status_t SurfaceFlinger::addTransactionTraceListener(
         const sp<gui::ITransactionTraceListener>& listener) {
     if (!listener) {
@@ -9463,9 +10316,13 @@ void SurfaceFlinger::setupDisplayExtnFeatures() {
                         auto configId = getHwComposer().getActiveMode(displayId.value());
                         LOG_ALWAYS_FATAL_IF(!configId, "HWC returned no active config");
                         updateDisplayExtension(hwcDisplayId, *configId, true);
+#ifdef MI_FEATURE_ENABLE
+                        MiSurfaceFlingerStub::setupIdleTimeoutHandle(hwcDisplayId, enableDynamicSfIdle, display->isPrimary());
+#else
                         if (enableDynamicSfIdle && display->isPrimary()) {
-                            setupIdleTimeoutHandling(hwcDisplayId);
+                            setupIdleTimeoutHandling(hwcDisplayId, true);
                         }
+#endif
                     }
                 }
             }
@@ -9493,9 +10350,12 @@ void SurfaceFlinger::setEarlyWakeUpConfig(const sp<DisplayDevice>& display, hal:
     }
 }
 
-void SurfaceFlinger::setupIdleTimeoutHandling(uint32_t displayId) {
+void SurfaceFlinger::setupIdleTimeoutHandling(uint32_t displayId, bool isPrimary) {
 #ifdef SMART_DISPLAY_CONFIG
     if (mDisplayExtnIntf) {
+        if (mBackPanel && !isPrimary) {
+            return;
+        }
         bool isSmartConfig = mDisplayExtnIntf->IsSmartDisplayConfig(displayId);
         mScheduler->handleIdleTimeout(isSmartConfig);
     }
@@ -9510,7 +10370,8 @@ void SurfaceFlinger::getModeFromFps(float fps,DisplayModePtr& outMode) {
     for (const auto& [id, mode] : supportedModes) {
         if (mode->getWidth() == currMode->getWidth() &&
             mode->getHeight() == currMode->getHeight() &&
-            (int32_t)(mode->getFps().getValue()) == (int32_t)(fps)) {
+            mode->getFps() == Fps::fromValue(fps) &&
+            MiSurfaceFlingerStub::isNormalModeGroup(mode->getGroup())) {
             outMode = mode;
             return;
         }
@@ -9661,10 +10522,11 @@ std::shared_ptr<renderengine::ExternalTexture> SurfaceFlinger::getExternalTextur
                                                                  Usage::READABLE);
         }
     }
+    // MIUI MOD:
     ALOGE_IF(bufferSizeExceedsLimit,
              "Attempted to create an ExternalTexture for layer %s that exceeds render target size "
-             "limit.",
-             layerName);
+             "limit. bufWH:[%d %d]",
+             layerName, bufferData.buffer->getWidth(), bufferData.buffer->getHeight());
     return buffer;
 }
 
@@ -9852,6 +10714,21 @@ binder::Status SurfaceComposerAIDL::setDisplayBrightness(const sp<IBinder>& disp
     status = mFlinger->setDisplayBrightness(displayToken, brightness);
     return binder::Status::fromStatusT(status);
 }
+
+// MIUI ADD: START
+binder::Status SurfaceComposerAIDL::setDisplayBrightnessWithDimLayer(const sp<IBinder>& displayToken,
+        const gui::DisplayBrightness& brightness, bool hdrBoost, float dimmerFactor) {
+    status_t status = checkControlDisplayBrightnessPermission();
+    if (status != OK) return binder::Status::fromStatusT(status);
+
+#ifdef MI_SF_FEATURE
+    mFlinger->enableHdrDimmer(hdrBoost, dimmerFactor);
+#endif
+
+    status = mFlinger->setDisplayBrightness(displayToken, brightness);
+    return binder::Status::fromStatusT(status);
+}
+// END
 
 binder::Status SurfaceComposerAIDL::addHdrLayerInfoListener(
         const sp<IBinder>& displayToken, const sp<gui::IHdrLayerInfoListener>& listener) {

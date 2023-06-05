@@ -31,6 +31,8 @@
 #include <gui/SurfaceComposerClient.h>
 #include <gui/SurfaceControl.h>
 
+#include "MiSurfaceFlingerStub.h"
+
 #undef LOG_TAG
 #define LOG_TAG "RefreshRateOverlay"
 
@@ -67,6 +69,9 @@ void RefreshRateOverlay::SevenSegmentDrawer::drawSegment(Segment segment, int le
             case Segment::UpperRight:
                 return SkRect::MakeLTRB(left + kDigitWidth - kDigitSpace, 0, left + kDigitWidth,
                                         kDigitHeight / 2);
+            case Segment::UpperMiddle:
+                return SkRect::MakeLTRB(left + kDigitWidth / 2 - kDigitSpace / 2, 0,
+                                        left + kDigitWidth / 2 + kDigitSpace / 2, kDigitHeight / 2);
             case Segment::Middle:
                 return SkRect::MakeLTRB(left, kDigitHeight / 2 - kDigitSpace / 2,
                                         left + kDigitWidth, kDigitHeight / 2 + kDigitSpace / 2);
@@ -75,6 +80,9 @@ void RefreshRateOverlay::SevenSegmentDrawer::drawSegment(Segment segment, int le
             case Segment::LowerRight:
                 return SkRect::MakeLTRB(left + kDigitWidth - kDigitSpace, kDigitHeight / 2,
                                         left + kDigitWidth, kDigitHeight);
+            case Segment::LowerMiddle:
+                return SkRect::MakeLTRB(left + kDigitWidth / 2 - kDigitSpace / 2, kDigitHeight / 2,
+                                        left + kDigitWidth / 2 + kDigitSpace / 2, kDigitHeight);
             case Segment::Bottom:
                 return SkRect::MakeLTRB(left, kDigitHeight - kDigitSpace, left + kDigitWidth,
                                         kDigitHeight);
@@ -112,9 +120,42 @@ void RefreshRateOverlay::SevenSegmentDrawer::drawDigit(int digit, int left, SkCo
         drawSegment(Segment::Bottom, left, color, canvas);
 }
 
+#ifdef MI_FEATURE_ENABLE
+void RefreshRateOverlay::SevenSegmentDrawer::drawAuto(int left, SkColor color,
+                                                       SkCanvas& canvas) {
+    // A
+    drawSegment(Segment::Upper, left, color, canvas);
+    drawSegment(Segment::UpperLeft, left, color, canvas);
+    drawSegment(Segment::UpperRight, left, color, canvas);
+    drawSegment(Segment::Middle, left, color, canvas);
+    drawSegment(Segment::LowerLeft, left, color, canvas);
+    drawSegment(Segment::LowerRight, left, color, canvas);
+    // U
+    left += kDigitWidth + kDigitSpace;
+    drawSegment(Segment::UpperLeft, left, color, canvas);
+    drawSegment(Segment::UpperRight, left, color, canvas);
+    drawSegment(Segment::LowerLeft, left, color, canvas);
+    drawSegment(Segment::LowerRight, left, color, canvas);
+    drawSegment(Segment::Bottom, left, color, canvas);
+    // T
+    left += kDigitWidth + kDigitSpace;
+    drawSegment(Segment::Upper, left, color, canvas);
+    drawSegment(Segment::UpperMiddle, left, color, canvas);
+    drawSegment(Segment::LowerMiddle, left, color, canvas);
+    // O
+    left += kDigitWidth + kDigitSpace;
+    drawSegment(Segment::Upper, left, color, canvas);
+    drawSegment(Segment::UpperLeft, left, color, canvas);
+    drawSegment(Segment::UpperRight, left, color, canvas);
+    drawSegment(Segment::LowerLeft, left, color, canvas);
+    drawSegment(Segment::LowerRight, left, color, canvas);
+    drawSegment(Segment::Bottom, left, color, canvas);
+}
+#endif
+
 auto RefreshRateOverlay::SevenSegmentDrawer::draw(int number, SkColor color,
                                                   ui::Transform::RotationFlags rotation,
-                                                  bool showSpinner) -> Buffers {
+                                                  bool showSpinner, bool showAuto) -> Buffers {
     if (number < 0 || number > 1000) return {};
 
     const auto hundreds = number / 100;
@@ -160,42 +201,51 @@ auto RefreshRateOverlay::SevenSegmentDrawer::draw(int number, SkColor color,
         canvas->setMatrix(canvasTransform);
 
         int left = 0;
-        if (hundreds != 0) {
-            drawDigit(hundreds, left, color, *canvas);
-        }
-        left += kDigitWidth + kDigitSpace;
 
-        if (tens != 0) {
-            drawDigit(tens, left, color, *canvas);
-        }
-        left += kDigitWidth + kDigitSpace;
 
-        drawDigit(ones, left, color, *canvas);
-        left += kDigitWidth + kDigitSpace;
-
-        if (showSpinner) {
-            switch (i) {
-                case 0:
-                    drawSegment(Segment::Upper, left, color, *canvas);
-                    break;
-                case 1:
-                    drawSegment(Segment::UpperRight, left, color, *canvas);
-                    break;
-                case 2:
-                    drawSegment(Segment::LowerRight, left, color, *canvas);
-                    break;
-                case 3:
-                    drawSegment(Segment::Bottom, left, color, *canvas);
-                    break;
-                case 4:
-                    drawSegment(Segment::LowerLeft, left, color, *canvas);
-                    break;
-                case 5:
-                    drawSegment(Segment::UpperLeft, left, color, *canvas);
-                    break;
+#ifdef MI_FEATURE_ENABLE
+        if ( MiSurfaceFlingerStub::isLtpoPanel() && showAuto) {
+            drawAuto(left, color, *canvas);
+        } else {
+#endif
+            if (hundreds != 0) {
+                drawDigit(hundreds, left, color, *canvas);
             }
-        }
+            left += kDigitWidth + kDigitSpace;
 
+            if (hundreds != 0 || tens != 0) {
+                drawDigit(tens, left, color, *canvas);
+            }
+            left += kDigitWidth + kDigitSpace;
+
+            drawDigit(ones, left, color, *canvas);
+            left += kDigitWidth + kDigitSpace;
+
+            if (showSpinner) {
+                switch (i) {
+                    case 0:
+                        drawSegment(Segment::Upper, left, color, *canvas);
+                        break;
+                    case 1:
+                        drawSegment(Segment::UpperRight, left, color, *canvas);
+                        break;
+                    case 2:
+                        drawSegment(Segment::LowerRight, left, color, *canvas);
+                        break;
+                    case 3:
+                        drawSegment(Segment::Bottom, left, color, *canvas);
+                        break;
+                    case 4:
+                        drawSegment(Segment::LowerLeft, left, color, *canvas);
+                        break;
+                    case 5:
+                        drawSegment(Segment::UpperLeft, left, color, *canvas);
+                        break;
+                }
+            }
+#ifdef MI_FEATURE_ENABLE
+        }
+#endif
         void* pixels = nullptr;
         buffer->lock(GRALLOC_USAGE_SW_WRITE_RARELY, reinterpret_cast<void**>(&pixels));
 
@@ -249,9 +299,13 @@ auto RefreshRateOverlay::getOrCreateBuffers(Fps fps) -> const Buffers& {
 
     createTransaction(mSurfaceControl).setTransform(mSurfaceControl, transform).apply();
 
-    BufferCache::const_iterator it = mBufferCache.find({fps.getIntValue(), transformHint});
+    BufferCache::const_iterator it = mBufferCache.find({fps.getIntValue(), transformHint, mShowAuto});
     if (it == mBufferCache.end()) {
+#ifdef MI_FEATURE_ENABLE
+        const int minFps = MiSurfaceFlingerStub::MI_FPS_MIN_1HZ;
+#else
         const int minFps = mFpsRange.min.getIntValue();
+#endif
         const int maxFps = mFpsRange.max.getIntValue();
 
         // Clamp to the range. The current fps may be outside of this range if the display has
@@ -275,8 +329,8 @@ auto RefreshRateOverlay::getOrCreateBuffers(Fps fps) -> const Buffers& {
 
         const SkColor color = colorBase.toSkColor();
 
-        auto buffers = SevenSegmentDrawer::draw(intFps, color, transformHint, mShowSpinner);
-        it = mBufferCache.try_emplace({intFps, transformHint}, std::move(buffers)).first;
+        auto buffers = SevenSegmentDrawer::draw(intFps, color, transformHint, mShowSpinner, mShowAuto);
+        it = mBufferCache.try_emplace({intFps, transformHint, mShowAuto}, std::move(buffers)).first;
     }
 
     return it->second;
@@ -300,8 +354,9 @@ void RefreshRateOverlay::setLayerStack(ui::LayerStack stack) {
     createTransaction(mSurfaceControl).setLayerStack(mSurfaceControl, stack).apply();
 }
 
-void RefreshRateOverlay::changeRefreshRate(Fps fps) {
+void RefreshRateOverlay::changeRefreshRate(Fps fps, bool showAuto) {
     mCurrentFps = fps;
+    mShowAuto = showAuto;
     const auto buffer = getOrCreateBuffers(fps)[mFrame];
     createTransaction(mSurfaceControl).setBuffer(mSurfaceControl, buffer).apply();
 }

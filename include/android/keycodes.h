@@ -776,7 +776,11 @@ enum {
     AKEYCODE_THUMBS_DOWN = 287,
     /** Used to switch current account that is consuming content.
      * May be consumed by system to switch current viewer profile. */
-    AKEYCODE_PROFILE_SWITCH = 288
+    AKEYCODE_PROFILE_SWITCH = 288,
+    // MIUI ADD: START
+    /** key goto for fod */
+    AKEYCODE_GOTO = 354
+    // END
 
     // NOTE: If you add a new keycode here you must also add it to several other files.
     //       Refer to frameworks/base/core/java/android/view/KeyEvent.java for the full list.
