@@ -48,23 +48,23 @@ macro definitions
                         n >= 1, n = power of 2
         a[0...2*n-1]   :input/output data (float *)
                         input data
-                            a[2*j] = Re(x[j]), 
+                            a[2*j] = Re(x[j]),
                             a[2*j+1] = Im(x[j]), 0<=j<n
                         output data
-                            a[2*k] = Re(X[k]), 
+                            a[2*k] = Re(X[k]),
                             a[2*k+1] = Im(X[k]), 0<=k<n
         ip[0...*]      :work area for bit reversal (int *)
                         length of ip >= 2+sqrt(n)
-                        strictly, 
-                        length of ip >= 
+                        strictly,
+                        length of ip >=
                             2+(1<<(int)(log(n+0.5)/log(2))/2).
                         ip[0],ip[1] are pointers of the cos/sin table.
         w[0...n/2-1]   :cos/sin table (float *)
                         w[],ip[] are initialized if ip[0] == 0.
     [remark]
-        Inverse of 
+        Inverse of
             cdft(2*n, -1, a, ip, w);
-        is 
+        is
             cdft(2*n, 1, a, ip, w);
             for (j = 0; j <= 2 * n - 1; j++) {
                 a[j] *= 1.0 / n;
@@ -78,8 +78,8 @@ macro definitions
             R[k] = sum_j=0^n-1 a[j]*cos(2*pi*j*k/n), 0<=k<=n/2
             I[k] = sum_j=0^n-1 a[j]*sin(2*pi*j*k/n), 0<k<n/2
         <case2> IRDFT (excluding scale)
-            a[k] = (R[0] + R[n/2]*cos(pi*k))/2 + 
-                   sum_j=1^n/2-1 R[j]*cos(2*pi*j*k/n) + 
+            a[k] = (R[0] + R[n/2]*cos(pi*k))/2 +
+                   sum_j=1^n/2-1 R[j]*cos(2*pi*j*k/n) +
                    sum_j=1^n/2-1 I[j]*sin(2*pi*j*k/n), 0<=k<n
     [usage]
         <case1>
@@ -104,16 +104,16 @@ macro definitions
                                 a[1] = R[n/2]
         ip[0...*]      :work area for bit reversal (int *)
                         length of ip >= 2+sqrt(n/2)
-                        strictly, 
-                        length of ip >= 
+                        strictly,
+                        length of ip >=
                             2+(1<<(int)(log(n/2+0.5)/log(2))/2).
                         ip[0],ip[1] are pointers of the cos/sin table.
         w[0...n/2-1]   :cos/sin table (float *)
                         w[],ip[] are initialized if ip[0] == 0.
     [remark]
-        Inverse of 
+        Inverse of
             rdft(n, 1, a, ip, w);
-        is 
+        is
             rdft(n, -1, a, ip, w);
             for (j = 0; j <= n - 1; j++) {
                 a[j] *= 2.0 / n;
@@ -142,16 +142,16 @@ macro definitions
                             a[k] = C[k], 0<=k<n
         ip[0...*]      :work area for bit reversal (int *)
                         length of ip >= 2+sqrt(n/2)
-                        strictly, 
-                        length of ip >= 
+                        strictly,
+                        length of ip >=
                             2+(1<<(int)(log(n/2+0.5)/log(2))/2).
                         ip[0],ip[1] are pointers of the cos/sin table.
         w[0...n*5/4-1] :cos/sin table (float *)
                         w[],ip[] are initialized if ip[0] == 0.
     [remark]
-        Inverse of 
+        Inverse of
             ddct(n, -1, a, ip, w);
-        is 
+        is
             a[0] *= 0.5;
             ddct(n, 1, a, ip, w);
             for (j = 0; j <= n - 1; j++) {
@@ -189,16 +189,16 @@ macro definitions
                                 a[0] = S[n]
         ip[0...*]      :work area for bit reversal (int *)
                         length of ip >= 2+sqrt(n/2)
-                        strictly, 
-                        length of ip >= 
+                        strictly,
+                        length of ip >=
                             2+(1<<(int)(log(n/2+0.5)/log(2))/2).
                         ip[0],ip[1] are pointers of the cos/sin table.
         w[0...n*5/4-1] :cos/sin table (float *)
                         w[],ip[] are initialized if ip[0] == 0.
     [remark]
-        Inverse of 
+        Inverse of
             ddst(n, -1, a, ip, w);
-        is 
+        is
             a[0] *= 0.5;
             ddst(n, 1, a, ip, w);
             for (j = 0; j <= n - 1; j++) {
@@ -222,18 +222,18 @@ macro definitions
         t[0...n/2]     :work area (float *)
         ip[0...*]      :work area for bit reversal (int *)
                         length of ip >= 2+sqrt(n/4)
-                        strictly, 
-                        length of ip >= 
+                        strictly,
+                        length of ip >=
                             2+(1<<(int)(log(n/4+0.5)/log(2))/2).
                         ip[0],ip[1] are pointers of the cos/sin table.
         w[0...n*5/8-1] :cos/sin table (float *)
                         w[],ip[] are initialized if ip[0] == 0.
     [remark]
-        Inverse of 
+        Inverse of
             a[0] *= 0.5;
             a[n] *= 0.5;
             dfct(n, a, t, ip, w);
-        is 
+        is
             a[0] *= 0.5;
             a[n] *= 0.5;
             dfct(n, a, t, ip, w);
@@ -259,16 +259,16 @@ macro definitions
         t[0...n/2-1]   :work area (float *)
         ip[0...*]      :work area for bit reversal (int *)
                         length of ip >= 2+sqrt(n/4)
-                        strictly, 
-                        length of ip >= 
+                        strictly,
+                        length of ip >=
                             2+(1<<(int)(log(n/4+0.5)/log(2))/2).
                         ip[0],ip[1] are pointers of the cos/sin table.
         w[0...n*5/8-1] :cos/sin table (float *)
                         w[],ip[] are initialized if ip[0] == 0.
     [remark]
-        Inverse of 
+        Inverse of
             dfst(n, a, t, ip, w);
-        is 
+        is
             dfst(n, a, t, ip, w);
             for (j = 1; j <= n - 1; j++) {
                 a[j] *= 2.0 / n;
@@ -286,7 +286,7 @@ Appendix :
 
 void rdftcal(int nfft, float *input, complex_float *output )
 {
-    int NMAXSQRT = (1<<(int)(log(nfft/2+0.5)/log(2))/2);
+    int NMAXSQRT = (1<<(int)(log((double)(nfft)/2.0+0.5)/log(2))/2);
 //  int ip[NMAXSQRT+2];
     int *ip = (int *)calloc((NMAXSQRT + 2), sizeof(int));
 //  float w[nfft*5/4];
@@ -318,7 +318,7 @@ void rdftcal(int nfft, float *input, complex_float *output )
 
 void irdftcal(int nfft, complex_float *input, float *output)
 {
-    int NMAXSQRT = (1<<(int)(log(nfft/2+0.5)/log(2))/2);
+    int NMAXSQRT = (1<<(int)(log((double)(nfft)/2.0+0.5)/log(2))/2);
 //  int ip[NMAXSQRT+2];
 //  float w[nfft*5/4];
     int * ip = (int *)malloc((NMAXSQRT + 2) * sizeof(int));
