@@ -127,6 +127,13 @@ void ProfileSaver::Run() {
   bool check_for_first_save =
       options_.GetMinFirstSaveMs() != ProfileSaverOptions::kMinFirstSaveMsNotSet;
   bool force_early_first_save = check_for_first_save && IsFirstSave();
+  // MIUI ADD: START
+  uint64_t resolve_classes_delay = force_early_first_save
+      ? options_.GetMinFirstSaveMs()
+      : (is_first_start_
+          ? ProfileSaverOptions::kSaveProfileForFirstUseDelayMs
+          : options_.GetSaveResolvedClassesDelayMs());
+  // END
 
   // Fetch the resolved classes for the app images after sleeping for
   // options_.GetSaveResolvedClassesDelayMs().
@@ -135,10 +142,8 @@ void ProfileSaver::Run() {
   // classes save (unless they started before the initial saving was done).
   {
     MutexLock mu(self, wait_lock_);
-
-    const uint64_t end_time = NanoTime() + MsToNs(force_early_first_save
-      ? options_.GetMinFirstSaveMs()
-      : options_.GetSaveResolvedClassesDelayMs());
+    // MIUI MOD:
+    const uint64_t end_time = NanoTime() + MsToNs(resolve_classes_delay);
     while (!Runtime::Current()->GetStartupCompleted()) {
       const uint64_t current_time = NanoTime();
       if (current_time >= end_time) {
@@ -146,13 +151,24 @@ void ProfileSaver::Run() {
       }
       period_condition_.TimedWait(self, NsToMs(end_time - current_time), 0);
     }
-    total_ms_of_sleep_ += options_.GetSaveResolvedClassesDelayMs();
+    // MIUI MOD:
+    total_ms_of_sleep_ += resolve_classes_delay;
   }
   // Tell the runtime that startup is completed if it has not already been notified.
   // TODO: We should use another thread to do this in case the profile saver is not running.
   Runtime::Current()->NotifyStartupCompleted();
-
-  FetchAndCacheResolvedClassesAndMethods(/*startup=*/ true);
+  // MIUI MOD: START
+  if (is_first_start_) {
+    uint16_t new_methods;
+    bool profile_saved =
+        ProcessProfilingInfo(/*force_save*/false, force_early_first_save, &new_methods, true);
+    LOG(INFO) << "ProcessProfilingInfo new_methods=" << new_methods << " is saved"
+        << " saved_to_disk=" << profile_saved
+        << " resolve_classes_delay=" << resolve_classes_delay;
+  } else {
+    FetchAndCacheResolvedClassesAndMethods(/*startup*/ true);
+  }
+  // END
 
   // When we save without waiting for JIT notifications we use a simple
   // exponential back off policy bounded by max_wait_without_jit.
@@ -821,10 +837,19 @@ void ProfileSaver::FetchAndCacheResolvedClassesAndMethods(bool startup) {
                  << " in " << PrettyDuration(NanoTime() - start_time);
 }
 
+// MIUI MOD: START
 bool ProfileSaver::ProcessProfilingInfo(
         bool force_save,
         bool skip_class_and_method_fetching,
         /*out*/uint16_t* number_of_new_methods) {
+  return ProcessProfilingInfo(force_save, skip_class_and_method_fetching, number_of_new_methods, false);
+}
+bool ProfileSaver::ProcessProfilingInfo(
+        bool force_save,
+        bool skip_class_and_method_fetching,
+        /*out*/uint16_t* number_of_new_methods,
+        bool is_startup) {
+// END
   ScopedTrace trace(__PRETTY_FUNCTION__);
 
   // Resolve any new registered locations.
@@ -845,7 +870,8 @@ bool ProfileSaver::ProcessProfilingInfo(
   if (!skip_class_and_method_fetching) {
     // We only need to do this once, not once per dex location.
     // TODO: Figure out a way to only do it when stuff has changed? It takes 30-50ms.
-    FetchAndCacheResolvedClassesAndMethods(/*startup=*/ false);
+    // MIUI MOD:
+    FetchAndCacheResolvedClassesAndMethods(/*startup=*/ is_startup);
   }
 
   for (const auto& it : tracked_locations) {
@@ -1081,6 +1107,14 @@ void  ProfileSaver::Start(const ProfileSaverOptions& options,
 
   instance_ = new ProfileSaver(options, jit_code_cache);
   instance_->AddTrackedLocations(output_filename, code_paths_to_profile, ref_profile_filename);
+  // MIUI ADD: START
+  if (output_filename.find("primary") != std::string::npos) {
+    struct stat profile_stat;
+    if (stat(output_filename.c_str(), &profile_stat) == 0 && profile_stat.st_size <= 0) {
+      instance_->is_first_start_ = true;
+    }
+  }
+  // END
 
   // Create a new thread which does the saving.
   CHECK_PTHREAD_CALL(

@@ -240,6 +240,42 @@ static void VMDebug_dumpHprofData(JNIEnv* env, jclass, jstring javaFilename, jin
   hprof::DumpHeap(filename.c_str(), fd, false);
 }
 
+// MIUI ADD:
+static void VMDebug_dumpStripHprofData(JNIEnv* env, jclass, jstring javaFilename) {
+  if (javaFilename == nullptr) {
+    ScopedObjectAccess soa(env);
+    ThrowNullPointerException("fileName == null");
+    return;
+  }
+
+  ScopedUtfChars chars(env, javaFilename);
+  if (env->ExceptionCheck()) {
+    return;
+  }
+  std::string filename = chars.c_str();
+
+  hprof::DumpStripHeap(filename.c_str());
+}
+
+static void VMDebug_forkDumpHprofData(JNIEnv* env, jclass, jstring javaFilename, jboolean javaStrip) {
+  if (javaFilename == nullptr) {
+    ScopedObjectAccess soa(env);
+    ThrowNullPointerException("fileName == null");
+    return;
+  }
+
+  ScopedUtfChars chars(env, javaFilename);
+  if (env->ExceptionCheck()) {
+    return;
+  }
+  std::string filename = chars.c_str();
+
+  bool strip = javaStrip;
+
+  hprof::ForkDumpHeap(filename.c_str(), strip);
+}
+// END
+
 static void VMDebug_dumpHprofDataDdms(JNIEnv*, jclass) {
   hprof::DumpHeap("[DDMS]", -1, true);
 }
@@ -498,6 +534,8 @@ static JNINativeMethod gMethods[] = {
   NATIVE_METHOD(VMDebug, countInstancesOfClass, "(Ljava/lang/Class;Z)J"),
   NATIVE_METHOD(VMDebug, countInstancesOfClasses, "([Ljava/lang/Class;Z)[J"),
   NATIVE_METHOD(VMDebug, dumpHprofData, "(Ljava/lang/String;I)V"),
+  NATIVE_METHOD(VMDebug, dumpStripHprofData, "(Ljava/lang/String;)V"),
+  NATIVE_METHOD(VMDebug, forkDumpHprofData, "(Ljava/lang/String;Z)V"),
   NATIVE_METHOD(VMDebug, dumpHprofDataDdms, "()V"),
   NATIVE_METHOD(VMDebug, dumpReferenceTables, "()V"),
   NATIVE_METHOD(VMDebug, getAllocCount, "(I)I"),

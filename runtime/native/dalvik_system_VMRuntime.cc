@@ -332,6 +332,13 @@ static void VMRuntime_updateProcessState(JNIEnv*, jobject, jint process_state) {
   runtime->UpdateProcessState(static_cast<ProcessState>(process_state));
 }
 
+// MIUI MOD: START
+// in some cases app needs to grow target_footprint_ when first open
+static void VMRuntime_growFootprint(JNIEnv*, jobject) {
+  Runtime::Current()->GetHeap()->GrowFootprint();
+}
+// END
+
 static void VMRuntime_notifyStartupCompleted(JNIEnv*, jobject) {
   Runtime::Current()->NotifyStartupCompleted();
 }
@@ -537,6 +544,7 @@ static JNINativeMethod gMethods[] = {
   NATIVE_METHOD(VMRuntime, requestHeapTrim, "()V"),
   NATIVE_METHOD(VMRuntime, runHeapTasks, "()V"),
   NATIVE_METHOD(VMRuntime, updateProcessState, "(I)V"),
+  NATIVE_METHOD(VMRuntime, growFootprint, "()V"),
   NATIVE_METHOD(VMRuntime, startHeapTaskProcessor, "()V"),
   NATIVE_METHOD(VMRuntime, stopHeapTaskProcessor, "()V"),
   NATIVE_METHOD(VMRuntime, trimHeap, "()V"),

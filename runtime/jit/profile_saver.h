@@ -86,7 +86,15 @@ class ProfileSaver {
         /*out*/uint16_t* number_of_new_methods)
       REQUIRES(!Locks::profiler_lock_)
       REQUIRES(!Locks::mutator_lock_);
-
+  // MIUI ADD: START
+  bool ProcessProfilingInfo(
+        bool force_save,
+        bool skip_class_and_method_fetching,
+        /*out*/uint16_t* number_of_new_methods,
+        bool is_startup)
+      REQUIRES(!Locks::profiler_lock_)
+      REQUIRES(!Locks::mutator_lock_);
+  // END
   void NotifyJitActivityInternal() REQUIRES(!wait_lock_);
   void WakeUpSaver() REQUIRES(wait_lock_);
 
@@ -174,6 +182,8 @@ class ProfileSaver {
   // TODO(calin): replace with an actual size.
   uint64_t total_number_of_hot_spikes_;
   uint64_t total_number_of_wake_ups_;
+  // MIUI ADD:
+  bool is_first_start_;
 
   const ProfileSaverOptions options_;
 

@@ -69,6 +69,10 @@ std::string GetAndroidDataSafe(/*out*/ std::string* error_msg);
 // Find $ART_APEX_DATA, /data/misc/apexdata/com.android.art, or abort.
 std::string GetArtApexData();
 
+// MIUI ADD:
+// Find $ANDROID_SYSTEM_EXT, /system_ext, or abort.
+std::string GetSystemExtDir();
+
 // Returns the directory that contains the prebuilt version of the primary boot image (i.e., the one
 // generated at build time).
 std::string GetPrebuiltPrimaryBootImageDir();
@@ -159,6 +163,10 @@ bool LocationIsOnI18nModule(std::string_view location);
 
 // Return whether the location is on system (i.e. android root).
 bool LocationIsOnSystem(const std::string& location);
+
+// MIUI ADD:
+// Return whether the location is on system_ext
+bool LocationIsOnSystemExt(const std::string& location);
 
 // Return whether the location is on system/framework (i.e. $ANDROID_ROOT/framework).
 bool LocationIsOnSystemFramework(std::string_view location);

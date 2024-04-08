@@ -168,6 +168,64 @@ static jobjectArray VMStack_getAnnotatedThreadStackTrace(JNIEnv* env, jclass, jo
   return GetThreadStack(soa, javaThread, fn);
 }
 
+// MIUI ADD:
+static Thread* GetSelf(JNIEnv* env) {
+  return static_cast<JNIEnvExt*>(env)->GetSelf();
+}
+
+static jobjectArray VMStack_getMiuiStackTraceByTid(JNIEnv* env, jclass, jint threadTid) {
+  jobjectArray trace = nullptr;
+  uint32_t thin_lock_id = 0;
+  Thread* self = GetSelf(env);
+  {
+    MutexLock mu(self, *Locks::thread_list_lock_);
+    std::list<Thread*> thread_list = Runtime::Current()->GetThreadList()->GetList();
+    for (Thread* thread : thread_list) {
+      if (threadTid == thread->GetTid()) {
+        thin_lock_id = thread->GetThreadId();
+        break;
+      }
+    }
+  }
+
+  // Check for valid thread
+  if (thin_lock_id == ThreadList::kInvalidThreadId) {
+    return nullptr;
+  }
+
+  if (thin_lock_id == self->GetThreadId()) {
+     // No need to suspend ourself to build stacktrace.
+    ScopedObjectAccess soa(env);
+    jobject internal_trace = self->CreateInternalStackTrace(soa);
+    trace = Thread::InternalStackTraceToStackTraceElementArray(soa, internal_trace);
+  } else {
+    ThreadList* thread_list = Runtime::Current()->GetThreadList();
+    bool timed_out;
+
+    // Suspend thread to build stack trace.
+    Thread* thread = thread_list->SuspendThreadByThreadId(thin_lock_id,
+                                                          SuspendReason::kInternal,
+                                                          &timed_out);
+    if (thread != nullptr) {
+      {
+        ScopedObjectAccess soa(env);
+        jobject internal_trace = thread->CreateInternalStackTrace(soa);
+        trace = Thread::InternalStackTraceToStackTraceElementArray(soa, internal_trace);
+      }
+      // Restart suspended thread.
+      bool resumed = thread_list->Resume(thread, SuspendReason::kInternal);
+      DCHECK(resumed);
+    } else {
+      if (timed_out) {
+        LOG(ERROR) << "Trying to get thread's stack by id failed as the thread failed to suspend "
+          "within a generous timeout.";
+      }
+    }
+  }
+  return trace;
+}
+// END
+
 static JNINativeMethod gMethods[] = {
   FAST_NATIVE_METHOD(VMStack, fillStackTraceElements, "(Ljava/lang/Thread;[Ljava/lang/StackTraceElement;)I"),
   FAST_NATIVE_METHOD(VMStack, getCallingClassLoader, "()Ljava/lang/ClassLoader;"),
@@ -175,6 +233,9 @@ static JNINativeMethod gMethods[] = {
   FAST_NATIVE_METHOD(VMStack, getStackClass2, "()Ljava/lang/Class;"),
   FAST_NATIVE_METHOD(VMStack, getThreadStackTrace, "(Ljava/lang/Thread;)[Ljava/lang/StackTraceElement;"),
   FAST_NATIVE_METHOD(VMStack, getAnnotatedThreadStackTrace, "(Ljava/lang/Thread;)[Ldalvik/system/AnnotatedStackTraceElement;"),
+  // MIUI ADD:
+  FAST_NATIVE_METHOD(VMStack, getMiuiStackTraceByTid, "(I)[Ljava/lang/StackTraceElement;"),
+  // END
 };
 
 void register_dalvik_system_VMStack(JNIEnv* env) {

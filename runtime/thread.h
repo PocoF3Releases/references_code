@@ -2091,6 +2091,12 @@ class Thread {
   friend class JniCompilerTest;  // For intercepting JNI entrypoint calls.
 
   DISALLOW_COPY_AND_ASSIGN(Thread);
+
+  public:
+  // MIUI ADD: START
+  int lock_target_count_ = 0;
+  int orig_prio_ = 0;
+  // END
 };
 
 class SCOPED_CAPABILITY ScopedAssertNoThreadSuspension {

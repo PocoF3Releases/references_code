@@ -27,6 +27,7 @@
 #include "lock_word.h"
 #include "mirror/class.h"
 #include "mirror/object-readbarrier-inl.h"
+#include <sys/resource.h>
 
 namespace art {
 namespace gc {
@@ -271,6 +272,16 @@ inline bool ConcurrentCopying::IsMarkedInUnevacFromSpace(mirror::Object* from_re
   }
   return false;
 }
+
+// MIUI ADD: START
+inline void ConcurrentCopying::setCurrentThreadPrio(bool is_boost) {
+  Thread* const self = Thread::Current();
+  int adj_nice_value = is_boost ? -20 : 4;
+  if (setpriority(PRIO_PROCESS, self->GetTid(), adj_nice_value) != 0) {
+    LOG(WARNING) << "Failed to set current thread nice value to " << adj_nice_value;
+  }
+}
+// END
 
 }  // namespace collector
 }  // namespace gc

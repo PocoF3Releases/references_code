@@ -699,12 +699,21 @@ class Runtime {
     return process_package_name_;
   }
 
+  // MIUI ADD: START
+  bool IsHomeProcess() const {
+    return is_home_process_;
+  }
+  // END
+
   void SetProcessPackageName(const char* package_name) {
     if (package_name == nullptr) {
       process_package_name_.clear();
     } else {
       process_package_name_ = package_name;
     }
+    // MIUI ADD: START
+    is_home_process_ = process_package_name_ == "com.miui.home";
+    // END
   }
 
   const std::string& GetProcessDataDirectory() const {
@@ -1407,6 +1416,10 @@ class Runtime {
 
   // The package of the app running in this process.
   std::string process_package_name_;
+
+  // MIUI ADD: START
+  bool is_home_process_ = false;
+  // END
 
   // The data directory of the app running in this process.
   std::string process_data_directory_;

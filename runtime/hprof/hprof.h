@@ -23,6 +23,11 @@ namespace hprof {
 
 void DumpHeap(const char* filename, int fd, bool direct_to_ddms);
 
+// MIUI ADD:
+void DumpStripHeap(const char* filename);
+void ForkDumpHeap(const char* filename, bool strip);
+// END
+
 }  // namespace hprof
 
 }  // namespace art

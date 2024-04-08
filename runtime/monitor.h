@@ -36,6 +36,10 @@
 #include "runtime_callbacks.h"
 #include "thread_state.h"
 
+#include "base/stl_util.h"
+#include "base/time_utils.h"
+#include "base/timing_logger.h"
+
 namespace art {
 
 class ArtMethod;
@@ -420,6 +424,18 @@ class Monitor {
       REQUIRES(monitor_lock_) REQUIRES_SHARED(Locks::mutator_lock_);
 
   void MaybeEnableTimeout() REQUIRES(Locks::mutator_lock_);
+
+  // MIUI ADD: START
+  static std::vector<std::string> target_monitor_list_;
+  bool is_target_monitor_ = false;
+  int boost_req_ = 0;
+  int resume_req_ = 1;
+  void UpdateBoostState(ObjPtr<mirror::Object> obj) REQUIRES(Locks::mutator_lock_);
+  bool IsSystemMajorMonitor(ObjPtr<mirror::Object> obj,std::vector<std::string> lock_list)
+      REQUIRES(Locks::mutator_lock_);
+  void ChangeThreadPriority(Thread* self,int request);
+  static std::vector<std::string> GetTargetMonitorList();
+  // END
 
   // The denser encoded version of this monitor as stored in the lock word.
   MonitorId monitor_id_;

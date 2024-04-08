@@ -978,6 +978,18 @@ bool Thread::Init(ThreadList* thread_list, JavaVMExt* java_vm, JNIEnvExt* jni_en
 
   ScopedTrace trace3("ThreadList::Register");
   thread_list->Register(this);
+
+  // MIUI ADD: START
+  struct sched_param param = {0};
+  sched_getparam(0, &param);
+  if (param.sched_priority == 2) {
+    param.sched_priority = 0;
+    if (sched_setscheduler(0, SCHED_OTHER, &param) != 0) {
+      LOG(WARNING) << "Failed to set current thread back to SCHED_OTHER.";
+    }
+  }
+  // END
+
   return true;
 }
 

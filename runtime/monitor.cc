@@ -44,6 +44,13 @@
 #include "well_known_classes.h"
 #include <android-base/properties.h>
 
+// MIUI ADD: START
+#include "base/atomic.h"
+#include <android-base/strings.h>
+#include <linux/sched.h>
+#include <unistd.h>
+// END
+
 static_assert(ART_USE_FUTEXES);
 
 namespace art {
@@ -83,11 +90,20 @@ static constexpr uint64_t kLongWaitMs = 100 * kDebugThresholdFudgeFactor;
 
 uint32_t Monitor::lock_profiling_threshold_ = 0;
 uint32_t Monitor::stack_dump_lock_profiling_threshold_ = 0;
+// MIUI ADD:
+std::vector<std::string> Monitor::target_monitor_list_;
 
 void Monitor::Init(uint32_t lock_profiling_threshold,
                    uint32_t stack_dump_lock_profiling_threshold) {
   // It isn't great to always include the debug build fudge factor for command-
   // line driven arguments, but it's easier to adjust here than in the build.
+
+  //MIUI ADD:START
+  if (target_monitor_list_.empty()) {
+    target_monitor_list_ = GetTargetMonitorList();
+  }
+  // END
+
   lock_profiling_threshold_ =
       lock_profiling_threshold * kDebugThresholdFudgeFactor;
   stack_dump_lock_profiling_threshold_ =
@@ -117,6 +133,9 @@ Monitor::Monitor(Thread* self, Thread* owner, ObjPtr<mirror::Object> obj, int32_
   // with the owner unlocking the thin-lock.
   CHECK(owner == nullptr || owner == self || owner->IsSuspended());
   // The identity hash code is set for the life time of the monitor.
+
+  // MIUI ADD:
+  UpdateBoostState(obj);
 
   bool monitor_timeout_enabled = Runtime::Current()->IsMonitorTimeoutEnabled();
   if (monitor_timeout_enabled) {
@@ -150,6 +169,9 @@ Monitor::Monitor(Thread* self,
   // with the owner unlocking the thin-lock.
   CHECK(owner == nullptr || owner == self || owner->IsSuspended());
   // The identity hash code is set for the life time of the monitor.
+
+  // MIUI ADD:
+  UpdateBoostState(obj);
 
   bool monitor_timeout_enabled = Runtime::Current()->IsMonitorTimeoutEnabled();
   if (monitor_timeout_enabled) {
@@ -420,6 +442,22 @@ std::string Monitor::PrettyContentionInfo(const std::string& owner_name,
   return oss.str();
 }
 
+//MIUI ADD:START
+void Monitor::ChangeThreadPriority(Thread* self,int request) {
+  struct sched_param param = {0};
+  sched_getparam(0, &param);
+  if (request == 0 && param.sched_priority == 0) {
+    param.sched_priority = 2;
+  } else if (request == 1) {
+    param.sched_priority = self->orig_prio_;
+  }
+  int sched_policy = param.sched_priority == 0 ? SCHED_OTHER : SCHED_FIFO;
+  if (sched_setscheduler(self->GetTid(), sched_policy, &param) != 0){
+    LOG(WARNING) << "Failed to set thread priority.";
+  }
+}
+// END
+
 bool Monitor::TryLock(Thread* self, bool spin) {
   Thread *owner = owner_.load(std::memory_order_relaxed);
   if (owner == self) {
@@ -439,6 +477,16 @@ bool Monitor::TryLock(Thread* self, bool spin) {
     }
   }
   DCHECK(monitor_lock_.IsExclusiveHeld(self));
+
+  // MIUI ADD: START
+  if (is_target_monitor_) {
+    self->lock_target_count_++;
+    if (self->lock_target_count_  == 1) {
+      ChangeThreadPriority(self,boost_req_);
+    }
+  }
+  // END
+
   AtraceMonitorLock(self, GetObject(), /* is_wait= */ false);
   return true;
 }
@@ -526,13 +574,16 @@ void Monitor::Lock(Thread* self) {
     if (log_contention && orig_owner != nullptr) {
       // Woken from contention.
       uint64_t wait_ms = MilliTime() - wait_start_ms;
-      uint32_t sample_percent;
+      // MIUI MOD: START
+      // uint32_t sample_percent;
+      // if (wait_ms >= lock_profiling_threshold_) {
+      //   sample_percent = 100;
+      // } else {
+      //   sample_percent = 100 * wait_ms / lock_profiling_threshold_;
+      // }
+      // if (sample_percent != 0 && (static_cast<uint32_t>(rand() % 100) < sample_percent)) {
       if (wait_ms >= lock_profiling_threshold_) {
-        sample_percent = 100;
-      } else {
-        sample_percent = 100 * wait_ms / lock_profiling_threshold_;
-      }
-      if (sample_percent != 0 && (static_cast<uint32_t>(rand() % 100) < sample_percent)) {
+      // END
         // Do this unconditionally for consistency. It's possible another thread
         // snuck in in the middle, and tracing was enabled. In that case, we may get its
         // MonitorEnter information. We can live with that.
@@ -613,7 +664,10 @@ void Monitor::Lock(Thread* self) {
           }
           LogContentionEvent(self,
                             wait_ms,
-                            sample_percent,
+                            // MIUI MOD: START
+                            // sample_percent,
+                            original_owner_tid,
+                            // END
                             owners_method,
                             owners_dex_pc);
         } else {
@@ -637,6 +691,16 @@ void Monitor::Lock(Thread* self) {
   self->SetMonitorEnterObject(nullptr);
   num_waiters_.fetch_sub(1, std::memory_order_relaxed);
   DCHECK(monitor_lock_.IsExclusiveHeld(self));
+
+  // MIUI ADD: START
+  if (is_target_monitor_) {
+    self->lock_target_count_++;
+    if (self->lock_target_count_ == 1) {
+      ChangeThreadPriority(self,boost_req_);
+    }
+  }
+  // END
+
   // We need to pair this with a single contended locking call. NB we match the RI behavior and call
   // this even if MonitorEnter failed.
   if (called_monitors_callback) {
@@ -760,6 +824,17 @@ bool Monitor::Unlock(Thread* self) {
       // Keep monitor_lock_, but pretend we released it.
       FakeUnlockMonitorLock();
     }
+
+   // MIUI ADD: START
+   if (is_target_monitor_) {
+     self->lock_target_count_--;
+     if (self->lock_target_count_ <= 0) {
+       self->lock_target_count_ = 0;
+       ChangeThreadPriority(self,resume_req_);
+     }
+    }
+    // END
+
     return true;
   }
   // We don't own this, so we're not allowed to unlock it.
@@ -896,6 +971,16 @@ void Monitor::Wait(Thread* self, int64_t ms, int32_t ns,
 
     // Release the monitor lock.
     DCHECK(monitor_lock_.IsExclusiveHeld(self));
+
+    // MIUI ADD: START
+    if (is_target_monitor_) {
+      self->lock_target_count_ = self->lock_target_count_-1-prev_lock_count;
+      if (self->lock_target_count_ == 0) {
+        ChangeThreadPriority(self,resume_req_);
+      }
+    }
+    //END
+
     SignalWaiterAndReleaseMonitorLock(self);
 
     // Handle the case where the thread was interrupted before we called wait().
@@ -1745,5 +1830,38 @@ void Monitor::MaybeEnableTimeout() {
     monitor_lock_.setMonitorId(monitor_id_);
   }
 }
+
+//MIUI ADD:START
+std::vector<std::string> Monitor::GetTargetMonitorList() {
+  std::string track_package_names = android::base::GetProperty("persist.sys.miui.sys_monitor", "");
+  std::vector<std::string> track_list = android::base::Split(track_package_names, ",");
+  std::vector<std::string> lock_list;
+  std::string prefix_name = "com.android.server.";
+  for (const auto& name : track_list) {
+    std::string pkg_name = prefix_name + name;
+    lock_list.push_back(pkg_name);
+  }
+  return lock_list;
+}
+bool Monitor::IsSystemMajorMonitor(ObjPtr<mirror::Object> obj,std::vector<std::string> lock_list) {
+  if (lock_list.size() == 0) {
+    return false;
+  }
+  std::string class_name = mirror::Object::PrettyTypeOf(obj);
+  if (class_name != "null") {
+    for (const auto& name : lock_list) {
+      if (class_name == name) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+void Monitor::UpdateBoostState(ObjPtr<mirror::Object> obj) {
+  if (Runtime::Current()->IsSystemServer() && IsSystemMajorMonitor(obj,target_monitor_list_)) {
+    is_target_monitor_  = true;
+  }
+}
+// END
 
 }  // namespace art

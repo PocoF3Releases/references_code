@@ -514,6 +514,9 @@ class ConcurrentCopying : public GarbageCollector {
   template <bool kHandleInterRegionRefs> class ComputeLiveBytesAndMarkRefFieldsVisitor;
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(ConcurrentCopying);
+
+  // MIUI ADD:
+  ALWAYS_INLINE void setCurrentThreadPrio(bool is_boost);
 };
 
 }  // namespace collector

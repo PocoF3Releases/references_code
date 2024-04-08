@@ -109,6 +109,8 @@
 #include "thread_list.h"
 #include "verify_object-inl.h"
 #include "well_known_classes.h"
+// MIUI ADD :
+#include <android-base/properties.h>
 
 namespace art {
 
@@ -339,6 +341,7 @@ Heap::Heap(size_t initial_size,
       // this one.
       process_state_update_lock_("process state update lock", kPostMonitorLock),
       min_foreground_target_footprint_(0),
+      min_foreground_concurrent_start_bytes_(0),
       concurrent_start_bytes_(std::numeric_limits<size_t>::max()),
       total_bytes_freed_ever_(0),
       total_objects_freed_ever_(0),
@@ -421,6 +424,18 @@ Heap::Heap(size_t initial_size,
   if (VLOG_IS_ON(heap) || VLOG_IS_ON(startup)) {
     LOG(INFO) << "Heap() entering";
   }
+  // MIUI ADD :
+  bool model_control = android::base::GetBoolProperty("persist.sys.miui_modify_heap_config.enable", true);
+  if (model_control) {
+    long total_memory = GetTotalMemoryConfiguration();
+    long ram_size_1gb = 1024 * 1024 * 1024L;
+    long total_memory_gb = total_memory / ram_size_1gb;
+    if (total_memory_gb >= 8) {
+      min_free_ = kModifyMinFree;
+      max_free_ = kModifyMaxFree;
+    }
+  }
+  // EDN
   if (kUseReadBarrier) {
     CHECK_EQ(foreground_collector_type_, kCollectorTypeCC);
     CHECK_EQ(background_collector_type_, kCollectorTypeCCBackground);
@@ -1059,7 +1074,9 @@ void Heap::GrowHeapOnJankPerceptibleSwitch() {
                                               min_foreground_target_footprint_,
                                               std::memory_order_relaxed);
   }
-  min_foreground_target_footprint_ = 0;
+  if (IsGcConcurrent() && concurrent_start_bytes_ < min_foreground_concurrent_start_bytes_) {
+    concurrent_start_bytes_ = min_foreground_concurrent_start_bytes_;
+  }
 }
 
 void Heap::UpdateProcessState(ProcessState old_process_state, ProcessState new_process_state) {
@@ -1497,6 +1514,23 @@ void Heap::ThrowOutOfMemoryError(Thread* self, size_t byte_count, AllocatorType 
 
 void Heap::DoPendingCollectorTransition() {
   CollectorType desired_collector_type = desired_collector_type_;
+
+  if (collector_type_ == kCollectorTypeCC) {
+
+    // MIUI MOD:
+    float ratio = Runtime::Current()->IsHomeProcess() ? 0.8 : 0.25;
+    // App's allocations (since last GC) more than the threshold then do TransitionGC
+    // when the app was in background. If not then don't do TransitionGC.
+    size_t num_bytes_allocated_since_gc = GetBytesAllocated() - num_bytes_alive_after_gc_;
+    if (num_bytes_allocated_since_gc <
+        (UnsignedDifference(target_footprint_.load(std::memory_order_relaxed),
+                            num_bytes_alive_after_gc_) * ratio)
+        && !kStressCollectorTransition
+        && !IsLowMemoryMode()) {
+      return;
+    }
+  }
+
   // Launch homogeneous space compaction if it is desired.
   if (desired_collector_type == kCollectorTypeHomogeneousSpaceCompact) {
     if (!CareAboutPauseTimes()) {
@@ -1510,7 +1544,7 @@ void Heap::DoPendingCollectorTransition() {
       // Invoke CC full compaction.
       CollectGarbageInternal(collector::kGcTypeFull,
                              kGcCauseCollectorTransition,
-                             /*clear_soft_references=*/false, GC_NUM_ANY);
+                             /*clear_soft_references=*/false, GetCurrentGcNum() + 1);
     } else {
       VLOG(gc) << "CC background compaction ignored due to jank perceptible process state";
     }
@@ -3601,7 +3635,8 @@ collector::GarbageCollector* Heap::FindCollectorByGcType(collector::GcType gc_ty
 
 double Heap::HeapGrowthMultiplier() const {
   // If we don't care about pause times we are background, so return 1.0.
-  if (!CareAboutPauseTimes()) {
+  // MIUI MOD:
+  if (!CareAboutPauseTimes() && !Runtime::Current()->IsHomeProcess()) {
     return 1.0;
   }
   return foreground_heap_growth_multiplier_;
@@ -3632,6 +3667,7 @@ void Heap::GrowForUtilization(collector::GarbageCollector* collector_ran,
     grow_bytes = std::min(delta, static_cast<uint64_t>(max_free_));
     grow_bytes = std::max(grow_bytes, static_cast<uint64_t>(min_free_));
     target_size = bytes_allocated + static_cast<uint64_t>(grow_bytes * multiplier);
+    LOG(INFO) << "This is non sticky GC, maxfree is " << max_free_ << " minfree is " << min_free_;
     next_gc_type_ = collector::kGcTypeSticky;
   } else {
     collector::GcType non_sticky_gc_type = NonStickyGcType();
@@ -3670,6 +3706,7 @@ void Heap::GrowForUtilization(collector::GarbageCollector* collector_ran,
       // The same whether jank perceptible or not; just avoid the adjustment.
       grow_bytes = 0;
     }
+    LOG(INFO) << "This is sticky GC, maxfree is " << max_free_ << " minfree is " << min_free_;
   }
   CHECK_LE(target_size, std::numeric_limits<size_t>::max());
   if (!ignore_target_footprint_) {
@@ -3680,7 +3717,9 @@ void Heap::GrowForUtilization(collector::GarbageCollector* collector_ran,
     // process-state switch.
     min_foreground_target_footprint_ =
         (multiplier <= 1.0 && grow_bytes > 0)
-        ? bytes_allocated + static_cast<size_t>(grow_bytes * foreground_heap_growth_multiplier_)
+        ? std::min(
+          bytes_allocated + static_cast<size_t>(grow_bytes * foreground_heap_growth_multiplier_),
+          GetMaxMemory())
         : 0;
 
     if (IsGcConcurrent()) {
@@ -3712,6 +3751,12 @@ void Heap::GrowForUtilization(collector::GarbageCollector* collector_ran,
       // allocation rate is very high, remaining_bytes could tell us that we should start a GC
       // right away.
       concurrent_start_bytes_ = std::max(target_footprint - remaining_bytes, bytes_allocated);
+      // Store concurrent_start_bytes_ (computed with foreground heap growth multiplier) for update
+      // itself when process state switches to foreground.
+      min_foreground_concurrent_start_bytes_ =
+          min_foreground_target_footprint_ != 0
+          ? std::max(min_foreground_target_footprint_ - remaining_bytes, bytes_allocated)
+          : 0;
     }
   }
 }
@@ -3956,16 +4001,6 @@ void Heap::RequestCollectorTransition(CollectorType desired_collector_type, uint
     // For CC, we invoke a full compaction when going to the background, but the collector type
     // doesn't change.
     DCHECK_EQ(desired_collector_type_, kCollectorTypeCCBackground);
-    // App's allocations (since last GC) more than the threshold then do TransitionGC
-    // when the app was in background. If not then don't do TransitionGC.
-    size_t num_bytes_allocated_since_gc = GetBytesAllocated() - num_bytes_alive_after_gc_;
-    if (num_bytes_allocated_since_gc <
-        (UnsignedDifference(target_footprint_.load(std::memory_order_relaxed),
-                            num_bytes_alive_after_gc_)/4)
-        && !kStressCollectorTransition
-        && !IsLowMemoryMode()) {
-      return;
-    }
   }
   DCHECK_NE(collector_type_, kCollectorTypeCCBackground);
   CollectorTransitionTask* added_task = nullptr;

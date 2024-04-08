@@ -23,10 +23,17 @@
 #include <log/log.h>
 #include <log/log_event_list.h>
 
+// MIUI ADD: START
+#include <json/json.h>
+#include <time.h>
+// END
+
 #include "art_method.h"
 #include "jni/jni_env_ext.h"
 #include "palette/palette.h"
 #include "thread.h"
+
+#include "base/time_utils.h" // MIUI ADD
 
 #define EVENT_LOG_TAG_dvm_lock_sample 20003
 
@@ -105,6 +112,32 @@ void Monitor::LogContentionEvent(Thread* self,
   ctx << sample_percent;
 
   ctx << LOG_ID_EVENTS;
+  // MIUI ADD: START
+  int exception_log_fd = open("/dev/mi_exception_log", O_RDWR | O_CLOEXEC | O_NONBLOCK);
+  if (exception_log_fd > 0) {
+      struct timespec ts;
+      clock_gettime(CLOCK_BOOTTIME, &ts);
+      Json::StreamWriterBuilder factory;
+      Json::Value root;
+      //This eventID should sync with PerfDebugMonitorImpl.java
+      root["EventID"] = 1014;
+      //lock start time
+      root["DispatchTime"] = static_cast<uint64_t>(ts.tv_sec) * UINT64_C(1000) + ts.tv_nsec/ UINT64_C(1000000);
+      root["ProcessName"] = proc_name;
+      root["PID"] = self->GetTid();
+      root["ThreadName"] = thread_name;
+      root["Latency"] = wait_ms;
+      root["FileName"] = filename;
+      root["LineNumber"] = line_number;
+      root["FunctionName"] = method_name;
+      root["HoldLockFileName"] = owner_filename;
+      root["HoldLockLine"] = owner_line_number;
+      root["HoldLockFunction"] = owner_method_name;
+      std::string exception_log_str = Json::writeString(factory, root);
+      write(exception_log_fd, exception_log_str.c_str(), exception_log_str.size());
+      close(exception_log_fd);
+  }
+  // END
 
   // Now report to other interested parties.
   PaletteReportLockContention(self->GetJniEnv(),

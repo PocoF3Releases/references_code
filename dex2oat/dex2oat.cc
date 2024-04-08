@@ -275,7 +275,37 @@ static void SetCpuAffinity(const std::vector<int32_t>& cpu_list) {
 #endif  // __linux__
 }
 
+// MIUI ADD: START
+static const std::string kSetupCpuSet = "7";
+static std::vector<int32_t> cpu_set_for_setup_;
 
+//Set CPU affinity from a string like "0123"
+static bool GenerateSetupCpuList(std::string cpu_list) {
+  for (size_t i=0; i < cpu_list.length(); ++i) {
+    cpu_set_for_setup_.push_back(cpu_list[i] - '0');
+  }
+  if(cpu_set_for_setup_.empty() || cpu_set_for_setup_.size() > 8) {
+    LOG(ERROR) << "Invalid dex2oat setup_cpu_list";
+    return false;
+  }
+  return true;
+}
+//Set a switch to determine whether CPU affinity is set
+static bool setup_boost_enable_ = true && GenerateSetupCpuList(kSetupCpuSet);
+static void SetSetupBoostState(bool state) {
+  setup_boost_enable_ = state;
+}
+
+static void SetDex2oatSetupStageCpuAffinity(const std::vector<int32_t>& cpu_list, 
+                                std::string compilation_reason) {
+  if (setup_boost_enable_ && compilation_reason == "install" && 
+      !cpu_list.empty() && cpu_list.size() <= 8) {
+    SetCpuAffinity(cpu_list);
+    LOG(DEBUG) << "Set Setup phase cpu affinity done";
+  }
+  return ;
+}
+// END
 
 // The primary goal of the watchdog is to prevent stuck build servers
 // during development when fatal aborts lead to a cascade of failures
@@ -1424,6 +1454,8 @@ class Dex2Oat final {
   // boot class path.
   dex2oat::ReturnCode Setup() {
     TimingLogger::ScopedTiming t("dex2oat Setup", timings_);
+    // MIUI ADD:
+    SetDex2oatSetupStageCpuAffinity(cpu_set_for_setup_, compilation_reason_);
 
     if (!PrepareDirtyObjects()) {
       return dex2oat::ReturnCode::kOther;
@@ -1958,6 +1990,8 @@ class Dex2Oat final {
                    << soa.Self()->GetException()->Dump();
       }
     }
+    // MIUI ADD:
+    SetDex2oatSetupStageCpuAffinity(cpu_set_, compilation_reason_);
     driver_->InitializeThreadPools();
     driver_->PreCompile(class_loader,
                         dex_files,
@@ -2037,7 +2071,8 @@ class Dex2Oat final {
   //       case (when the file will be explicitly erased).
   bool WriteOutputFiles(jobject class_loader) {
     TimingLogger::ScopedTiming t("dex2oat Oat", timings_);
-
+    // MIUI ADD:
+    SetDex2oatSetupStageCpuAffinity(cpu_set_for_setup_, compilation_reason_);
     // Sync the data to the file, in case we did dex2dex transformations.
     for (MemMap& map : opened_dex_files_maps_) {
       if (!map.Sync()) {

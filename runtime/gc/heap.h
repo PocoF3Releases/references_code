@@ -477,6 +477,10 @@ class Heap {
   void UpdateProcessState(ProcessState old_process_state, ProcessState new_process_state)
       REQUIRES(!*pending_task_lock_, !*gc_complete_lock_, !process_state_update_lock_);
 
+  // MIUI MOD: START
+  void GrowFootprint();
+  // END
+
   bool HaveContinuousSpaces() const NO_THREAD_SAFETY_ANALYSIS {
     // No lock since vector empty is thread safe.
     return !continuous_spaces_.empty();
@@ -975,6 +979,9 @@ class Heap {
   class HeapTrimTask;
   class TriggerPostForkCCGcTask;
   class ReduceTargetFootprintTask;
+  // MIUI MOD
+  class DeferGcTask;
+  // END
 
   // Compact source space to target space. Returns the collector used.
   collector::GarbageCollector* Compact(space::ContinuousMemMapAllocSpace* target_space,
@@ -1040,6 +1047,9 @@ class Heap {
 
   // Checks whether we should garbage collect:
   ALWAYS_INLINE bool ShouldConcurrentGCForJava(size_t new_num_bytes_allocated);
+  // MIUI ADD :
+  ALWAYS_INLINE long GetTotalMemoryConfiguration();
+
   float NativeMemoryOverTarget(size_t current_native_bytes, bool is_gc_concurrent);
   void CheckGCForNative(Thread* self)
       REQUIRES(!*pending_task_lock_, !*gc_complete_lock_, !process_state_update_lock_);
@@ -1437,8 +1447,9 @@ class Heap {
 
   // Computed with foreground-multiplier in GrowForUtilization() when run in
   // jank non-perceptible state. On update to process state from background to
-  // foreground we set target_footprint_ to this value.
+  // foreground we set target_footprint_ and concurrent_start_bytes_ to the corresponding value.
   size_t min_foreground_target_footprint_ GUARDED_BY(process_state_update_lock_);
+  size_t min_foreground_concurrent_start_bytes_ GUARDED_BY(process_state_update_lock_);
 
   // When num_bytes_allocated_ exceeds this amount then a concurrent GC should be requested so that
   // it completes ahead of an allocation failing.
@@ -1559,10 +1570,17 @@ class Heap {
 
   // Minimum free guarantees that you always have at least min_free_ free bytes after growing for
   // utilization, regardless of target utilization ratio.
-  const size_t min_free_;
+  // MIUI MOD :
+  size_t min_free_;
 
   // The ideal maximum free size, when we grow the heap for utilization.
-  const size_t max_free_;
+  size_t max_free_;
+
+  // MIUI ADD :
+  // Modify min_free_ and max_free_ when the memory confignation >= 8G
+  static constexpr size_t kModifyMinFree = 8 *MB;
+  static constexpr size_t kModifyMaxFree = 32 * MB;
+  // END
 
   // Target ideal heap utilization ratio.
   double target_utilization_;

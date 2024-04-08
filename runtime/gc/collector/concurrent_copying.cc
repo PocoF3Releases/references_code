@@ -229,7 +229,11 @@ void ConcurrentCopying::RunPhases() {
     ReaderMutexLock mu(self, *Locks::mutator_lock_);
     GrayAllDirtyImmuneObjects();
   }
+  // MIUI ADD: START
+  setCurrentThreadPrio(true);
   FlipThreadRoots();
+  setCurrentThreadPrio(false);
+  // END
   {
     ReaderMutexLock mu(self, *Locks::mutator_lock_);
     CopyingPhase();
@@ -1412,6 +1416,8 @@ void ConcurrentCopying::MarkingPhase() {
     }
   }
   // Scan runtime roots
+  // MIUI ADD:
+  setCurrentThreadPrio(true);
   {
     TimingLogger::ScopedTiming split2("VisitConcurrentRoots", GetTimings());
     CaptureRootsForMarkingVisitor visitor(this, self);
@@ -1423,6 +1429,8 @@ void ConcurrentCopying::MarkingPhase() {
     CaptureRootsForMarkingVisitor visitor(this, self);
     Runtime::Current()->VisitNonThreadRoots(&visitor);
   }
+  // MIUI ADD:
+  setCurrentThreadPrio(false);
   // Capture thread roots
   CaptureThreadRootsForMarking();
   // Process mark stack
@@ -1686,7 +1694,11 @@ void ConcurrentCopying::CopyingPhase() {
     if (kVerboseMode) {
       LOG(INFO) << "SweepSystemWeaks";
     }
+    // MIUI ADD: START
+    setCurrentThreadPrio(true);
     SweepSystemWeaks(self);
+    setCurrentThreadPrio(false);
+    // END
     CheckEmptyMarkStack();
     ReenableWeakRefAccess(self);
     if (kVerboseMode) {

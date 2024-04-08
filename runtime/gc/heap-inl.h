@@ -38,6 +38,9 @@
 #include "verify_object.h"
 #include "write_barrier-inl.h"
 
+// MIUI ADD :
+#include <sys/sysinfo.h>
+
 namespace art {
 namespace gc {
 
@@ -479,6 +482,18 @@ inline bool Heap::ShouldConcurrentGCForJava(size_t new_num_bytes_allocated) {
   // maintained, and (b) reduce the cost of the check here.
   return new_num_bytes_allocated >= concurrent_start_bytes_;
 }
+
+// MIUI ADD :
+inline long Heap::GetTotalMemoryConfiguration() {
+  struct sysinfo si;
+  if (sysinfo(&si) == -1) {
+    LOG(ERROR) << "sysinfo failed " << strerror(errno);
+    return -1;
+  }
+
+  return static_cast<long>(si.totalram) * si.mem_unit;
+}
+// END
 
 }  // namespace gc
 }  // namespace art
