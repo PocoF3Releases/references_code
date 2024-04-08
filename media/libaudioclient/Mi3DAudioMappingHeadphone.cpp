@@ -45,6 +45,16 @@ Mi3DAudioMappingHeadphone::Mi3DAudioMappingHeadphone()
 
     eq[0] = new FastConv(h_eq_l, EQFIRLEN);
     eq[1] = new FastConv(h_eq_r, EQFIRLEN);
+
+    for(int i = 0; i < HeadPhoneInChannelNum; i++){
+        BuffChannelInInt[i] = NULL;
+        BuffChannelIn[i] = NULL;
+    }
+
+    for(int i = 0; i < HeadPhoneWrapperOutChannelNum; i++){
+        BuffChannelOutInt[i] = NULL;
+        BuffChannelOut[i] = NULL;
+    }
 }
 
 Mi3DAudioMappingHeadphone::Mi3DAudioMappingHeadphone(int fs_, int in_channel_num, int bit_width)
@@ -106,6 +116,16 @@ Mi3DAudioMappingHeadphone::Mi3DAudioMappingHeadphone(int fs_, int in_channel_num
 
     eq[0] = new FastConv(h_eq_l, EQFIRLEN);
     eq[1] = new FastConv(h_eq_r, EQFIRLEN);
+
+    for(int i = 0; i < HeadPhoneInChannelNum; i++){
+        BuffChannelInInt[i] = NULL;
+        BuffChannelIn[i] = NULL;
+    }
+
+    for(int i = 0; i < HeadPhoneWrapperOutChannelNum; i++){
+        BuffChannelOutInt[i] = NULL;
+        BuffChannelOut[i] = NULL;
+    }
 }
 
 Mi3DAudioMappingHeadphone::~Mi3DAudioMappingHeadphone()
@@ -183,7 +203,7 @@ void Mi3DAudioMappingHeadphone::process(int * output[], int * input[], int numSa
             output[ch][ii] = int(BuffChannelOut[ch][ii] * denorm);
     }
 
-        // keep 2,3ch same with 0,1ch for 4 channel output
+    // keep 2,3ch same with 0,1ch for 4 channel output
     memcpy(output[2], output[0], numSamples * sizeof(int));
     memcpy(output[3], output[1], numSamples * sizeof(int));
 

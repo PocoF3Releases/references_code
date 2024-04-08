@@ -29,6 +29,16 @@ namespace android {
         float releaseRatio = 1.f - expf(-2.2 / (0.4f * sample_rate));
         for (int ch = 0; ch < OutChannelNum; ch++)
             limiter[ch] = CMusicLimiter_Init(attackRatio, releaseRatio, 0.005 * sample_rate + 1, 0.1, sample_rate);
+
+        fs = 0;
+        for(int i = 0; i < InChannelNum; i++){
+            BuffChannelInInt[i] = NULL;
+            BuffChannelIn[i] = NULL;
+        }
+        for(int i = 0; i < OutChannelNum; i++){
+            BuffChannelOutInt[i] = NULL;
+            BuffChannelOut[i] = NULL;
+        }
     }
 
     Mi3DAudioMappingSpk::Mi3DAudioMappingSpk(int fs_, int in_channel_num, int bit_width)
@@ -74,6 +84,15 @@ namespace android {
         for (int ch = 0; ch < OutChannelNum; ch++)
             limiter[ch] = CMusicLimiter_Init(attackRatio, releaseRatio, 0.005 * sample_rate + 1, 0.1, sample_rate);
         limitThreshold = 0.99;
+
+        for(int i = 0; i < InChannelNum; i++){
+            BuffChannelInInt[i] = NULL;
+            BuffChannelIn[i] = NULL;
+        }
+        for(int i = 0; i < OutChannelNum; i++){
+            BuffChannelOutInt[i] = NULL;
+            BuffChannelOut[i] = NULL;
+        }
     }
 
     Mi3DAudioMappingSpk::~Mi3DAudioMappingSpk()
