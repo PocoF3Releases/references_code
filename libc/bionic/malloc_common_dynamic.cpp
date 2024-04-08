@@ -54,6 +54,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+// MIUI ADD:
+#include <signal.h>
 
 #include <android/dlext.h>
 
@@ -104,6 +106,18 @@ static constexpr char kDebugPropertyOptions[] = "libc.debug.malloc.options";
 static constexpr char kDebugPropertyProgram[] = "libc.debug.malloc.program";
 static constexpr char kDebugEnvOptions[] = "LIBC_DEBUG_MALLOC_OPTIONS";
 
+//MIUI ADD:
+static constexpr char kTrackSharedLib[] = "persist.track.malloc.enable";
+
+// MIUI ADD START:
+// Use another property to decouple with aosp logic. Mainly for test.
+static constexpr char kDebugPropertyOptionsMiui[] = "libc.debug.malloc.options.miui";
+static constexpr char kDebuggableBuildProp[] = "ro.debuggable";
+static constexpr char kMallocDebugDefaultOptions[] = "enable_on_signal backtrace";
+
+static const char kNativeMemMonitorProp[] = "persist.debug.memleak.native";
+// MIUI ADD END
+
 typedef void (*finalize_func_t)();
 typedef bool (*init_func_t)(const MallocDispatch*, bool*, const char*);
 typedef void (*get_malloc_leak_info_func_t)(uint8_t**, size_t*, size_t*, size_t*, size_t*);
@@ -123,6 +137,14 @@ enum FunctionEnum : uint8_t {
 static void* gFunctions[FUNC_LAST];
 
 extern "C" int __cxa_atexit(void (*func)(void *), void *arg, void *dso);
+
+// MIUI ADD START:
+static bool g_malloc_debug_loaded = false;
+static bool CheckLoadMallocDebugOnSignal();
+static bool RegisterSigaction();
+static bool IsNativeMemMonitorOn();
+static bool IsDebuggableBuild();
+// MIUI ADD END
 
 template<typename FunctionType>
 static bool InitMallocFunction(void* malloc_impl_handler, FunctionType* func, const char* prefix, const char* suffix) {
@@ -239,6 +261,20 @@ static bool CheckLoadMallocDebug(char** options) {
   }
   return true;
 }
+
+
+// MIUI ADD:
+static void CheckMiuiMallocTrackAndInstall() {
+  char sharedlib[PROP_VALUE_MAX];
+  char libname[PROP_VALUE_MAX];
+  if (__system_property_get(kTrackSharedLib, sharedlib) == 0 || sharedlib[0] == '\0')
+    return;
+  sprintf(libname, "lib%s.so", sharedlib);
+  void* lib_handle = dlopen(libname, RTLD_NOW | RTLD_LOCAL);
+  if (lib_handle == nullptr)
+    error_log("%s: cannot open miui track \"%s\"", getprogname(), libname);
+}
+// END
 
 void SetGlobalFunctions(void* functions[]) {
   for (size_t i = 0; i < FUNC_LAST; i++) {
@@ -365,6 +401,10 @@ static bool InstallHooks(libc_globals* globals, const char* options, const char*
     dlclose(impl_handle);
     return false;
   }
+
+  // MIUI ADD:
+  g_malloc_debug_loaded = true;
+
   return true;
 }
 
@@ -388,6 +428,13 @@ static void MallocInitImpl(libc_globals* globals) {
   // Prefer malloc debug since it existed first and is a more complete
   // malloc interceptor than the hooks.
   bool hook_installed = false;
+
+  // MIUI ADD START:
+  if (CheckLoadMallocDebugOnSignal()) {
+    RegisterSigaction();
+  }
+  // MIUI ADD END
+
   if (CheckLoadMallocDebug(&options)) {
     hook_installed = InstallHooks(globals, options, kDebugPrefix, kDebugSharedLib);
   } else if (CheckLoadMallocHooks(&options)) {
@@ -403,6 +450,9 @@ static void MallocInitImpl(libc_globals* globals) {
     // heapprofd signal handler invocations.
     HeapprofdRememberHookConflict();
   }
+
+  // MIUI ADD:
+  CheckMiuiMallocTrackAndInstall();
 }
 
 // Initializes memory allocation framework.
@@ -574,3 +624,57 @@ extern "C" void free_malloc_leak_info(uint8_t* info) {
 }
 // =============================================================================
 #endif
+
+// MIUI ADD START:
+static bool IsNativeMemMonitorOn() {
+  char prop[PROP_VALUE_MAX];
+    if (__system_property_get(kNativeMemMonitorProp, prop) != 0
+          && (strcmp(prop, "true") == 0 || prop[0] == '1')) {
+      return true;
+    }
+  return false;
+}
+
+static bool IsDebuggableBuild() {
+  char prop[PROP_VALUE_MAX];
+  return __system_property_get(kDebuggableBuildProp, prop) != 0 && prop[0] == '1';
+}
+
+// We need to check persist MTBF properties, so we need a reboot aftter setting MTBF properties.
+static bool CheckLoadMallocDebugOnSignal() {
+  return IsDebuggableBuild() && IsNativeMemMonitorOn();
+}
+
+static void EnableMallocDebugOnSignal(int) {
+  if (!g_malloc_debug_loaded) {
+    __libc_globals.mutate([](libc_globals* globals) {
+      const char* options = kMallocDebugDefaultOptions;
+      char prop[PROP_VALUE_MAX];
+      if (__system_property_get(kDebugPropertyOptionsMiui, prop) != 0) {
+        // If property is set, override the default property. Useful for test.
+        options = prop;
+      }
+      bool hook_installed = InstallHooks(globals, options, kDebugPrefix, kDebugSharedLib);
+      info_log("[malloc_debug] Malloc debug hook installed: %d, program: %s",
+               hook_installed, getprogname());
+    });
+  }
+}
+
+static bool RegisterSigaction() {
+  // SIGRTMAX is 0 at compile time.
+  const int SIG_ENABLE_MALLOC_DEBUG = SIGRTMAX - 19; // 45
+  struct sigaction64 enable_act = {};
+  enable_act.sa_handler = EnableMallocDebugOnSignal;
+  enable_act.sa_flags = SA_RESTART | SA_ONSTACK;
+  if (sigaction64(SIG_ENABLE_MALLOC_DEBUG, &enable_act, nullptr) != 0) {
+    error_log("[malloc_debug] Unable to register malloc debug enable function: %s", strerror(errno));
+    return false;
+  }
+  if (strstr(getprogname(),"app_process") != nullptr) {
+    // Leave this log to show malloc debug signal is ready.
+    info_log("[malloc_debug] malloc debug is waiting for signal: %d", SIG_ENABLE_MALLOC_DEBUG);
+  }
+  return true;
+}
+// MIUI ADD END

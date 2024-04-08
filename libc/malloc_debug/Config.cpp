@@ -57,6 +57,8 @@ static constexpr size_t MAX_GUARD_BYTES = 16384;
 static constexpr size_t DEFAULT_BACKTRACE_FRAMES = 16;
 static constexpr size_t MAX_BACKTRACE_FRAMES = 256;
 static constexpr const char DEFAULT_BACKTRACE_DUMP_PREFIX[] = "/data/local/tmp/backtrace_heap";
+// MIUI ADD:
+static constexpr const char MIUI_BACKTRACE_DUMP_PREFIX[] = MIUI_DUMP_DIR "/backtrace_heap";
 
 static constexpr size_t DEFAULT_EXPAND_BYTES = 16;
 static constexpr size_t MAX_EXPAND_BYTES = 16384;
@@ -138,6 +140,11 @@ const std::unordered_map<std::string, Config::OptionInfo> Config::kOptions = {
     {
         "verbose", {VERBOSE, &Config::VerifyValueEmpty},
     },
+    // MIUI ADD START:
+    {
+        "enable_on_signal", {ENABLE_ON_SIGNAL, &Config::VerifyValueEmpty},
+    },
+    // MIUI ADD END
 };
 
 bool Config::ParseValue(const std::string& option, const std::string& value, size_t min_value,
@@ -406,6 +413,20 @@ bool Config::Init(const char* options_str) {
     LogUsage();
     return false;
   }
+
+  // MIUI ADD START:
+  // We don't use malloc debug for memory corruption problem. So we don't have to
+  // deal with headers, especially for realloc.
+  if ((options_ & ENABLE_ON_SIGNAL) && (options_ & HEADER_OPTIONS)) {
+    error_log("Do not use option enable_on_signal along with front_guard or rear_guard!");
+    abort();
+  }
+  // Don't use system property here to avoid exceeding max length of property.
+  if ((options_ & ENABLE_ON_SIGNAL)
+      && strcmp(backtrace_dump_prefix_.c_str(), DEFAULT_BACKTRACE_DUMP_PREFIX) == 0) {
+    backtrace_dump_prefix_ = MIUI_BACKTRACE_DUMP_PREFIX;
+  }
+  // MIUI ADD END
 
   return true;
 }

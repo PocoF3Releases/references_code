@@ -50,6 +50,13 @@
 #include <unwindstack/RegsGetLocal.h>
 #include <unwindstack/Unwinder.h>
 
+//MIUI ADD:
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+//END
+
 struct FdEntry {
   std::mutex mutex;
   std::vector<unwindstack::FrameData> backtrace GUARDED_BY(mutex);
@@ -68,7 +75,10 @@ static void fd_hook(android_fdtrack_event* event);
 static constexpr size_t kFdTableSize = 4096;
 
 // Only unwind up to 32 frames outside of libfdtrack.so.
-static constexpr size_t kStackDepth = 32;
+// MIUI MOD:
+// 32 is not big enough especially when unwinding java threads
+// static constexpr size_t kStackDepth = 32;
+static constexpr size_t kStackDepth = 128;
 
 // Skip any initial frames from libfdtrack.so.
 static std::vector<std::string> kSkipFdtrackLib [[clang::no_destroy]] = {"libfdtrack.so"};
@@ -272,6 +282,40 @@ static void fdtrack_dump_impl(bool fatal) {
       fatal ? &stacks : nullptr);
 
   if (fatal) {
+    // MIUI ADD: START
+    char file_name[128];
+    const char log_dir[] = "/data/miuilog/stability/resleak/fdtrack";
+    int ret = mkdir(log_dir, 0755);
+    if (ret == 0 || (ret != 0 && errno == EEXIST)) {
+      async_safe_format_buffer(file_name, sizeof(file_name), "%s/fdtrack_u%d_p%d",
+                               log_dir, getuid(), getpid());
+    }
+    int out_file_fd = TEMP_FAILURE_RETRY(
+        open(file_name, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666));
+    auto async_safe_write_stacktrace = [](int fd, StackInfo* stack) {
+      char buf[4096];
+      char* p = buf;
+      p += async_safe_format_buffer(buf, sizeof(buf), "%d fds allocated by:\n", (int)stack->count);
+      for (size_t i = 0; i < stack->stack_depth; ++i) {
+        ssize_t bytes_left = buf + sizeof(buf) - p;
+        if (bytes_left > 0) {
+          p += async_safe_format_buffer(p, bytes_left, "  %zu: %s+%" PRIu64 "\n", i,
+                                        stack->function_names[i], stack->function_offsets[i]);
+        }
+      }
+      TEMP_FAILURE_RETRY(write(fd, buf, p - buf/*length*/));
+    };
+    if (out_file_fd != -1) {
+      for (size_t i = 0; i < stacks.count; ++i) {
+        async_safe_write_stacktrace(out_file_fd, &stacks.data[i]);
+      }
+      close(out_file_fd);
+      async_safe_format_log(ANDROID_LOG_INFO, "fdtrack", "Saved fdtrack to %s", file_name);
+    } else {
+      async_safe_format_log(ANDROID_LOG_ERROR, "fdtrack", "Failed to open %s, errno=%d", file_name,
+                            errno);
+    }
+    // END
     // Find the most common stack.
     size_t max = 0;
     StackInfo* stack = nullptr;

@@ -33,6 +33,9 @@
 #include <string>
 #include <unordered_map>
 
+// MIUII ADD:
+#define MIUI_DUMP_DIR "/data/miuilog/stability/memleak/nativemem"
+
 constexpr uint64_t FRONT_GUARD = 0x1;
 constexpr uint64_t REAR_GUARD = 0x2;
 constexpr uint64_t BACKTRACE = 0x4;
@@ -46,6 +49,8 @@ constexpr uint64_t RECORD_ALLOCS = 0x200;
 constexpr uint64_t BACKTRACE_FULL = 0x400;
 constexpr uint64_t ABORT_ON_ERROR = 0x800;
 constexpr uint64_t VERBOSE = 0x1000;
+// MIUI ADD:
+constexpr uint64_t ENABLE_ON_SIGNAL = 0x2000;
 
 // In order to guarantee posix compliance, set the minimum alignment
 // to 8 bytes for 32 bit systems and 16 bytes for 64 bit systems.

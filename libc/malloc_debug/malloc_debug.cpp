@@ -39,6 +39,8 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+#include <sys/system_properties.h>
+
 #include <mutex>
 #include <vector>
 
@@ -67,6 +69,10 @@ DebugData* g_debug;
 bool* g_zygote_child;
 
 const MallocDispatch* g_dispatch;
+
+size_t g_min_alloc_to_record = 0;
+size_t g_max_alloc_to_record = SIZE_MAX;
+
 // ------------------------------------------------------------------------
 
 // ------------------------------------------------------------------------
@@ -255,6 +261,25 @@ static bool VerifyPointer(const void* pointer, const char* function_name) {
   return true;
 }
 
+// MIUI ADD START:
+/*
+  * Check if a pointer is allocated before malloc debug enabled.
+  * Note that we don't consider header case here, since we don't use it to debug
+  * problem of memory corruption.
+  */
+static bool VerifyPointerAutoMode(const void* pointer, const char* function_name) {
+  if (g_debug->TrackPointers()) {
+    if (!PointerData::Exists(pointer)) {
+      if (g_debug->config().options() & VERBOSE) {
+        debug_log("Pointer before malloc debug loaded: %p (%s)", pointer, function_name);
+      }
+      return false;
+    }
+  }
+  return true;
+}
+// MIUI ADD END
+
 static size_t InternalMallocUsableSize(void* pointer) {
   if (g_debug->HeaderEnabled()) {
     return g_debug->GetHeader(pointer)->usable_size;
@@ -325,6 +350,23 @@ bool debug_initialize(const MallocDispatch* malloc_dispatch, bool* zygote_child,
   // Always enable the backtrace code since we will use it in a number
   // of different error cases.
   backtrace_startup();
+
+  char min_alloc_to_record[10];
+  if (__system_property_get("libc.debug.malloc.minalloctorecord", min_alloc_to_record)) {
+    g_min_alloc_to_record = atoi(min_alloc_to_record);
+  }
+
+  char max_alloc_to_record[10];
+  if (__system_property_get("libc.debug.malloc.maxalloctorecord", max_alloc_to_record)) {
+    g_max_alloc_to_record = atoi(max_alloc_to_record);
+  }
+
+  if (g_min_alloc_to_record > g_max_alloc_to_record) {
+    error_log("%s: min_alloc_to_record > max_alloc_to_record!,"
+        "reverting back to default limits", getprogname());
+    g_min_alloc_to_record = 0;
+    g_max_alloc_to_record = SIZE_MAX;
+  }
 
   if (g_debug->config().options() & VERBOSE) {
     info_log("%s: malloc debug enabled", getprogname());
@@ -408,6 +450,13 @@ size_t debug_malloc_usable_size(void* pointer) {
   ScopedConcurrentLock lock;
   ScopedDisableDebugCalls disable;
   ScopedBacktraceSignalBlocker blocked;
+
+  // MIUI ADD START:
+  if ((g_debug->config().options() & ENABLE_ON_SIGNAL)
+       && !VerifyPointerAutoMode(pointer, "malloc_usable_size")) {
+    return g_dispatch->malloc_usable_size(pointer);
+  }
+  // MIUI ADD END
 
   if (!VerifyPointer(pointer, "malloc_usable_size")) {
     return 0;
@@ -555,6 +604,14 @@ void debug_free(void* pointer) {
     g_debug->record->AddEntry(new FreeEntry(pointer));
   }
 
+  // MIUI ADD START:
+  if ((g_debug->config().options() & ENABLE_ON_SIGNAL)
+       && !VerifyPointerAutoMode(pointer, "free")) {
+    g_dispatch->free(pointer);
+    return;
+  }
+  // MIUI ADD END
+
   if (!VerifyPointer(pointer, "free")) {
     return;
   }
@@ -658,7 +715,14 @@ void* debug_realloc(void* pointer, size_t bytes) {
     return pointer;
   }
 
-  if (!VerifyPointer(pointer, "realloc")) {
+  // MIUI ADD:
+  bool pointer_before_enabled = (g_debug->config().options() & ENABLE_ON_SIGNAL)
+                                                                    && !VerifyPointerAutoMode(pointer, "realloc");
+
+  // MIUI MOD START:
+  //if (!VerifyPointer(pointer, "realloc")) {
+  if (!pointer_before_enabled && !VerifyPointer(pointer, "realloc")) {
+  // MIUI MOD END
     return nullptr;
   }
 
@@ -666,6 +730,14 @@ void* debug_realloc(void* pointer, size_t bytes) {
     if (g_debug->config().options() & RECORD_ALLOCS) {
       g_debug->record->AddEntry(new ReallocEntry(nullptr, bytes, pointer));
     }
+
+    // MIUI ADD START:
+    if (pointer_before_enabled) {
+      // Do not call InternalFree since we don't know this pointer.
+      g_dispatch->free(pointer);
+      return nullptr;
+    }
+    // MIUI ADD END
 
     InternalFree(pointer);
     return nullptr;
@@ -729,7 +801,10 @@ void* debug_realloc(void* pointer, size_t bytes) {
     memcpy(new_pointer, pointer, prev_size);
     InternalFree(pointer);
   } else {
-    if (g_debug->TrackPointers()) {
+    // MIUI MOD START:
+    //if (g_debug->TrackPointers()) {
+    if (!pointer_before_enabled && g_debug->TrackPointers()) {
+    // MIUI MOD END
       PointerData::Remove(pointer);
     }
 
