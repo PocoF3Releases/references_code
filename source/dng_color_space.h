@@ -345,6 +345,32 @@ class dng_space_fakeRGB: public dng_color_space
 	};
 
 /*****************************************************************************/
+//xiaomi add start
+class dng_space_custom: public dng_color_space
+    {
+    public:
+        enum FnType {fn_type_srgb};
+        dng_space_custom (FnType fnType, const dng_matrix_3by3 &M)
+            : fnType(fnType)
+        {
+            dng_color_space::SetMatrixToPCS(M);
+        };
+        virtual const dng_1d_function &GammaFunction () const {
+            if (fnType == FnType::fn_type_srgb) {
+                return dng_function_GammaEncode_sRGB::Get();
+            }
+            abort();
+            return dng_function_GammaEncode_sRGB::Get();
+        }
+        /// Returns sRGB IEC61966-2.1 ICC profile
+        virtual bool ICCProfile (uint32 &size,
+                                 const uint8 *&data) const {
+            return false;
+        }
+    private:
+        FnType fnType;
+    };
+    //xiaomi add end
 
 #endif
 
