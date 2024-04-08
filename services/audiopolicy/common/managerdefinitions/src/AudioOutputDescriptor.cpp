@@ -15,8 +15,8 @@
  */
 
 #define LOG_TAG "APM::AudioOutputDescriptor"
-//#define LOG_NDEBUG 0
-
+#define LOG_NDEBUG 0
+#define LOG_NDEBUG_ASSERT 0
 #include <android-base/stringprintf.h>
 
 #include <AudioPolicyInterface.h>
@@ -296,7 +296,7 @@ void AudioOutputDescriptor::log(const char* indent)
 SwAudioOutputDescriptor::SwAudioOutputDescriptor(const sp<IOProfile>& profile,
                                                  AudioPolicyClientInterface *clientInterface)
     : AudioOutputDescriptor(profile, clientInterface),
-    mProfile(profile), mIoHandle(AUDIO_IO_HANDLE_NONE), mLatency(0),
+    mProfile(profile), mLatency(0),
     mOutput1(0), mOutput2(0), mDirectOpenCount(0),
     mDirectClientSession(AUDIO_SESSION_NONE)
 {
@@ -435,7 +435,9 @@ void SwAudioOutputDescriptor::toAudioPortConfig(
                                                  const struct audio_port_config *srcConfig) const
 {
 
+#if LOG_NDEBUG_ASSERT
     ALOG_ASSERT(!isDuplicated(), "toAudioPortConfig() called on duplicated output %d", mIoHandle);
+#endif
     AudioOutputDescriptor::toAudioPortConfig(dstConfig, srcConfig);
 
     dstConfig->ext.mix.handle = mIoHandle;
@@ -443,7 +445,9 @@ void SwAudioOutputDescriptor::toAudioPortConfig(
 
 void SwAudioOutputDescriptor::toAudioPort(struct audio_port_v7 *port) const
 {
+#if LOG_NDEBUG_ASSERT
     ALOG_ASSERT(!isDuplicated(), "toAudioPort() called on duplicated output %d", mIoHandle);
+#endif
 
     AudioOutputDescriptor::toAudioPort(port);
 
@@ -856,6 +860,23 @@ audio_io_handle_t SwAudioOutputCollection::getA2dpOutput() const
         }
     }
     return 0;
+}
+
+bool SwAudioOutputCollection::isA2dpOnPrimary() const
+{
+    sp<SwAudioOutputDescriptor> primaryOutput = getPrimaryOutput();
+
+    if ((primaryOutput != NULL) && (primaryOutput->mProfile != NULL)
+        && (primaryOutput->mProfile->getModule() != NULL)) {
+        Vector <sp<IOProfile>> primaryOutputProfiles =
+            primaryOutput->mProfile->getModule()->mOutputProfiles;
+        for (size_t j = 0; j < primaryOutputProfiles.size(); j++) {
+            if (primaryOutputProfiles[j]->supportsDeviceTypes(getAudioDeviceOutAllA2dpSet())) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 bool SwAudioOutputCollection::isA2dpOffloadedOnPrimary() const

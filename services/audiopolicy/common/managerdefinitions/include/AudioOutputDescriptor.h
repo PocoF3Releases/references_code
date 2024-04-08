@@ -277,11 +277,22 @@ public:
         }
         return false;
     }
-
+    /* store app type here: start */
+    /* one more apps can use same AudioInputDescriptor,
+     * So this mAppMask contains more app mask.
+     */
+    void setAppMask(audio_app_type_f mask) {
+        mAppMask |= mask;
+    }
+    int32_t getAppMask() {
+        return mAppMask;
+    }
+    /* store app type here: end */
     TrackClientVector clientsList(bool activeOnly = false,
                                   product_strategy_t strategy = PRODUCT_STRATEGY_NONE,
                                   bool preferredDeviceOnly = false) const;
 
+    audio_io_handle_t mIoHandle;           // output handle
     // override ClientMapHandler to abort when removing a client when active.
     void removeClient(audio_port_handle_t portId) override {
         auto client = getClient(portId);
@@ -328,6 +339,9 @@ protected:
     RoutingActivities mRoutingActivities; /**< track routing activity on this ouput.*/
 
     VolumeActivities mVolumeActivities; /**< track volume activity on this ouput.*/
+    /* store app type here: start */
+    int32_t mAppMask = (int32_t)APP_TYPE_NULL;
+    /* store app type here: end */
 };
 
 // Audio output driven by a software mixer in audio flinger.
@@ -441,7 +455,6 @@ public:
     void setTracksInvalidatedStatusByStrategy(product_strategy_t strategy);
 
     const sp<IOProfile> mProfile;          // I/O profile this output derives from
-    audio_io_handle_t mIoHandle;           // output handle
     uint32_t mLatency;                  //
     using AudioOutputDescriptor::mFlags;
     sp<SwAudioOutputDescriptor> mOutput1;    // used by duplicated outputs: first output
@@ -539,6 +552,11 @@ public:
      * returns the A2DP output handle if it is open or 0 otherwise
      */
     audio_io_handle_t getA2dpOutput() const;
+
+    /**
+     * return true if primary HAL supports A2DP Playback
+     */
+    bool isA2dpOnPrimary() const;
 
     /**
      * returns true if primary HAL supports A2DP Offload

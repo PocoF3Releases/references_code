@@ -16,7 +16,7 @@
 */
 
 #define LOG_TAG "AudioFlinger"
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
 
 #include <media/audiohal/DeviceHalInterface.h>
 #include <media/audiohal/StreamHalInterface.h>
@@ -33,8 +33,6 @@ AudioStreamOut::AudioStreamOut(AudioHwDevice *dev, audio_output_flags_t flags)
         : audioHwDev(dev)
         , stream(NULL)
         , flags(flags)
-        , mFramesWritten(0)
-        , mFramesWrittenAtStandby(0)
         , mRenderPosition(0)
         , mRateMultiplier(1)
         , mHalFormatHasProportionalFrames(false)
@@ -106,13 +104,8 @@ status_t AudioStreamOut::getPresentationPosition(uint64_t *frames, struct timesp
         return status;
     }
 
-    // Adjust for standby using HAL rate frames.
-    // Only apply this correction if the HAL is getting PCM frames.
     if (mHalFormatHasProportionalFrames) {
-        uint64_t adjustedPosition = (halPosition <= mFramesWrittenAtStandby) ?
-                0 : (halPosition - mFramesWrittenAtStandby);
-        // Scale from HAL sample rate to application rate.
-        *frames = adjustedPosition / mRateMultiplier;
+        *frames = halPosition / mRateMultiplier;
     } else {
         // For offloaded MP3 and other compressed formats.
         *frames = halPosition;
@@ -193,8 +186,6 @@ int AudioStreamOut::flush()
 {
     mRenderPosition = 0;
     mExpectRetrograde = false;
-    mFramesWritten = 0;
-    mFramesWrittenAtStandby = 0;
     status_t result = stream->flush();
     return result != INVALID_OPERATION ? result : NO_ERROR;
 }
@@ -203,7 +194,6 @@ int AudioStreamOut::standby()
 {
     mRenderPosition = 0;
     mExpectRetrograde = false;
-    mFramesWrittenAtStandby = mFramesWritten;
     return stream->standby();
 }
 
@@ -211,9 +201,6 @@ ssize_t AudioStreamOut::write(const void *buffer, size_t numBytes)
 {
     size_t bytesWritten;
     status_t result = stream->write(buffer, numBytes, &bytesWritten);
-    if (result == OK && bytesWritten > 0 && mHalFrameSize > 0) {
-        mFramesWritten += bytesWritten / mHalFrameSize;
-    }
     return result == OK ? bytesWritten : result;
 }
 

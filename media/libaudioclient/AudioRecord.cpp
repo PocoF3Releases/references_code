@@ -15,7 +15,8 @@
 ** limitations under the License.
 */
 
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
+#define LOG_NDEBUG_ASSERT 0
 #define LOG_TAG "AudioRecord"
 
 #include <inttypes.h>
@@ -36,8 +37,17 @@
 #include <media/IAudioFlinger.h>
 #include <media/MediaMetricsItem.h>
 #include <media/TypeConverter.h>
+#include <media/SeempLog.h>
+#include <cutils/android_filesystem_config.h>
+#include "AudioClientStub.h"
+
+#include <binder/PermissionController.h>
 
 #define WAIT_PERIOD_MS          10
+
+#define LONG_TIME_ZERO_CHECK_TIME       1000*60
+#define MUTE_LOOP_GAP_MS                1000
+#define FINE_LOOP_GAP_MS                5000
 
 namespace android {
 
@@ -307,15 +317,21 @@ status_t AudioRecord::set(
         int32_t maxSharedAudioHistoryMs)
 {
     status_t status = NO_ERROR;
+    uid_t uid_app = multiuser_get_app_id(uid);
+    bool isIsolated = uid_app >= AID_ISOLATED_START && uid_app <= AID_ISOLATED_END;
+    if (uid == -1 ) {
+        uid_app = multiuser_get_app_id(mClientAttributionSource.uid);
+        isIsolated = uid_app >= AID_ISOLATED_START && uid_app <= AID_ISOLATED_END;
+    }
     LOG_ALWAYS_FATAL_IF(mInitialized, "%s: should not be called twice", __func__);
     mInitialized = true;
     // Note mPortId is not valid until the track is created, so omit mPortId in ALOG for set.
-    ALOGV("%s(): inputSource %d, sampleRate %u, format %#x, channelMask %#x, frameCount %zu, "
+    ALOGD("%s(): inputSource %d, sampleRate %u, format %#x, channelMask %#x, frameCount %zu, "
           "notificationFrames %u, sessionId %d, transferType %d, flags %#x, attributionSource %s"
-          "uid %d, pid %d",
+          "uid %d, pid %d, isIsolated %d",
           __func__,
           inputSource, sampleRate, format, channelMask, frameCount, notificationFrames,
-          sessionId, transferType, flags, mClientAttributionSource.toString().c_str(), uid, pid);
+          sessionId, transferType, flags, mClientAttributionSource.toString().c_str(), uid, pid, isIsolated);
 
     // TODO b/182392553: refactor or remove
     pid_t callingPid = IPCThreadState::self()->getCallingPid();
@@ -430,12 +446,31 @@ status_t AudioRecord::set(
     mNotificationFramesReq = notificationFrames;
     // mNotificationFramesAct is initialized in createRecord_l
 
+//MIUI ADD: start MIAUDIO_ULL_CHECK
+    if (flags & AUDIO_INPUT_FLAG_FAST && !isIsolated) {
+        uid_t uid = mClientAttributionSource.uid;
+        if (uid == 0) {
+            uid = IPCThreadState::self()->getCallingUid();
+        }
+        if (!AudioClientStub::isUllRecordSupport(uid)) {
+            ALOGD("%s: remove AUDIO_INPUT_FLAG_FAST for white list packages", __func__);
+            flags =(audio_input_flags_t)(flags &  ~(AUDIO_INPUT_FLAG_FAST));
+        }
+    }
+//MIUI ADD: end
+
     mCallback = callback;
     if (mCallback != nullptr) {
         mAudioRecordThread = new AudioRecordThread(*this);
         mAudioRecordThread->run("AudioRecord", ANDROID_PRIORITY_AUDIO);
         // thread begins in paused state, and will not reference us until start()
     }
+//MIUI ADD: start MIAUDIO_GAME_EFFECT
+    if (!isIsolated) {
+        AudioClientStub::gameEffectAudioRecordChangeInputSource(adjPid, mFormat,
+                    inputSource, mSampleRate, mChannelMask, mAttributes.source, mAttributes.flags);
+    }
+//MIUI ADD: end
 
     // create the IAudioRecord
     {
@@ -456,7 +491,12 @@ status_t AudioRecord::set(
     }
 
     // TODO: add audio hardware input latency here
-    mLatency = (1000LL * mFrameCount) / mSampleRate;
+    if (mTransfer == TRANSFER_CALLBACK ||
+            mTransfer == TRANSFER_SYNC) {
+        mLatency = (1000 * mNotificationFramesAct) / mSampleRate;
+    } else {
+        mLatency = (1000 * mFrameCount) / mSampleRate;
+    }
     mMarkerPosition = 0;
     mMarkerReached = false;
     mNewPosition = 0;
@@ -468,6 +508,14 @@ status_t AudioRecord::set(
     mFramesRead = 0;
     mFramesReadServerOffset = 0;
 
+    mMuteTimeMs = 0;
+    mMuteTimeSec = 0;
+    mFineTimeMs = 0;
+    mFineTimeSec = 0;
+    mSmallTimeMs = 0;
+    mSmallTimeSec = 0;
+    mNowTimeMs = 0;
+    mBeforeTimeMs = 0;
 error:
     if (status != NO_ERROR) {
         mMediaMetrics.markError(status, __FUNCTION__);
@@ -515,7 +563,8 @@ status_t AudioRecord::set(
 status_t AudioRecord::start(AudioSystem::sync_event_t event, audio_session_t triggerSession)
 {
     const int64_t beginNs = systemTime();
-    ALOGV("%s(%d): sync event %d trigger session %d", __func__, mPortId, event, triggerSession);
+    ALOGD("%s(%d): sync event %d trigger session %d, mSessionID=%d", __func__, mPortId, event, triggerSession, mSessionId);
+    SEEMPLOG_RECORD(71,"");
     AutoMutex lock(mLock);
 
     status_t status = NO_ERROR;
@@ -591,6 +640,9 @@ status_t AudioRecord::start(AudioSystem::sync_event_t event, audio_session_t tri
 
         // we've successfully started, log that time
         mMediaMetrics.logStart(systemTime());
+        uid_t uid = VALUE_OR_FATAL(aidl2legacy_int32_t_uid_t(mClientAttributionSource.uid));
+        pid_t pid = VALUE_OR_FATAL(aidl2legacy_int32_t_pid_t(mClientAttributionSource.pid));
+        LOG_EVENT_STRING(30201, String8::format("%d&%d&%d", pid, uid, 1).string());
     }
     return status;
 }
@@ -598,6 +650,7 @@ status_t AudioRecord::start(AudioSystem::sync_event_t event, audio_session_t tri
 void AudioRecord::stop()
 {
     const int64_t beginNs = systemTime();
+    ALOGD("stop mSessionID=%d", mSessionId);
     AutoMutex lock(mLock);
     mediametrics::Defer defer([&] {
         mediametrics::LogItem(mMetricsId)
@@ -606,7 +659,7 @@ void AudioRecord::stop()
             .set(AMEDIAMETRICS_PROP_STATE, stateToString(mActive))
             .record(); });
 
-    ALOGV("%s(%d): mActive:%d\n", __func__, mPortId, mActive);
+    ALOGD("%s(%d): mActive:%d\n", __func__, mPortId, mActive);
     if (!mActive) {
         return;
     }
@@ -629,6 +682,9 @@ void AudioRecord::stop()
 
     // we've successfully started, log that time
     mMediaMetrics.logStop(systemTime());
+    uid_t uid = VALUE_OR_FATAL(aidl2legacy_int32_t_uid_t(mClientAttributionSource.uid));
+    pid_t pid = VALUE_OR_FATAL(aidl2legacy_int32_t_pid_t(mClientAttributionSource.pid));
+    LOG_EVENT_STRING(30201, String8::format("%d&%d&%d", pid, uid, 2).string());
 }
 
 bool AudioRecord::stopped() const
@@ -953,7 +1009,9 @@ status_t AudioRecord::createRecord_l(const Modulo<uint32_t> &epoch)
         usleep((20 + rand() % 30) * 10000);
     } while (1);
 
+#if LOG_NDEBUG_ASSERT
     ALOG_ASSERT(output.audioRecord != 0);
+#endif
 
     // AudioFlinger now owns the reference to the I/O handle,
     // so we are no longer responsible for releasing it.
@@ -970,9 +1028,14 @@ status_t AudioRecord::createRecord_l(const Modulo<uint32_t> &epoch)
     mSessionId = output.sessionId;
     mSampleRate = output.sampleRate;
     mServerConfig = output.serverConfig;
-    mServerFrameSize = audio_bytes_per_frame(
-            audio_channel_count_from_in_mask(mServerConfig.channel_mask), mServerConfig.format);
-    mServerSampleSize = audio_bytes_per_sample(mServerConfig.format);
+    if (audio_is_linear_pcm(mServerConfig.format)) {
+        mServerFrameSize = audio_bytes_per_frame(
+            audio_channel_count_from_in_mask(mServerConfig.channel_mask),
+            mServerConfig.format);
+        mServerSampleSize = audio_bytes_per_sample(mServerConfig.format);
+    } else {
+        mServerFrameSize = mServerSampleSize = sizeof(uint8_t);
+    }
 
     if (output.cblk == 0) {
         errorMessage = StringPrintf("%s(%d): Could not get control block", __func__, mPortId);
@@ -1196,6 +1259,17 @@ status_t AudioRecord::obtainBuffer(Buffer* audioBuffer, const struct timespec *r
             if (status == DEAD_OBJECT) {
                 // re-create track, unless someone else has already done so
                 if (newSequence == oldSequence) {
+//MIUI ADD: start MIAUDIO_INPUT_REUSE
+                    #define DELAY_US 500000
+                    bool isReuse = 0;
+                    uid_t uid = IPCThreadState::self()->getCallingUid();
+                    isReuse = AudioSystem::isReuseInput(uid, mSessionId);
+                    ALOGI("%s: mSessionId %d, uid %d", __func__, mSessionId, uid);
+                    if (isReuse) {
+                        ALOGW("delay 500 ms to wait other app restore first");
+                        usleep(DELAY_US);
+                    }
+//MIUI ADD: end
                     if (!audio_is_linear_pcm(mFormat)) {
                         // If compressed capture, don't attempt to restore the track.
                         // Return a DEAD_OBJECT error and let the caller recreate.
@@ -1262,6 +1336,15 @@ void AudioRecord::releaseBuffer(const Buffer* audioBuffer)
         return;
     }
     mInOverrun = false;
+
+//MIUI ADD: start MIAUDIO_DUMP_PCM
+if (buffer.mRaw != NULL && buffer.mFrameCount)
+        AudioClientStub::dumpAudioDataToFile(buffer.mRaw, buffer.mFrameCount * mFrameSize,
+            mFormat, mSampleRate, mChannelCount, 4,
+            aidl2legacy_int32_t_pid_t(mClientAttributionSource.pid).value_or(0), mSessionId,
+            (mClientAttributionSource.packageName.has_value() ? mClientAttributionSource.packageName.value() : "").c_str());
+//MIUI ADD: end
+
     mProxy->releaseBuffer(&buffer);
 
     // the server does not automatically disable recorder on overrun, so no need to restart
@@ -1273,7 +1356,102 @@ audio_io_handle_t AudioRecord::getInputPrivate() const
     return mInput;
 }
 
+status_t AudioRecord::setParameters(const String8& keyValuePairs) {
+    AutoMutex lock(mLock);
+    return mInput != AUDIO_IO_HANDLE_NONE
+               ? AudioSystem::setParameters(mInput, keyValuePairs)
+               : NO_INIT;
+}
+
+String8 AudioRecord::getParameters(const String8& keys) {
+    AutoMutex lock(mLock);
+    return mInput != AUDIO_IO_HANDLE_NONE
+               ? AudioSystem::getParameters(mInput, keys)
+               : String8::empty();
+}
+
 // -------------------------------------------------------------------------
+
+static int64_t convertTimespecToUs(const struct timespec &tv)
+{
+    return tv.tv_sec * 1000000LL + tv.tv_nsec / 1000;
+}
+static int64_t getNowUs()
+{
+    struct timespec tv;
+    (void) clock_gettime(CLOCK_MONOTONIC, &tv);
+    return convertTimespecToUs(tv);
+}
+void AudioRecord::isLongTimeZeroData(const void *buffer, int size) {
+    int16_t mMaxAmplitude = 0;
+    int16_t gap = 2; // int16_t / int8_t
+    int16_t value = 0;
+    int64_t duration = 0;
+    const int16_t *check_point = (const int16_t *)buffer;
+    if ((mFormat & AUDIO_FORMAT_MAIN_MASK) != AUDIO_FORMAT_PCM)
+        return;
+    if (!buffer || size <= 0)
+        return;
+    for (int i = 0; i < size / gap; i++) {
+        value = check_point[i];
+        if (value < 0) {
+            value = -value;
+        }
+        if (mMaxAmplitude < value) {
+            mMaxAmplitude = value;
+        }
+    }
+    mBeforeTimeMs = mNowTimeMs;
+    mNowTimeMs = getNowUs() / 1000;
+    if (mBeforeTimeMs == 0)
+        return;
+    duration = mNowTimeMs - mBeforeTimeMs;
+    if (mMaxAmplitude > 0) {
+        // get one buffer time for unsilent
+        if (mMaxAmplitude >= 5)
+            mFineTimeMs += duration;
+        else
+            mSmallTimeMs += duration;
+    } else {
+        // get one buffer time for silent (ms)
+        mMuteTimeMs += duration;
+    }
+        // mute
+    if ((mMuteTimeMs - MUTE_LOOP_GAP_MS + 1000) / 1000 > mMuteTimeSec) {
+        mMuteTimeSec = mMuteTimeMs / 1000;
+	ALOGD("[audioRecordData][mute] %lds(f:%ld m:%ld s:%ld) : pid %d uid %d sessionId %d sr %d ch %d fmt %x",
+            (long)mMuteTimeSec, (long)mFineTimeMs, (long)mMuteTimeMs, (long)mSmallTimeMs,
+            mClientAttributionSource.pid, mClientAttributionSource.uid, getSessionId(),
+            mSampleRate, mChannelCount, mFormat);
+        if (mMuteTimeMs >= LONG_TIME_ZERO_CHECK_TIME) {
+            mMuteTimeMs = 0;
+            mMuteTimeSec = 0;
+        }
+    // fine
+    } else if ((mFineTimeMs - FINE_LOOP_GAP_MS + 1000) / 1000 > mFineTimeSec) {
+        mFineTimeSec = mFineTimeMs / 1000;
+        ALOGD("[audioRecordData][fine] %lds(f:%ld m:%ld s:%ld) : pid %d uid %d sessionId %d sr %d ch %d fmt %x",
+            (long)mFineTimeSec, (long)mFineTimeMs, (long)mMuteTimeMs, (long)mSmallTimeMs,
+            mClientAttributionSource.pid, mClientAttributionSource.uid, getSessionId(),
+            mSampleRate, mChannelCount, mFormat);
+        if (mFineTimeMs >= LONG_TIME_ZERO_CHECK_TIME) {
+            mFineTimeMs = 0;
+            mFineTimeSec = 0;
+        }
+    // small
+    } else if ((mSmallTimeMs - FINE_LOOP_GAP_MS + 1000) / 1000 > mSmallTimeSec) {
+        mSmallTimeSec = mSmallTimeMs / 1000;
+        ALOGD("[audioRecordData][small] %lds(f:%ld m:%ld s:%ld) : pid %d uid %d sessionId %d sr %d ch %d fmt %x",
+            (long)mSmallTimeSec, (long)mFineTimeMs, (long)mMuteTimeMs, (long)mSmallTimeMs,
+            mClientAttributionSource.pid, mClientAttributionSource.uid, getSessionId(),
+            mSampleRate, mChannelCount, mFormat);
+        if (mSmallTimeMs >= LONG_TIME_ZERO_CHECK_TIME) {
+            mSmallTimeMs = 0;
+            mSmallTimeSec = 0;
+        }
+    } else
+        ;
+}
 
 ssize_t AudioRecord::read(void* buffer, size_t userSize, bool blocking)
 {
@@ -1291,6 +1469,7 @@ ssize_t AudioRecord::read(void* buffer, size_t userSize, bool blocking)
 
     ssize_t read = 0;
     Buffer audioBuffer;
+    void* bufferHead = buffer;
 
     while (userSize >= mFrameSize) {
         audioBuffer.frameCount = userSize / mFrameSize;
@@ -1320,6 +1499,7 @@ ssize_t AudioRecord::read(void* buffer, size_t userSize, bool blocking)
         mFramesRead += read / mFrameSize;
         // mFramesReadTime = systemTime(SYSTEM_TIME_MONOTONIC); // not provided at this time.
     }
+    isLongTimeZeroData(bufferHead, read);
     return read;
 }
 
@@ -1526,6 +1706,8 @@ nsecs_t AudioRecord::processAudioBuffer()
         const size_t readSize = callback->onMoreData(*buffer);
         buffer->mSize = readSize;
 
+	isLongTimeZeroData(audioBuffer.raw, readSize);
+
         // Validate on returned size
         if (ssize_t(readSize) < 0 || readSize > reqSize) {
             ALOGE("%s(%d):  EVENT_MORE_DATA requested %zu bytes but callback returned %zd bytes",
@@ -1603,7 +1785,7 @@ status_t AudioRecord::restoreRecord_l(const char *from)
     ALOGW("%s(%d): dead IAudioRecord, creating a new one from %s()", __func__, mPortId, from);
     ++mSequence;
 
-    const int INITIAL_RETRIES = 3;
+    const int INITIAL_RETRIES = 100;
     int retries = INITIAL_RETRIES;
 retry:
     if (retries < INITIAL_RETRIES) {
@@ -1634,7 +1816,7 @@ retry:
         ALOGW("%s(%d): failed status %d, retries %d", __func__, mPortId, result, retries);
         if (--retries > 0) {
             // leave time for an eventual race condition to clear before retrying
-            usleep(500000);
+            usleep(10000);
             goto retry;
         }
         // if no retries left, set invalid bit to force restoring at next occasion

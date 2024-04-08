@@ -811,7 +811,7 @@ bool GraphicBufferSource::calculateCodecTimestamp_l(
 
     if (mCaptureFps > 0.
             && (mFps > 2 * mCaptureFps
-            || mCaptureFps > 2 * mFps)) {
+            || mCaptureFps > mFps)) {
         // Time lapse or slow motion mode
         if (mPrevCaptureUs < 0LL) {
             // first capture
@@ -1383,6 +1383,9 @@ status_t GraphicBufferSource::setTimeLapseConfig(double fps, double captureFps) 
     if (captureFps > fps) {
         mSnapTimestamps = 1 == base::GetIntProperty(
                 "debug.stagefright.snap_timestamps", int64_t(0));
+    } else if (fps > 2 * captureFps) {
+        // Timelapse mode
+        mSnapTimestamps = true;
     } else {
         mSnapTimestamps = false;
     }

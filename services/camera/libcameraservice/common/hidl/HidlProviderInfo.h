@@ -130,6 +130,9 @@ struct HidlProviderInfo : public CameraProviderManager::ProviderInfo,
         hardware::hidl_vec<hardware::camera::provider::V2_7::CameraIdAndStreamCombination>*
                 halCameraIdsAndStreamCombinations,
         bool *earlyExit);
+#ifdef __XIAOMI_CAMERA__
+    static CameraMetadata gCameraCharacteristics;
+#endif
 }; // HidlProviderInfo
 
 } // namespace android

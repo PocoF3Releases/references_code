@@ -96,7 +96,8 @@ void ARTPConnection::addStream(
         const sp<ASessionDescription> &sessionDesc,
         size_t index,
         const sp<AMessage> &notify,
-        bool injected) {
+        bool injected,
+        bool isIPV6) {
     sp<AMessage> msg = new AMessage(kWhatAddStream, this);
     msg->setInt32("rtp-socket", rtpSocket);
     msg->setInt32("rtcp-socket", rtcpSocket);
@@ -104,6 +105,7 @@ void ARTPConnection::addStream(
     msg->setSize("index", index);
     msg->setMessage("notify", notify);
     msg->setInt32("injected", injected);
+    msg->setInt32("isIPV6", isIPV6);
     msg->post();
 }
 

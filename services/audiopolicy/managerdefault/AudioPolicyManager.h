@@ -29,6 +29,7 @@
 #include <utils/Errors.h>
 #include <utils/KeyedVector.h>
 #include <utils/SortedVector.h>
+#include <system/audio.h>
 #include <media/AudioParameter.h>
 #include <media/AudioPolicy.h>
 #include <media/AudioProfile.h>
@@ -50,6 +51,7 @@
 #include <SoundTriggerSession.h>
 #include "EngineLibrary.h"
 #include "TypeConverter.h"
+#include <audio_utils/SimpleLog.h>
 
 namespace android {
 
@@ -63,6 +65,8 @@ using content::AttributionSourceState;
 #define SONIFICATION_HEADSET_VOLUME_MIN_DB  (-36)
 // Max volume difference on A2DP between playing media and STRATEGY_SONIFICATION streams: 12dB
 #define SONIFICATION_A2DP_MAX_MEDIA_DIFF_DB (12)
+
+#define ALARM_HEADSET_VOLUME_MAX_DB (-17.5)
 
 // Time in milliseconds during which we consider that music is still active after a music
 // track was stopped - see computeVolume()
@@ -252,6 +256,7 @@ public:
 
         status_t setAllowedCapturePolicy(uid_t uid, audio_flags_mask_t capturePolicy) override;
         virtual audio_offload_mode_t getOffloadSupport(const audio_offload_info_t& offloadInfo);
+        bool isOffloadSupportedInternal(const audio_offload_info_t& offloadInfo);
 
         virtual bool isDirectOutputSupported(const audio_config_base_t& config,
                                              const audio_attributes_t& attributes);
@@ -350,6 +355,12 @@ public:
 
         virtual bool isUltrasoundSupported();
 
+        virtual bool setIsCERegion(bool isCERegion);
+
+//#ifdef MIAUDIO_MULTI_ROUTE
+        virtual status_t setProParameters(const String8& keyValuePairs);
+//#endif
+
         virtual status_t listAudioProductStrategies(AudioProductStrategyVector &strategies)
         {
             return mEngine->listAudioProductStrategies(strategies);
@@ -396,6 +407,15 @@ public:
 
         virtual status_t getDirectProfilesForAttributes(const audio_attributes_t* attr,
                                                          AudioProfileVector& audioProfiles);
+
+        //MIUI ADD: input reuse
+        virtual bool isReuseInput(uid_t uid, audio_session_t session);
+
+        //for xiaomi audio dump
+        SimpleLog *connectLocalLog = new SimpleLog(200);  //for device connect
+        SimpleLog *playLocalLog = new SimpleLog(400);     //for audio playback
+        SimpleLog *recordLocalLog = new SimpleLog(400);   //for audio record
+        SimpleLog *errLocalLog = new SimpleLog(200);      //for audio err
 
         bool isCallScreenModeSupported() override;
 
@@ -666,7 +686,7 @@ protected:
          * Must be called before updateDevicesAndOutputs()
          * @param attr to be considered
          */
-        void checkOutputForAttributes(const audio_attributes_t &attr);
+        virtual void checkOutputForAttributes(const audio_attributes_t &attr);
 
         /**
          * @brief checkAudioSourceForAttributes checks if any AudioSource following the same routing
@@ -677,6 +697,8 @@ protected:
          * @param attr to be considered
          */
         void checkAudioSourceForAttributes(const audio_attributes_t &attr);
+
+        bool isInvalidationOfMusicStreamNeeded(const audio_attributes_t &attr);
 
         bool followsSameRouting(const audio_attributes_t &lAttr,
                                 const audio_attributes_t &rAttr) const;
@@ -812,6 +834,7 @@ protected:
             return mAvailableInputDevices.getDevicesFromHwModule(
                     mPrimaryOutput->getModuleHandle());
         }
+public:
         /**
          * @brief getFirstDeviceId of the Device Vector
          * @return if the collection is not empty, it returns the first device Id,
@@ -821,6 +844,7 @@ protected:
         {
             return (devices.size() > 0) ? devices.itemAt(0)->getId() : AUDIO_PORT_HANDLE_NONE;
         }
+protected:
         String8 getFirstDeviceAddress(const DeviceVector &devices) const
         {
             return (devices.size() > 0) ?
@@ -845,10 +869,10 @@ protected:
         DeviceVector selectBestRxSinkDevicesForCall(bool fromCache);
         bool isDeviceOfModule(const sp<DeviceDescriptor>& devDesc, const char *moduleId) const;
 
-        status_t startSource(const sp<SwAudioOutputDescriptor>& outputDesc,
+        virtual status_t startSource(const sp<SwAudioOutputDescriptor>& outputDesc,
                              const sp<TrackClientDescriptor>& client,
                              uint32_t *delayMs);
-        status_t stopSource(const sp<SwAudioOutputDescriptor>& outputDesc,
+        virtual status_t stopSource(const sp<SwAudioOutputDescriptor>& outputDesc,
                             const sp<TrackClientDescriptor>& client);
 
         void clearAudioPatches(uid_t uid);
@@ -909,6 +933,9 @@ protected:
 
         sp<SwAudioOutputDescriptor> mSpatializerOutput;
 
+        //Spatializer state
+        bool mSpatializerReleased = true;
+
         SwAudioOutputCollection mOutputs;
         // copy of mOutputs before setDeviceConnectionState() opens new outputs
         // reset to mOutputs when updateDevicesAndOutputs() is called.
@@ -919,6 +946,10 @@ protected:
         DeviceVector  mInputDevicesAll;  // all input devices from the config
         DeviceVector  mAvailableOutputDevices; // all available output devices
         DeviceVector  mAvailableInputDevices;  // all available input devices
+//#ifdef MIAUDIO_MULTI_ROUTE
+        typedef int deviceType;
+        DefaultKeyedVector< uid_t, deviceType >  mMultiRoutes;
+//#endif
 
         bool    mLimitRingtoneVolume;        // limit ringtone volume to music volume if headset connected
 
@@ -940,6 +971,13 @@ protected:
 
         HwAudioOutputCollection mHwOutputs;
         SourceClientCollection mAudioSources;
+        // MIUI ADD
+        bool mEnableAudioLoopback;
+
+        bool mIsCERegion;
+
+        DeviceTypeSet curDevices;
+        DeviceTypeSet preDevices;
 
         // for supporting "beacon" streams, i.e. streams that only play on speaker, and never
         // when something other than STREAM_TTS (a.k.a. "Transmitted Through Speaker") is playing
@@ -981,6 +1019,28 @@ protected:
         sp<SourceClientDescriptor> mCallRxSourceClient;
         sp<SourceClientDescriptor> mCallTxSourceClient;
 
+        bool isMsdPatch(const audio_patch_handle_t &handle) const;
+
+        String16 callingAppName; //for output, also used in AudioPolicyManagerCustom
+
+private:
+        sp<SourceClientDescriptor> startAudioSourceInternal(
+                const struct audio_port_config *source, const audio_attributes_t *attributes,
+                uid_t uid);
+
+        void onNewAudioModulesAvailableInt(DeviceVector *newDevices);
+        void chkDpConnAndAllowedForVoice(audio_devices_t device, audio_policy_dev_state_t state);
+        void is_support_ce(void);
+        bool headset_ce = false, usb_ce = false, a2dp_ce = false, usb = false;
+
+protected:
+        //MIUI ADD: start MIAUDIO_VEHICLE_VOIP_TX
+        bool isCarVoipTx;        //for vehicle display
+        //MIUI ADD: end
+        // Add or remove AC3 DTS encodings based on user preferences.
+        void modifySurroundFormats(const sp<DeviceDescriptor>& devDesc, FormatVector *formatsPtr);
+        void modifySurroundChannelMasks(ChannelMaskSet *channelMasksPtr);
+
         // Support for Multi-Stream Decoder (MSD) module
         sp<DeviceDescriptor> getMsdAudioInDevice() const;
         DeviceVector getMsdAudioOutDevices() const;
@@ -1002,27 +1062,16 @@ protected:
         void releaseMsdOutputPatches(const DeviceVector& devices);
         bool msdHasPatchesToAllDevices(const AudioDeviceTypeAddrVector& devices);
 
+public:
         // Overload of setDeviceConnectionState()
         status_t setDeviceConnectionState(audio_devices_t deviceType,
                                           audio_policy_dev_state_t state,
                                           const char* device_address, const char* device_name,
                                           audio_format_t encodedFormat);
-
+protected:
         // Called by setDeviceConnectionState()
         status_t deviceToAudioPort(audio_devices_t deviceType, const char* device_address,
                                    const char* device_name, media::AudioPort* aidPort);
-        bool isMsdPatch(const audio_patch_handle_t &handle) const;
-
-private:
-        sp<SourceClientDescriptor> startAudioSourceInternal(
-                const struct audio_port_config *source, const audio_attributes_t *attributes,
-                uid_t uid);
-
-        void onNewAudioModulesAvailableInt(DeviceVector *newDevices);
-
-        // Add or remove AC3 DTS encodings based on user preferences.
-        void modifySurroundFormats(const sp<DeviceDescriptor>& devDesc, FormatVector *formatsPtr);
-        void modifySurroundChannelMasks(ChannelMaskSet *channelMasksPtr);
 
         // If any, resolve any "dynamic" fields of an Audio Profiles collection
         void updateAudioProfiles(const sp<DeviceDescriptor>& devDesc, audio_io_handle_t ioHandle,
@@ -1059,8 +1108,9 @@ private:
                 std::vector<sp<AudioPolicyMix>> *secondaryMixes,
                 output_type_t *outputType,
                 bool *isSpatialized);
+public:
         // internal method to return the output handle for the given device and format
-        audio_io_handle_t getOutputForDevices(
+        virtual audio_io_handle_t getOutputForDevices(
                 const DeviceVector &devices,
                 audio_session_t session,
                 const audio_attributes_t *attr,
@@ -1068,7 +1118,7 @@ private:
                 audio_output_flags_t *flags,
                 bool *isSpatialized,
                 bool forceMutingHaptic = false);
-
+protected:
         // Internal method checking if a direct output can be opened matching the requested
         // attributes, flags, config and devices.
         // If NAME_NOT_FOUND is returned, an attempt can be made to open a mixed output.
@@ -1099,11 +1149,29 @@ private:
                                       const audio_config_t *config,
                                       const AudioDeviceTypeAddrVector &devices) const;
 
+
+        /**
+         * @brief Gets an IOProfile for a spatializer output with the best match with
+         * provided arguments.
+         * The caller can have the devices criteria ignored by passing and empty vector, and
+         * getSpatializerOutputProfile() will ignore the devices when looking for a match.
+         * Otherwise an output profile supporting a spatializer effect that can be routed
+         * to the specified devices must exist.
+         * @param config audio configuration describing the audio format, channels, sample rate...
+         * @param devices the sink audio device selected for playback
+         * @return an IOProfile that canbe used to open a spatializer output.
+         */
         sp<IOProfile> getSpatializerOutputProfile(const audio_config_t *config,
                                                   const AudioDeviceTypeAddrVector &devices) const;
 
         void checkVirtualizerClientRoutes();
 
+        // Internal method checking If direct pcm track's offloadInfo needs to be updated.
+        void checkAndUpdateOffloadInfoForDirectTracks(
+                const audio_attributes_t *attr,
+                audio_stream_type_t *stream,
+                audio_config_t *config,
+                audio_output_flags_t *flags);
         /**
          * @brief Returns true if at least one device can only be reached via the output passed
          * as argument. Always returns false for duplicated outputs.
@@ -1128,10 +1196,11 @@ private:
          */
         audio_io_handle_t getInputForDevice(const sp<DeviceDescriptor> &device,
                 audio_session_t session,
+                uid_t uid,
                 const audio_attributes_t &attributes,
                 const audio_config_base_t *config,
                 audio_input_flags_t flags,
-                const sp<AudioPolicyMix> &policyMix);
+                const sp<AudioPolicyMix> &policyMix, audio_app_type_f appType);
 
         // event is one of STARTING_OUTPUT, STARTING_BEACON, STOPPING_OUTPUT, STOPPING_BEACON
         // returns 0 if no mute/unmute event happened, the largest latency of the device where
@@ -1141,15 +1210,18 @@ private:
         bool     isValidAttributes(const audio_attributes_t *paa);
 
         // Called by setDeviceConnectionState().
+public:
         status_t setDeviceConnectionStateInt(audio_policy_dev_state_t state,
                                              const android::media::audio::common::AudioPort& port,
                                              audio_format_t encodedFormat);
-        status_t setDeviceConnectionStateInt(audio_devices_t deviceType,
+        virtual status_t setDeviceConnectionStateInt(audio_devices_t deviceType,
                                              audio_policy_dev_state_t state,
                                              const char *device_address,
                                              const char *device_name,
                                              audio_format_t encodedFormat);
-        status_t setDeviceConnectionStateInt(const sp<DeviceDescriptor> &device,
+	audio_input_flags_t changeFlag(audio_source_t source, audio_input_flags_t flags, audio_app_type_f appType);
+protected:
+        virtual status_t setDeviceConnectionStateInt(const sp<DeviceDescriptor> &device,
                                              audio_policy_dev_state_t state);
 
         void setEngineDeviceConnectionState(const sp<DeviceDescriptor> device,
@@ -1225,6 +1297,13 @@ private:
         sp<SwAudioOutputDescriptor> openOutputWithProfileAndDevice(
                 const sp<IOProfile>& profile, const DeviceVector& devices,
                 const audio_config_base_t *mixerConfig = nullptr);
+        void findIoHandlesByFormat(const sp<SwAudioOutputDescriptor>& desc /*in*/,
+                                        const audio_devices_t deviceType /*in*/,
+                                        const audio_format_t encodedFormat /*in*/,
+                                        SortedVector<audio_io_handle_t>& outputs /*out*/);
+        String16 getPackageName(uid_t uid);
+
+        virtual audio_app_type_f getAppMaskByName(String16 clientName);
 
         bool isOffloadPossible(const audio_offload_info_t& offloadInfo,
                                bool durationIgnored = false);
@@ -1248,6 +1327,8 @@ private:
 
         // Filters only the relevant flags for getProfileForOutput
         audio_output_flags_t getRelevantFlags (audio_output_flags_t flags, bool directOnly);
+
+        void set_volume_change_to_adsp(int index, audio_output_flags_t flag);
 };
 
 };

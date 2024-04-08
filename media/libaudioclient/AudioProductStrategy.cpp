@@ -15,7 +15,7 @@
  */
 
 #define LOG_TAG "AudioProductStrategy"
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
 #include <utils/Log.h>
 #include <media/AudioProductStrategy.h>
 #include <media/AudioAttributes.h>

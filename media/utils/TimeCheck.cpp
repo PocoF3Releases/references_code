@@ -21,13 +21,15 @@
 #include <android-base/logging.h>
 #include <audio_utils/clock.h>
 #include <mediautils/EventLog.h>
+#include <cutils/properties.h>
 #include <mediautils/MethodStatistics.h>
-#include <mediautils/TimeCheck.h>
 #include <utils/Log.h>
+#include <mediautils/TimeCheck.h>
 #include "debuggerd/handler.h"
 
 namespace android::mediautils {
 
+uint32_t TimeCheck::sTimeOutMs = 0;
 /**
  * Returns the std::string "HH:MM:SS.MSc" from a system_clock time_point.
  */
@@ -131,6 +133,12 @@ TimerThread& TimeCheck::getTimeCheckThread() {
     return sTimeCheckThread;
 }
 
+
+void TimeCheck::setSystemReadyTimeoutMs(uint32_t timeoutMs)
+{
+    sTimeOutMs = timeoutMs;
+}
+
 /* static */
 std::string TimeCheck::toString() {
     // note pending and retired are individually locked for maximum concurrency,
@@ -138,6 +146,7 @@ std::string TimeCheck::toString() {
     return getTimeCheckThread().toString();
 }
 
+// BUG(b/214424164)
 TimeCheck::TimeCheck(std::string tag, OnTimerFunc&& onTimer, uint32_t timeoutMs,
         bool crashOnTimeout)
     : mTimeCheckHandler(new TimeCheckHandler{

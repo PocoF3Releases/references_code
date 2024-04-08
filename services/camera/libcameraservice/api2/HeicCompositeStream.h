@@ -28,6 +28,7 @@
 #include <media/stagefright/foundation/AMessage.h>
 #include <media/stagefright/MediaCodec.h>
 #include <media/stagefright/MediaMuxer.h>
+#include "xm/CameraStub.h"
 
 #include "CompositeStream.h"
 

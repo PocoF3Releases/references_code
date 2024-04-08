@@ -303,6 +303,10 @@ aidl2legacy_AudioPolicyForceUse_audio_policy_force_use_t(media::AudioPolicyForce
             return AUDIO_POLICY_FORCE_FOR_ENCODED_SURROUND;
         case media::AudioPolicyForceUse::VIBRATE_RINGING:
             return AUDIO_POLICY_FORCE_FOR_VIBRATE_RINGING;
+        case media::AudioPolicyForceUse::LB_TEST:
+            return AUDIO_POLICY_FORCE_FOR_LB_TEST;
+        case media::AudioPolicyForceUse::LOOPBACK:
+            return AUDIO_POLICY_FORCE_FOR_LOOPBACK;
     }
     return unexpected(BAD_VALUE);
 }
@@ -326,6 +330,10 @@ legacy2aidl_audio_policy_force_use_t_AudioPolicyForceUse(audio_policy_force_use_
             return media::AudioPolicyForceUse::ENCODED_SURROUND;
         case AUDIO_POLICY_FORCE_FOR_VIBRATE_RINGING:
             return media::AudioPolicyForceUse::VIBRATE_RINGING;
+        case AUDIO_POLICY_FORCE_FOR_LB_TEST:
+            return media::AudioPolicyForceUse::LB_TEST;
+        case AUDIO_POLICY_FORCE_FOR_LOOPBACK:
+            return media::AudioPolicyForceUse::LOOPBACK;
         case AUDIO_POLICY_FORCE_USE_CNT:
             break;
     }
@@ -367,6 +375,8 @@ aidl2legacy_AudioPolicyForcedConfig_audio_policy_forced_cfg_t(media::AudioPolicy
             return AUDIO_POLICY_FORCE_ENCODED_SURROUND_ALWAYS;
         case media::AudioPolicyForcedConfig::ENCODED_SURROUND_MANUAL:
             return AUDIO_POLICY_FORCE_ENCODED_SURROUND_MANUAL;
+        case media::AudioPolicyForcedConfig::EARPIECE:
+            return AUDIO_POLICY_FORCE_EARPIECE;
     }
     return unexpected(BAD_VALUE);
 }
@@ -406,6 +416,8 @@ legacy2aidl_audio_policy_forced_cfg_t_AudioPolicyForcedConfig(audio_policy_force
             return media::AudioPolicyForcedConfig::ENCODED_SURROUND_ALWAYS;
         case AUDIO_POLICY_FORCE_ENCODED_SURROUND_MANUAL:
             return media::AudioPolicyForcedConfig::ENCODED_SURROUND_MANUAL;
+        case AUDIO_POLICY_FORCE_EARPIECE:
+            return media::AudioPolicyForcedConfig::EARPIECE;
         case AUDIO_POLICY_FORCE_CFG_CNT:
             break;
     }

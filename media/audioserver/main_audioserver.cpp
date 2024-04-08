@@ -17,6 +17,7 @@
 #define LOG_TAG "audioserver"
 //#define LOG_NDEBUG 0
 
+#include <dlfcn.h>
 #include <algorithm>
 
 #include <fcntl.h>
@@ -44,12 +45,28 @@
 
 using namespace android;
 
+constexpr const char kLibVRAudioPath [] = "libvraudio.so";
+
+void instantiateVRAudioServer() {
+    void *vrLibHandle = dlopen(kLibVRAudioPath, RTLD_NOW | RTLD_NODELETE);
+    if (vrLibHandle == nullptr)
+        ALOGI("Failed to load library: %s (%s)", kLibVRAudioPath, dlerror());
+    else {
+        auto instantiate = reinterpret_cast<void (*)()>(dlsym(vrLibHandle, "instantiate"));
+        if (instantiate == nullptr)
+            ALOGW("Failed to find symbol: instantiate (%s)", dlerror());
+        else
+            instantiate();
+    }
+}
+
 using android::media::audio::common::AudioMMapPolicy;
 using android::media::audio::common::AudioMMapPolicyInfo;
 using android::media::audio::common::AudioMMapPolicyType;
 
 int main(int argc __unused, char **argv)
 {
+    auto startTime = std::chrono::steady_clock::now();
     // TODO: update with refined parameters
     limitProcessMemory(
         "audio.maxmem", /* "ro.audio.maxmem", property that defines limit */
@@ -148,7 +165,11 @@ int main(int argc __unused, char **argv)
         sp<IServiceManager> sm = defaultServiceManager();
         ALOGI("ServiceManager: %p", sm.get());
         AudioFlinger::instantiate();
+        ALOGI("ServiceManager: AudioFlinger instantiate done %p", sm.get());
         AudioPolicyService::instantiate();
+        ALOGI("ServiceManager: AudioPolicyService instantiate done %p", sm.get());
+        instantiateVRAudioServer();
+        ALOGI("ServiceManager: VRAudioServer instantiate done %p", sm.get());
 
         // AAudioService should only be used in OC-MR1 and later.
         // And only enable the AAudioService if the system MMAP policy explicitly allows it.
@@ -172,7 +193,10 @@ int main(int argc __unused, char **argv)
             ALOGD("Do not init aaudio service, status %d, policy info size %zu",
                   status, policyInfos.size());
         }
-
+        auto endTime = std::chrono::steady_clock::now();
+        float timeTaken = std::chrono::duration_cast<std::chrono::duration<float, std::milli>>(
+                        endTime - startTime).count();
+        ALOGI("ServiceManager: %p took %.2f seconds ", sm.get(), timeTaken/1000);
         ProcessState::self()->startThreadPool();
         IPCThreadState::self()->joinThreadPool();
     }

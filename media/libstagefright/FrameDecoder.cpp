@@ -91,8 +91,9 @@ sp<IMemory> allocVideoFrame(const sp<MetaData>& trackMeta,
         tmp = width; width = height; height = tmp;
         tmp = displayWidth; displayWidth = displayHeight; displayHeight = tmp;
         tmp = tileWidth; tileWidth = tileHeight; tileHeight = tmp;
-        rotationAngle = 0;
     }
+    if (allocRotated)
+        rotationAngle = 0;
 
     if (!metaOnly) {
         int32_t multVal;
@@ -254,13 +255,15 @@ FrameDecoder::FrameDecoder(
         const AString &componentName,
         const sp<MetaData> &trackMeta,
         const sp<IMediaSource> &source)
-    : mComponentName(componentName),
-      mTrackMeta(trackMeta),
-      mSource(source),
-      mDstFormat(OMX_COLOR_Format16bitRGB565),
-      mDstBpp(2),
+    : mIDRSent(false),
       mHaveMoreInputs(true),
-      mFirstSample(true) {
+      mFirstSample(true),
+      mSource(source),
+      mComponentName(componentName),
+      mTrackMeta(trackMeta),
+      mDstFormat(OMX_COLOR_Format16bitRGB565),
+      mDstBpp(2) {
+    ALOGD("FrameDecoder created");
 }
 
 FrameDecoder::~FrameDecoder() {
@@ -268,6 +271,7 @@ FrameDecoder::~FrameDecoder() {
         mDecoder->release();
         mSource->stop();
     }
+    ALOGD("FrameDecoder destroyed");
 }
 
 bool isHDR(const sp<AMessage> &format) {
@@ -383,6 +387,8 @@ status_t FrameDecoder::extractInternal() {
                     (void)mDecoder->queueInputBuffer(
                             index, 0, 0, 0, MediaCodec::BUFFER_FLAG_EOS);
                     err = OK;
+                    flags |= MediaCodec::BUFFER_FLAG_EOS;
+                    mHaveMoreInputs = true;
                 } else {
                     ALOGW("Input Error: err=%d", err);
                 }
@@ -457,7 +463,11 @@ status_t FrameDecoder::extractInternal() {
                         break;
                     }
                     if (mSurface != nullptr) {
-                        mDecoder->renderOutputBufferAndRelease(index);
+                        if (!shouldDropOutput(ptsUs)) {
+                            mDecoder->renderOutputBufferAndRelease(index);
+                        } else {
+                            mDecoder->releaseOutputBuffer(index);
+                        }
                         err = onOutputReceived(videoFrameBuffer, mOutputFormat, ptsUs, &done);
                     } else {
                         err = onOutputReceived(videoFrameBuffer, mOutputFormat, ptsUs, &done);
@@ -546,13 +556,17 @@ sp<AMessage> VideoFrameDecoder::onGetFormatAndSeekOptions(
     if (!isSeekingClosest) {
         videoFormat->setInt32("android._num-input-buffers", 1);
         videoFormat->setInt32("android._num-output-buffers", 1);
+        videoFormat->setInt32("thumbnail-mode", 1);
+        videoFormat->setInt32("vendor.qti-ext-dec-thumbnail-mode.value", 1);
     }
 
-    if (isHDR(videoFormat)) {
+    // force surface-mode for all thumbnails
+    if (true /*isHDR(videoFormat)*/) {
         *window = initSurface();
         if (*window == NULL) {
             ALOGE("Failed to init surface control for HDR, fallback to non-hdr");
         } else {
+            ALOGI("using surface mode");
             videoFormat->setInt32("color-format", OMX_COLOR_FormatAndroidOpaque);
         }
     }
@@ -578,13 +592,13 @@ status_t VideoFrameDecoder::onInputReceived(
         ALOGV("Seeking closest: targetTimeUs=%lld", (long long)mTargetTimeUs);
     }
 
-    if (!isSeekingClosest
+    if ((!isSeekingClosest
             && ((mIsAvc && IsIDR(codecBuffer->data(), codecBuffer->size()))
             || (mIsHevc && IsIDR(
-            codecBuffer->data(), codecBuffer->size())))) {
+            codecBuffer->data(), codecBuffer->size())))) || (mIDRSent == true)) {
         // Only need to decode one IDR frame, unless we're seeking with CLOSEST
         // option, in which case we need to actually decode to targetTimeUs.
-        *flags |= MediaCodec::BUFFER_FLAG_EOS;
+        mIDRSent == false ? mIDRSent = true : *flags |= MediaCodec::BUFFER_FLAG_EOS;
     }
     int64_t durationUs;
     if (sampleMeta.findInt64(kKeyDuration, &durationUs)) {
@@ -604,10 +618,9 @@ status_t VideoFrameDecoder::onOutputReceived(
         durationUs = *mSampleDurations.begin();
         mSampleDurations.erase(mSampleDurations.begin());
     }
-    bool shouldOutput = (mTargetTimeUs < 0LL) || (timeUs >= mTargetTimeUs);
 
     // If this is not the target frame, skip color convert.
-    if (!shouldOutput) {
+    if (shouldDropOutput(timeUs)) {
         *done = false;
         return OK;
     }
@@ -618,13 +631,17 @@ status_t VideoFrameDecoder::onOutputReceived(
         return ERROR_MALFORMED;
     }
 
-    int32_t width, height, stride, srcFormat;
+    int32_t width, height, stride, srcFormat, slice_height;
     if (!outputFormat->findInt32("width", &width) ||
             !outputFormat->findInt32("height", &height) ||
             !outputFormat->findInt32("color-format", &srcFormat)) {
         ALOGE("format missing dimension or color: %s",
                 outputFormat->debugString().c_str());
         return ERROR_MALFORMED;
+    }
+
+    if (!outputFormat->findInt32("slice-height", &slice_height)) {
+        slice_height = height;
     }
 
     if (!outputFormat->findInt32("stride", &stride)) {
@@ -644,7 +661,6 @@ status_t VideoFrameDecoder::onOutputReceived(
         crop_bottom = height - 1;
     }
 
-    int32_t slice_height;
     if (outputFormat->findInt32("slice-height", &slice_height) && slice_height > 0) {
         height = slice_height;
     }
@@ -696,7 +712,7 @@ status_t VideoFrameDecoder::onOutputReceived(
     if (converter.isValid()) {
         converter.convert(
                 (const uint8_t *)videoFrameBuffer->data(),
-                width, height, stride,
+                width, slice_height, stride,
                 crop_left, crop_top, crop_right, crop_bottom,
                 mFrame->getFlattenedData(),
                 mFrame->mWidth, mFrame->mHeight, mFrame->mRowBytes,
@@ -764,6 +780,28 @@ status_t VideoFrameDecoder::captureSurface() {
 
 ////////////////////////////////////////////////////////////////////////
 
+struct MediaImageDecoder::ImageOutputThread : public Thread {
+    ImageOutputThread(MediaImageDecoder *mediaImageDecoder)
+        : Thread(false /*canCallJava*/),
+          mImageDecoder(mediaImageDecoder) {
+        ALOGD("ImageOutputThread created");
+    }
+
+    virtual bool threadLoop() {
+        return mImageDecoder->outputLoop();
+    }
+
+protected:
+    virtual ~ImageOutputThread() {
+        ALOGD("ImageOutputThread destroyed");
+    }
+
+private:
+    MediaImageDecoder *mImageDecoder;
+
+    DISALLOW_EVIL_CONSTRUCTORS(ImageOutputThread);
+};
+
 MediaImageDecoder::MediaImageDecoder(
         const AString &componentName,
         const sp<MetaData> &trackMeta,
@@ -777,7 +815,22 @@ MediaImageDecoder::MediaImageDecoder(
       mTileWidth(0),
       mTileHeight(0),
       mTilesDecoded(0),
-      mTargetTiles(0) {
+      mTargetTiles(0),
+      mThread(NULL),
+      mUseMultiThread(false) {
+}
+
+MediaImageDecoder::~MediaImageDecoder() {
+    if (mThread != NULL) {
+        {
+            ALOGI("Signalling ImageOutputThread to exit");
+            Mutexed<OutputInfo>::Locked outInfo(mOutInfo);
+            outInfo->mSignalType = EXIT;
+            outInfo->mCond.signal();
+        }
+        mThread->requestExitAndWait();
+        mThread.clear();
+    }
 }
 
 sp<AMessage> MediaImageDecoder::onGetFormatAndSeekOptions(
@@ -859,10 +912,18 @@ sp<AMessage> MediaImageDecoder::onGetFormatAndSeekOptions(
     } else {
         videoFormat->setInt32("color-format", OMX_COLOR_FormatYUV420Planar);
     }
+    if (!isAvif(trackMeta())) {
+        videoFormat->setInt32("vendor.qti-ext-dec-heif-mode.value", 1);
+    }
 
     if ((mGridRows == 1) && (mGridCols == 1)) {
         videoFormat->setInt32("android._num-input-buffers", 1);
         videoFormat->setInt32("android._num-output-buffers", 1);
+        videoFormat->setInt32("thumbnail-mode", 1);
+        videoFormat->setInt32("vendor.qti-ext-dec-thumbnail-mode.value", 1);
+    } else {
+        ALOGD("Enable multi-thread for Heif");
+        mUseMultiThread = true;
     }
     return videoFormat;
 }
@@ -913,7 +974,7 @@ status_t MediaImageDecoder::onOutputReceived(
         return ERROR_MALFORMED;
     }
 
-    int32_t width, height, stride, srcFormat;
+    int32_t width, height, stride, slice_height, srcFormat;
     if (outputFormat->findInt32("width", &width) == false) {
         ALOGE("MediaImageDecoder::onOutputReceived:width is missing in outputFormat");
         return ERROR_MALFORMED;
@@ -934,6 +995,11 @@ status_t MediaImageDecoder::onOutputReceived(
     uint32_t bitDepth = 8;
     if (COLOR_FormatYUVP010 == srcFormat) {
         bitDepth = 10;
+    }
+
+    if (outputFormat->findInt32("slice-height", &slice_height) == false) {
+        ALOGE("MediaImageDecoder::onOutputReceived:slice-height is missing in outputFormat");
+        return ERROR_MALFORMED;
     }
 
     if (mFrame == NULL) {
@@ -970,7 +1036,6 @@ status_t MediaImageDecoder::onOutputReceived(
         crop_bottom = height - 1;
     }
 
-    int32_t slice_height;
     if (outputFormat->findInt32("slice-height", &slice_height) && slice_height > 0) {
         height = slice_height;
     }
@@ -1012,6 +1077,282 @@ status_t MediaImageDecoder::onOutputReceived(
     ALOGE("Unable to convert from format 0x%08x to 0x%08x",
                 srcFormat, dstFormat());
     return ERROR_UNSUPPORTED;
+}
+
+bool MediaImageDecoder::outputLoop() {
+    status_t err = OK;
+    size_t index;
+    int64_t ptsUs = 0LL;
+    uint32_t flags = 0;
+    constexpr nsecs_t kConditionTimeoutNs = nsecs_t(100) * 1000 * 1000;  // 100ms
+
+    mOutInfo.lock()->mThrStarted = true;
+    do {
+        if (err == OK){
+            Mutexed<OutputInfo>::Locked outInfo(mOutInfo);
+            if (outInfo->mSignalType == NONE) {
+                err = outInfo.waitForConditionRelative(outInfo->mCond, kConditionTimeoutNs);
+            }
+        }
+
+        if (err == OK) {
+            // Check the signal type
+            if (mOutInfo.lock()->mSignalType == EXIT) {
+                ALOGI("Exiting the ImageOutputThread");
+                return 0;
+            } else if(mOutInfo.lock()->mSignalType == EXECUTE) {
+                ALOGI("ImageOutputThread execution signalled ");
+                mOutInfo.lock()->mSignalType = NONE;
+                break;
+            }
+        } else if(err == -ETIMEDOUT) {
+            err = OK;
+            usleep(10 * 1000); // 10ms sleep
+        } else {
+            ALOGI("Error %d from waitForConditionRelative. Exiting thread!", err);
+            return err;
+        }
+    } while(1);
+
+    bool done = mOutInfo.lock()->mDone;
+    while (err == OK && !done) {
+        if (mOutInfo.lock()->mSignalType == EXIT) {
+            ALOGI("Exiting the ImageOutputThread");
+            return 0;
+        }
+
+        size_t offset, size;
+        // wait for a decoded buffer
+        err = mDecoder->dequeueOutputBuffer(
+                &index,
+                &offset,
+                &size,
+                &ptsUs,
+                &flags,
+                kBufferTimeOutUs);
+        if (err == INFO_FORMAT_CHANGED) {
+            ALOGV("Received format change");
+            err = mDecoder->getOutputFormat(&mOutputFormat);
+        } else if (err == INFO_OUTPUT_BUFFERS_CHANGED) {
+            ALOGV("Output buffers changed");
+            err = OK;
+        } else {
+            if (err == -EAGAIN && --mOutInfo.lock()->mRetriesLeft > 0) {
+                ALOGV("Timed-out waiting for output.. retries left = %zu",
+                    mOutInfo.lock()->mRetriesLeft);
+                err = OK;
+            } else if (err == OK) {
+                // If we're seeking with CLOSEST option and obtained a valid targetTimeUs
+                // from the extractor, decode to the specified frame. Otherwise we're done.
+                ALOGV("Received an output buffer, timeUs=%lld", (long long)ptsUs);
+                sp<MediaCodecBuffer> videoFrameBuffer;
+                err = mDecoder->getOutputBuffer(index, &videoFrameBuffer);
+                if (err != OK) {
+                    ALOGE("failed to get output buffer %zu", index);
+                    break;
+                }
+                if (mSurface != nullptr) {
+                    if (!shouldDropOutput(ptsUs)) {
+                        mDecoder->renderOutputBufferAndRelease(index);
+                    } else {
+                        mDecoder->releaseOutputBuffer(index);
+                    }
+                    err = onOutputReceived(videoFrameBuffer, mOutputFormat, ptsUs, &done);
+                } else {
+                    err = onOutputReceived(videoFrameBuffer, mOutputFormat, ptsUs, &done);
+                    mDecoder->releaseOutputBuffer(index);
+                }
+            } else {
+                ALOGW("Received error %d (%s) instead of output", err, asString(err));
+                done = true;
+            }
+            if(done) {
+                mOutInfo.lock()->mDone = done;
+            }
+        }
+    }
+    mOutInfo.lock()->mErrorCode = err;
+
+    return done;
+}
+
+status_t MediaImageDecoder::extractInternal() {
+    status_t err = OK;
+    bool done = false;
+    bool outThreadRunning = false;
+
+    {
+        Mutexed<OutputInfo>::Locked outInfo(mOutInfo);
+        outInfo->mRetriesLeft = kRetryCount;
+        outInfo->mErrorCode = OK;
+        outInfo->mDone = false;
+        outInfo->mSignalType = NONE;
+    }
+
+    if (mUseMultiThread && mThread == NULL) {
+        mThread = new ImageOutputThread(this);
+        err = mThread->run("ImageDecoderOutput");
+        if (err != OK) {
+            ALOGE("Failed to create MediaImageDecoder output thread");
+            mThread.clear();
+            return err;
+        }
+    }
+
+    do {
+        size_t index;
+        int64_t ptsUs = 0LL;
+        uint32_t flags = 0;
+
+        // Queue as many inputs as we possibly can, then block on dequeuing
+        // outputs. After getting each output, come back and queue the inputs
+        // again to keep the decoder busy.
+        while (mHaveMoreInputs) {
+            err = mDecoder->dequeueInputBuffer(&index, 0);
+            if (err != OK) {
+                ALOGV("Timed out waiting for input");
+                if (mOutInfo.lock()->mRetriesLeft) {
+                    err = OK;
+                }
+                break;
+            }
+            sp<MediaCodecBuffer> codecBuffer;
+            err = mDecoder->getInputBuffer(index, &codecBuffer);
+            if (err != OK) {
+                ALOGE("failed to get input buffer %zu", index);
+                break;
+            }
+
+            MediaBufferBase *mediaBuffer = NULL;
+
+            err = mSource->read(&mediaBuffer, &mReadOptions);
+            mReadOptions.clearSeekTo();
+            if (err != OK) {
+                mHaveMoreInputs = false;
+                if (!mFirstSample && err == ERROR_END_OF_STREAM) {
+                    (void)mDecoder->queueInputBuffer(
+                            index, 0, 0, 0, MediaCodec::BUFFER_FLAG_EOS);
+                    err = OK;
+                    flags |= MediaCodec::BUFFER_FLAG_EOS;
+                } else {
+                    ALOGW("Input Error: err=%d", err);
+                }
+                break;
+            }
+
+            if (mediaBuffer->range_length() > codecBuffer->capacity()) {
+                ALOGE("buffer size (%zu) too large for codec input size (%zu)",
+                        mediaBuffer->range_length(), codecBuffer->capacity());
+                mHaveMoreInputs = false;
+                err = BAD_VALUE;
+            } else {
+                codecBuffer->setRange(0, mediaBuffer->range_length());
+
+                CHECK(mediaBuffer->meta_data().findInt64(kKeyTime, &ptsUs));
+                memcpy(codecBuffer->data(),
+                        (const uint8_t*)mediaBuffer->data() + mediaBuffer->range_offset(),
+                        mediaBuffer->range_length());
+                mFirstSample = false;
+            }
+
+            mediaBuffer->release();
+
+            if (mHaveMoreInputs) {
+                ALOGV("QueueInput: size=%zu ts=%" PRId64 " us flags=%x",
+                        codecBuffer->size(), ptsUs, flags);
+
+                err = mDecoder->queueInputBuffer(
+                        index,
+                        codecBuffer->offset(),
+                        codecBuffer->size(),
+                        ptsUs,
+                        flags);
+
+                if (flags & MediaCodec::BUFFER_FLAG_EOS) {
+                    mHaveMoreInputs = false;
+                }
+
+                // Signal output thread after queueing at least 1 input
+                if (mUseMultiThread && !outThreadRunning && mOutInfo.lock()->mThrStarted) {
+                    ALOGI("Signaling ImageOutputThread to start executing");
+                    Mutexed<OutputInfo>::Locked outInfo(mOutInfo);
+                    outInfo->mSignalType = EXECUTE;
+                    outInfo->mCond.signal();
+                    outThreadRunning = true;
+                }
+            }
+        }
+
+        // If output thread is still not running, signal it now.
+        if (mUseMultiThread && !outThreadRunning && mOutInfo.lock()->mThrStarted) {
+            ALOGI("ImageOutputThread is not executing. Signaling now");
+            Mutexed<OutputInfo>::Locked outInfo(mOutInfo);
+            outInfo->mSignalType = EXECUTE;
+            outInfo->mCond.signal();
+            outThreadRunning = true;
+        }
+
+        while (!mUseMultiThread && err == OK) {
+            size_t offset, size;
+            // wait for a decoded buffer
+            err = mDecoder->dequeueOutputBuffer(
+                    &index,
+                    &offset,
+                    &size,
+                    &ptsUs,
+                    &flags,
+                    kBufferTimeOutUs);
+
+            if (err == INFO_FORMAT_CHANGED) {
+                ALOGV("Received format change");
+                err = mDecoder->getOutputFormat(&mOutputFormat);
+            } else if (err == INFO_OUTPUT_BUFFERS_CHANGED) {
+                ALOGV("Output buffers changed");
+                err = OK;
+            } else {
+                if (err == -EAGAIN && --mOutInfo.lock()->mRetriesLeft > 0) {
+                    ALOGV("Timed-out waiting for output.. retries left = %zu",
+                        mOutInfo.lock()->mRetriesLeft);
+                    err = OK;
+                } else if (err == OK) {
+                    // If we're seeking with CLOSEST option and obtained a valid targetTimeUs
+                    // from the extractor, decode to the specified frame. Otherwise we're done.
+                    ALOGV("Received an output buffer, timeUs=%lld", (long long)ptsUs);
+                    sp<MediaCodecBuffer> videoFrameBuffer;
+                    err = mDecoder->getOutputBuffer(index, &videoFrameBuffer);
+                    if (err != OK) {
+                        ALOGE("failed to get output buffer %zu", index);
+                        break;
+                    }
+                    if (mSurface != nullptr) {
+                        if (!shouldDropOutput(ptsUs)) {
+                            mDecoder->renderOutputBufferAndRelease(index);
+                        } else {
+                            mDecoder->releaseOutputBuffer(index);
+                        }
+                        err = onOutputReceived(videoFrameBuffer, mOutputFormat, ptsUs, &done);
+                    } else {
+                        err = onOutputReceived(videoFrameBuffer, mOutputFormat, ptsUs, &done);
+                        mDecoder->releaseOutputBuffer(index);
+                    }
+                } else {
+                    ALOGW("Received error %d (%s) instead of output", err, asString(err));
+                    done = true;
+                }
+                if(done) {
+                    mOutInfo.lock()->mDone = done;
+                }
+                break;
+            }
+        }
+        err |= mOutInfo.lock()->mErrorCode;
+    } while (err == OK && !mOutInfo.lock()->mDone);
+
+    if (err != OK) {
+        ALOGE("failed to get video frame (err %d)", err);
+    }
+
+    return err;
 }
 
 }  // namespace android

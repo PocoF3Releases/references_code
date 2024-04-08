@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "APM::AudioPolicyEngine/Config"
-//#define LOG_NDEBUG 0
+#define LOG_TAG "APM::AudioPolicyEngine::Config"
+#define LOG_NDEBUG 0
 
 #include "EngineConfig.h"
 #include <cutils/properties.h>

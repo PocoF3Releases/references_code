@@ -299,6 +299,8 @@ public:
 
     virtual bool     isUltrasoundSupported() = 0;
 
+    virtual bool     setIsCERegion(bool isCeRegion) = 0;
+
     virtual status_t getHwOffloadFormatsSupportedForBluetoothMedia(
                 audio_devices_t device, std::vector<audio_format_t> *formats) = 0;
 
@@ -347,6 +349,8 @@ public:
     virtual status_t getDevicesForRoleAndCapturePreset(audio_source_t audioSource,
                                                        device_role_t role,
                                                        AudioDeviceTypeAddrVector &devices) = 0;
+
+    virtual audio_app_type_f getAppMaskByName(String16 clientName) = 0;
 
     /**
      * Queries if some kind of spatialization will be performed if the audio playback context
@@ -407,6 +411,12 @@ public:
     // retrieves the list of available direct audio profiles for the given audio attributes
     virtual status_t getDirectProfilesForAttributes(const audio_attributes_t* attr,
                                                     AudioProfileVector& audioProfiles) = 0;
+
+    //MIUI ADD: MIAUDIO_MULTI_ROUTE
+    virtual status_t setProParameters(const String8& keyValuePairs) = 0;
+
+    //MIUI ADD: input reuse
+    virtual bool isReuseInput(uid_t uid, audio_session_t session) = 0;
 };
 
 // Audio Policy client Interface

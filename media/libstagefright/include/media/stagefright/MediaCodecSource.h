@@ -30,6 +30,10 @@ struct AMessage;
 struct AReplyToken;
 class IGraphicBufferProducer;
 struct MediaCodec;
+//#ifdef MIAUDIO_OZO
+class MetaData;
+class IMediaCodecEventListener;
+//endif
 
 struct MediaCodecSource : public MediaSource,
                           public MediaBufferObserver {
@@ -66,11 +70,15 @@ struct MediaCodecSource : public MediaSource,
     virtual void signalBufferReturned(MediaBufferBase *buffer);
     virtual status_t setEncodingBitrate(int32_t bitRate /* bps */);
 
+    virtual void notifyPerformanceMode();
+
     // for AHandlerReflector
     void onMessageReceived(const sp<AMessage> &msg);
-
-
-
+//#ifdef MIAUDIO_OZO
+    status_t setRuntimeParameters(const sp<AMessage> &msg);
+    void setCodecEventListener(IMediaCodecEventListener *listener);
+    void setCodecBufferPacketizer(IMediaCodecEventListener *packetizer);
+//#endif
     status_t requestIDRFrame();
 
 protected:
@@ -89,6 +97,9 @@ private:
         kWhatSetStopTimeUs,
         kWhatGetFirstSampleSystemTimeUs,
         kWhatStopStalled,
+//#ifdef MIAUDIO_OZO
+        kWhatSetRuntimeParams, // miav for ozo
+//#endif
     };
 
     MediaCodecSource(
@@ -160,6 +171,14 @@ private:
     Mutexed<Output> mOutput;
 
     int32_t mGeneration;
+
+    int64_t mPrevBufferTimestampUs;
+    bool mIsHFR;
+//#ifdef MIAUDIO_OZO
+    IMediaCodecEventListener *mCodecEventListener;
+    IMediaCodecEventListener *mCodecBufferPacketizer;
+//#endif
+    int32_t mBatchSize;
 
     DISALLOW_EVIL_CONSTRUCTORS(MediaCodecSource);
 };

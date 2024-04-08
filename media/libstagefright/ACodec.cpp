@@ -64,6 +64,19 @@
 #include "include/SharedMemoryBuffer.h"
 #include <media/stagefright/omx/OMXUtils.h>
 
+// MIUI ADD: DOLBY_ENABLE
+#include "DolbyACodecExtImpl.h"
+#include <mediautils/FeatureManager.h>
+// MIUI END
+
+#include <stagefright/AVExtensions.h>
+#include <cutils/properties.h>
+
+#define GDLBVISION_MIMES_INDEX_HEVC 0
+#define GDLBVISION_MIMES_INDEX_AVC 1
+#define QTI_FLAC_DECODER
+
+static const bool kSupportDolbyVision = property_get_bool("ro.video.dolby_vision_omx", false);
 namespace android {
 
 typedef hardware::media::omx::V1_0::IGraphicBufferSource HGraphicBufferSource;
@@ -79,6 +92,23 @@ namespace {
 constexpr char TUNNEL_PEEK_KEY[] = "android._trigger-tunnel-peek";
 constexpr char TUNNEL_PEEK_SET_LEGACY_KEY[] = "android._tunnel-peek-set-legacy";
 
+// Workaround for when there is no seperate dolby vision decoder
+const char * gDVMimes[] {
+               "video/hevc",
+               "video/avc"
+             };
+
+}
+
+// Workaround for when there is no seperate dolby vision decoder
+static inline const char *resolveDolbyVision(AString compName) {
+    const char *dv_mime = gDVMimes[GDLBVISION_MIMES_INDEX_HEVC];
+    if (compName.endsWithIgnoreCase("hevc") || compName.endsWithIgnoreCase("hevc.secure")) {
+        dv_mime = gDVMimes[GDLBVISION_MIMES_INDEX_HEVC];
+    } else {
+        dv_mime = gDVMimes[GDLBVISION_MIMES_INDEX_AVC];
+    }
+    return dv_mime;
 }
 
 // OMX errors are directly mapped into status_t range if
@@ -622,6 +652,10 @@ ACodec::ACodec()
 ACodec::~ACodec() {
 }
 
+status_t ACodec::setupCustomCodec(status_t err, const char *, const sp<AMessage> &) {
+    return err;
+}
+
 void ACodec::initiateSetup(const sp<AMessage> &msg) {
     msg->setWhat(kWhatSetup);
     msg->setTarget(this);
@@ -869,6 +903,11 @@ status_t ACodec::setPortMode(int32_t portIndex, IOMX::PortMode mode) {
 }
 
 status_t ACodec::allocateBuffersOnPort(OMX_U32 portIndex) {
+    if (portIndex == kPortIndexInputExtradata ||
+            portIndex == kPortIndexOutputExtradata) {
+        return OK;
+    }
+
     CHECK(portIndex == kPortIndexInput || portIndex == kPortIndexOutput);
 
     CHECK(mAllocator[portIndex] == NULL);
@@ -1585,6 +1624,11 @@ ACodec::BufferInfo *ACodec::dequeueBufferFromNativeWindow() {
 }
 
 status_t ACodec::freeBuffersOnPort(OMX_U32 portIndex) {
+    if (portIndex == kPortIndexInputExtradata ||
+            portIndex == kPortIndexOutputExtradata) {
+        return OK;
+    }
+
     if (portIndex == kPortIndexInput) {
         mBufferChannel->setInputBufferArray({});
     } else {
@@ -1713,9 +1757,13 @@ status_t ACodec::fillBuffer(BufferInfo *info) {
 
 status_t ACodec::setComponentRole(
         bool isEncoder, const char *mime) {
-    const char *role = GetComponentRole(isEncoder, mime);
+    const char *role = AVUtils::get()->getComponentRole(isEncoder, mime);
     if (role == NULL) {
         return BAD_VALUE;
+    }
+    // Workaround for when there is no seperate dolby vision decoder
+    if (kSupportDolbyVision && !strcmp(mime, MEDIA_MIMETYPE_VIDEO_DOLBY_VISION)) {
+        role = GetComponentRole(isEncoder, resolveDolbyVision(mComponentName));
     }
     status_t err = SetComponentRole(mOMXNode, role);
     if (err != OK) {
@@ -2268,7 +2316,12 @@ status_t ACodec::configureCodec(
             msg->findInt32("sample-rate", &sampleRate)) {
             err = setupOpusCodec(encoder, sampleRate, numChannels);
         }
+#ifdef QTI_FLAC_DECODER
+//setup qti component From setupCustomCodec only when it starts with OMX.qti. otherwise create incoming component.
+    } else if (!strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_FLAC) && !mComponentName.startsWith("OMX.qti.")) {
+#else
     } else if (!strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_FLAC)) {
+#endif
         // numChannels needs to be set to properly communicate PCM values.
         int32_t numChannels = 2, sampleRate = 44100, compressionLevel = -1;
         if (encoder &&
@@ -2325,7 +2378,7 @@ status_t ACodec::configureCodec(
         } else {
             err = setupEAC3Codec(encoder, numChannels, sampleRate);
         }
-     } else if (!strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_AC4)) {
+    } else if (!strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_AC4)) {
         int32_t numChannels;
         int32_t sampleRate;
         if (!msg->findInt32("channel-count", &numChannels)
@@ -2334,6 +2387,8 @@ status_t ACodec::configureCodec(
         } else {
             err = setupAC4Codec(encoder, numChannels, sampleRate);
         }
+    } else {
+        err = setupCustomCodec(err, mime, msg);
     }
 
     if (err != OK) {
@@ -2553,10 +2608,12 @@ status_t ACodec::setOperatingRate(float rateFloat, bool isVideo) {
     }
     OMX_U32 rate;
     if (isVideo) {
-        if (rateFloat > 65535) {
-            return BAD_VALUE;
+        rateFloat = rateFloat * 65536.0f + 0.5f;
+        if (rateFloat >= (float)INT_MAX) {
+            rate = INT_MAX;
+        } else {
+            rate = (OMX_U32)rateFloat;
         }
-        rate = (OMX_U32)(rateFloat * 65536.0f + 0.5f);
     } else {
         if (rateFloat > (float)UINT_MAX) {
             return BAD_VALUE;
@@ -3094,6 +3151,17 @@ status_t ACodec::setupAC4Codec(
         return INVALID_OPERATION;
     }
 
+    // MIUI ADD: DOLBY_AC4_SPLIT_SEC
+    if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_AC4_SPLIT_SEC)) {
+        DlbGenClass1* pDlbGenClass1 = new DlbGenClass1();
+        bool res = pDlbGenClass1->check();
+        delete pDlbGenClass1;
+        if (!res) {
+            return OK;    // Security check fails but still returns OK
+        }
+    }
+    // MIUI END
+
     OMX_AUDIO_PARAM_ANDROID_AC4TYPE def;
     InitOMXParams(&def);
     def.nPortIndex = kPortIndexInput;
@@ -3107,6 +3175,53 @@ status_t ACodec::setupAC4Codec(
 
     def.nChannels = numChannels;
     def.nSampleRate = sampleRate;
+
+    // MIUI ADD: DOLBY_AC4_SPLIT_SEC
+    if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_AC4_SPLIT_SEC)) {
+        OMX_AUDIO_PARAM_ANDROID_AC4TBL tbl;
+        InitTblOMXParams(&tbl);
+
+        TableXInit *A_OBJ = new TableXInit(AC4_TABLE_SEC_FRS_CODE,
+                AC4_TABLE_SEC_FRS_MASK_VAL);
+
+        TableXInit *B_OBJ = new TableXInit(AC4_TABLE_SEC_MDD_MAX_FRAM,
+                AC4_TABLE_SEC_MMF_MASK_VAL);
+
+        TableXInit *C_OBJ = new TableXInit(AC4_TABLE_SEC_MDD_MAX_INST,
+                AC4_TABLE_SEC_MMI_MASK_VAL);
+
+        A_OBJ->init();
+        B_OBJ->init();
+        C_OBJ->init();
+
+        tbl.seedA = A_OBJ->getSeed();
+        tbl.seedB = B_OBJ->getSeed();
+        tbl.seedC = C_OBJ->getSeed();
+
+        tbl.sizeA = A_OBJ->getSize();
+        tbl.sizeB = B_OBJ->getSize();
+        tbl.sizeC = C_OBJ->getSize();
+
+        tbl.idA = A_OBJ->getTableID();
+        tbl.idB = B_OBJ->getTableID();
+        tbl.idC = C_OBJ->getTableID();
+
+        tbl.maskA = A_OBJ->getMaskVal();
+        tbl.maskB = B_OBJ->getMaskVal();
+        tbl.maskC = C_OBJ->getMaskVal();
+
+        memcpy (tbl.bufferA, A_OBJ->getBuffer(), LUT_BUFFER_SIZE);
+        memcpy (tbl.bufferB, B_OBJ->getBuffer(), TABLE_B_C_U8_SZ);
+        memcpy (tbl.bufferC, C_OBJ->getBuffer(), TABLE_B_C_U8_SZ);
+
+        mOMXNode->setParameter(
+                (OMX_INDEXTYPE)OMX_IndexParamAudioAndroidAc4Tbl, &tbl, sizeof(tbl));
+
+        delete A_OBJ;
+        delete B_OBJ;
+        delete C_OBJ;
+    }
+    // MIUI END
 
     return mOMXNode->setParameter(
             (OMX_INDEXTYPE)OMX_IndexParamAudioAndroidAc4, &def, sizeof(def));
@@ -3289,6 +3404,14 @@ status_t ACodec::setupRawAudioFormat(
         case kAudioEncodingPcm16bit:
             pcmParams.eNumData = OMX_NumericalDataSigned;
             pcmParams.nBitPerSample = 16;
+            break;
+        case kAudioEncodingPcm24bitPacked:
+            pcmParams.eNumData = OMX_NumericalDataSigned;
+            pcmParams.nBitPerSample = 24;
+            break;
+        case kAudioEncodingPcm32bit:
+            pcmParams.eNumData = OMX_NumericalDataSigned;
+            pcmParams.nBitPerSample = 32;
             break;
         default:
             return BAD_VALUE;
@@ -3486,12 +3609,13 @@ static const struct VideoCodingMapEntry {
     { MEDIA_MIMETYPE_VIDEO_MPEG2, OMX_VIDEO_CodingMPEG2 },
     { MEDIA_MIMETYPE_VIDEO_VP8, OMX_VIDEO_CodingVP8 },
     { MEDIA_MIMETYPE_VIDEO_VP9, OMX_VIDEO_CodingVP9 },
-    { MEDIA_MIMETYPE_VIDEO_DOLBY_VISION, OMX_VIDEO_CodingDolbyVision },
+    { MEDIA_MIMETYPE_VIDEO_DOLBY_VISION, kSupportDolbyVision ?
+             OMX_VIDEO_CodingHEVC : OMX_VIDEO_CodingDolbyVision },
     { MEDIA_MIMETYPE_IMAGE_ANDROID_HEIC, OMX_VIDEO_CodingImageHEIC },
     { MEDIA_MIMETYPE_VIDEO_AV1, OMX_VIDEO_CodingAV1 },
 };
 
-static status_t GetVideoCodingTypeFromMime(
+status_t ACodec::GetVideoCodingTypeFromMime(
         const char *mime, OMX_VIDEO_CODINGTYPE *codingType) {
     for (size_t i = 0;
          i < sizeof(kVideoCodingMapEntry) / sizeof(kVideoCodingMapEntry[0]);
@@ -3499,6 +3623,27 @@ static status_t GetVideoCodingTypeFromMime(
         if (!strcasecmp(mime, kVideoCodingMapEntry[i].mMime)) {
             *codingType = kVideoCodingMapEntry[i].mVideoCodingType;
             return OK;
+        }
+    }
+
+    *codingType = OMX_VIDEO_CodingUnused;
+
+    return ERROR_UNSUPPORTED;
+}
+
+// Workaround to make AVC and HEVC coexist when there is no seperate dolby vision decoder
+static status_t GetVideoCodingTypeFromMime_DolbyVision(
+    const char *mime, AString compName, OMX_VIDEO_CODINGTYPE *codingType) {
+    if (!strcasecmp(mime, MEDIA_MIMETYPE_VIDEO_DOLBY_VISION)) {
+        char *dv_mime = nullptr;
+        dv_mime = (char *)resolveDolbyVision(compName);
+        for (size_t i = 0;
+             i < sizeof(kVideoCodingMapEntry) / sizeof(kVideoCodingMapEntry[0]);
+             ++i) {
+            if (!strcasecmp(dv_mime, kVideoCodingMapEntry[i].mMime)) {
+                *codingType = kVideoCodingMapEntry[i].mVideoCodingType;
+                return OK;
+            }
         }
     }
 
@@ -3556,7 +3701,13 @@ status_t ACodec::setupVideoDecoder(
     }
 
     OMX_VIDEO_CODINGTYPE compressionFormat;
-    status_t err = GetVideoCodingTypeFromMime(mime, &compressionFormat);
+    status_t err;
+    if (kSupportDolbyVision && !strcasecmp(mime, MEDIA_MIMETYPE_VIDEO_DOLBY_VISION)) {
+        err = GetVideoCodingTypeFromMime_DolbyVision(mime, mComponentName,
+                                                     &compressionFormat);
+    } else {
+        err = GetVideoCodingTypeFromMime(mime, &compressionFormat);
+    }
 
     if (err != OK) {
         return err;
@@ -4102,7 +4253,12 @@ status_t ACodec::setupVideoEncoder(
     /* Output port configuration */
 
     OMX_VIDEO_CODINGTYPE compressionFormat;
-    err = GetVideoCodingTypeFromMime(mime, &compressionFormat);
+    // Workaround to make AVC and HEVC coexist when there is no seperate dolby vision decoder
+    if(kSupportDolbyVision && !strcasecmp(mime,MEDIA_MIMETYPE_VIDEO_DOLBY_VISION)) {
+        err = GetVideoCodingTypeFromMime_DolbyVision(mime, mComponentName, &compressionFormat);
+    } else {
+        err = GetVideoCodingTypeFromMime(mime, &compressionFormat);
+    }
 
     if (err != OK) {
         return err;
@@ -4388,6 +4544,7 @@ status_t ACodec::setupMPEG4EncoderParameters(const sp<AMessage> &msg) {
         mpeg4type.eLevel = static_cast<OMX_VIDEO_MPEG4LEVELTYPE>(level);
     }
 
+    setBFrames(&mpeg4type);
     err = mOMXNode->setParameter(
             OMX_IndexParamVideoMpeg4, &mpeg4type, sizeof(mpeg4type));
 
@@ -4591,6 +4748,8 @@ status_t ACodec::setupAVCEncoderParameters(const sp<AMessage> &msg) {
         err = verifySupportForProfileAndLevel(kPortIndexOutput, profile, level);
 
         if (err != OK) {
+            ALOGE("%s does not support profile %x @ level %x",
+                    mComponentName.c_str(), profile, level);
             return err;
         }
 
@@ -4598,7 +4757,6 @@ status_t ACodec::setupAVCEncoderParameters(const sp<AMessage> &msg) {
         h264type.eLevel = static_cast<OMX_VIDEO_AVCLEVELTYPE>(level);
     } else {
         h264type.eProfile = OMX_VIDEO_AVCProfileBaseline;
-#if 0   /* DON'T YET DEFAULT TO HIGHEST PROFILE */
         // Use largest supported profile for AVC recording if profile is not specified.
         for (OMX_VIDEO_AVCPROFILETYPE profile : {
                 OMX_VIDEO_AVCProfileHigh, OMX_VIDEO_AVCProfileMain }) {
@@ -4607,13 +4765,14 @@ status_t ACodec::setupAVCEncoderParameters(const sp<AMessage> &msg) {
                 break;
             }
         }
-#endif
     }
 
     ALOGI("setupAVCEncoderParameters with [profile: %s] [level: %s]",
             asString(h264type.eProfile), asString(h264type.eLevel));
 
-    if (h264type.eProfile == OMX_VIDEO_AVCProfileBaseline) {
+    if (h264type.eProfile == OMX_VIDEO_AVCProfileBaseline ||
+        h264type.eProfile == static_cast<OMX_VIDEO_AVCPROFILETYPE>(
+            OMX_VIDEO_AVCProfileConstrainedBaseline)) {
         h264type.nSliceHeaderSpacing = 0;
         h264type.bUseHadamard = OMX_TRUE;
         h264type.nRefFrames = 1;
@@ -4631,7 +4790,9 @@ status_t ACodec::setupAVCEncoderParameters(const sp<AMessage> &msg) {
         h264type.bDirectSpatialTemporal = OMX_FALSE;
         h264type.nCabacInitIdc = 0;
     } else if (h264type.eProfile == OMX_VIDEO_AVCProfileMain ||
-            h264type.eProfile == OMX_VIDEO_AVCProfileHigh) {
+            h264type.eProfile == OMX_VIDEO_AVCProfileHigh ||
+            h264type.eProfile == static_cast<OMX_VIDEO_AVCPROFILETYPE>(
+                OMX_VIDEO_AVCProfileConstrainedHigh)) {
         h264type.nSliceHeaderSpacing = 0;
         h264type.bUseHadamard = OMX_TRUE;
         int32_t maxBframes = 0;
@@ -5400,6 +5561,12 @@ status_t ACodec::getPortFormat(OMX_U32 portIndex, sp<AMessage> &notify) {
                     } else if (params.eNumData == OMX_NumericalDataFloat
                             && params.nBitPerSample == 32u) {
                         encoding = kAudioEncodingPcmFloat;
+                    } else if (params.eNumData == OMX_NumericalDataSigned
+                            && params.nBitPerSample == 24u) {
+                        encoding = kAudioEncodingPcm24bitPacked;
+                    } else if (params.eNumData == OMX_NumericalDataSigned
+                            && params.nBitPerSample == 32u) {
+                        encoding = kAudioEncodingPcm32bit;
                     } else if (params.nBitPerSample != 16u
                             || params.eNumData != OMX_NumericalDataSigned) {
                         ALOGE("unsupported PCM port: %s(%d), %s(%d) mode ",
@@ -5841,6 +6008,7 @@ void ACodec::sendFormatChange() {
         }
         mSkipCutBuffer = new SkipCutBuffer(mEncoderDelay, mEncoderPadding, channelCount);
     }
+
 
     // mLastOutputFormat is not used when tunneled; doing this just to stay consistent
     mLastOutputFormat = mOutputFormat;
@@ -6571,7 +6739,7 @@ bool ACodec::BaseState::onOMXFillBufferDone(
 
         case RESUBMIT_BUFFERS:
         {
-            if (rangeLength == 0 && (!(flags & OMX_BUFFERFLAG_EOS)
+            if (rangeLength == 0 && !((flags & OMX_BUFFERFLAG_EOS)
                     || mCodec->mPortEOS[kPortIndexOutput])) {
                 ALOGV("[%s] calling fillBuffer %u",
                      mCodec->mComponentName.c_str(), info->mBufferID);
@@ -6593,7 +6761,14 @@ bool ACodec::BaseState::onOMXFillBufferDone(
                 }
                 mCodec->sendFormatChange();
             }
-            buffer->setFormat(mCodec->mOutputFormat);
+
+            sp<AMessage> updatedFormat = mCodec->mOutputFormat;
+            if (mCodec->mIsVideo && (flags & OMX_BUFFERFLAG_EXTRADATA)) {
+                updatedFormat = AVUtils::get()->fillExtradata(
+                        mCodec->mBuffers[kPortIndexOutputExtradata].editItemAt(index).mCodecData,
+                        mCodec->mOutputFormat);
+            }
+            buffer->setFormat(updatedFormat);
 
             if (mCodec->usingSecureBufferOnEncoderOutput()) {
                 native_handle_t *handle = NULL;
@@ -6683,9 +6858,14 @@ void ACodec::BaseState::onOutputBufferDrained(const sp<AMessage> &msg) {
         mCodec->signalError(OMX_ErrorUndefined, FAILED_TRANSACTION);
         return;
     }
+
+    int64_t timeUs = -1;
+    buffer->meta()->findInt64("timeUs", &timeUs);
+    bool skip = mCodec->getDSModeHint(msg, timeUs);
+
     info->mData = buffer;
     int32_t render;
-    if (mCodec->mNativeWindow != NULL
+    if (!skip && mCodec->mNativeWindow != NULL
             && msg->findInt32("render", &render) && render != 0
             && !discarded && buffer->size() != 0) {
         ATRACE_NAME("render");
@@ -6934,15 +7114,24 @@ bool ACodec::UninitializedState::onAllocateComponent(const sp<AMessage> &msg) {
     sp<RefBase> obj;
     CHECK(msg->findObject("codecInfo", &obj));
     sp<MediaCodecInfo> info = (MediaCodecInfo *)obj.get();
-    if (info == nullptr) {
-        ALOGE("Unexpected nullptr for codec information");
-        mCodec->signalError(OMX_ErrorUndefined, UNKNOWN_ERROR);
-        return false;
-    }
-    AString owner = (info->getOwnerName() == nullptr) ? "default" : info->getOwnerName();
-
+    AString owner = "default";
     AString componentName;
     CHECK(msg->findString("componentName", &componentName));
+
+    //make sure if the component name contains qcom/qti, we don't return error
+    //as these components are not present in media_codecs.xml and MediaCodecList won't find
+    //these component by findCodecByName.
+    //Video and Flac decoder are present in list so exclude them.
+    if ((!(componentName.find("qcom", 0) > 0 || componentName.find("qti", 0) > 0) ||
+          componentName.find("video", 0) > 0 || componentName.find("flac", 0) > 0) &&
+          !(componentName.find("tme",0) > 0)) {
+        if (info == nullptr) {
+            ALOGE("Unexpected nullptr for codec information");
+            mCodec->signalError(OMX_ErrorUndefined, UNKNOWN_ERROR);
+            return false;
+        }
+        owner = (info->getOwnerName() == nullptr) ? "default" : info->getOwnerName();
+    }
 
     sp<CodecObserver> observer = new CodecObserver(notify);
     sp<IOMX> omx;
@@ -7344,6 +7533,12 @@ void ACodec::LoadedToIdleState::stateEntered() {
         if (mCodec->allYourBuffersAreBelongToUs(kPortIndexOutput)) {
             mCodec->freeBuffersOnPort(kPortIndexOutput);
         }
+        if (mCodec->allYourBuffersAreBelongToUs(kPortIndexInputExtradata)) {
+            mCodec->freeBuffersOnPort(kPortIndexInputExtradata);
+        }
+        if (mCodec->allYourBuffersAreBelongToUs(kPortIndexOutputExtradata)) {
+            mCodec->freeBuffersOnPort(kPortIndexOutputExtradata);
+        }
 
         mCodec->changeState(mCodec->mLoadedState);
     }
@@ -7358,6 +7553,11 @@ status_t ACodec::LoadedToIdleState::allocateBuffers() {
     err = mCodec->allocateBuffersOnPort(kPortIndexOutput);
     if (err != OK) {
         return err;
+    }
+    err = mCodec->allocateBuffersOnPort(kPortIndexInputExtradata);
+    err = mCodec->allocateBuffersOnPort(kPortIndexOutputExtradata);
+    if (err != OK) {
+        err = OK; // Ignore Extradata buffer allocation failure
     }
 
     mCodec->mCallback->onStartCompleted();
@@ -7742,6 +7942,22 @@ status_t ACodec::setParameters(const sp<AMessage> &params) {
 
             return err;
         }
+    }
+
+    int32_t nIFrameInterval = 0, nPFrames = 0, nBFrames = 0;
+    if (params->findInt32(KEY_I_FRAME_INTERVAL, &nIFrameInterval)) {
+        if (!params->findInt32(KEY_MAX_B_FRAMES, &nBFrames)) {
+            sp<AMessage> format = new AMessage;
+            getVendorParameters(kPortIndexOutput, format);
+            format->findInt32("vendor.qti-ext-enc-intra-period.n-bframes", &nBFrames);
+        }
+
+        nPFrames = setPFramesSpacing(nIFrameInterval, mFps, nBFrames);
+
+        sp<AMessage> updatedFormat = new AMessage;
+        updatedFormat->setInt32("vendor.qti-ext-enc-intra-period.n-pframes", nPFrames);
+        updatedFormat->setInt32("vendor.qti-ext-enc-intra-period.n-bframes", nBFrames);
+        setVendorParameters(updatedFormat);
     }
 
     int64_t timeOffsetUs;
@@ -8371,6 +8587,13 @@ void ACodec::onSignalEndOfInputStream() {
     mCallback->onSignaledInputEOS(err);
 }
 
+sp<IOMXObserver> ACodec::createObserver() {
+    sp<AMessage> notify = new AMessage(kWhatOMXMessageList, this);
+    notify->setInt32("generation", this->mNodeGeneration + 1);
+    sp<CodecObserver> observer = new CodecObserver(notify);
+    return observer;
+}
+
 void ACodec::forceStateTransition(int generation) {
     if (generation != mStateGeneration) {
         ALOGV("Ignoring stale force state transition message: #%d (now #%d)",
@@ -8742,6 +8965,15 @@ void ACodec::ExecutingToIdleState::changeStateIfWeOwnAllBuffers() {
             if (err == OK) {
                 err = err2;
             }
+            status_t err3 = mCodec->freeBuffersOnPort(kPortIndexInputExtradata);
+            if (err == OK) {
+                err = err3;
+            }
+            status_t err4 = mCodec->freeBuffersOnPort(kPortIndexOutputExtradata);
+            if (err == OK) {
+                err = err4;
+            }
+
         }
 
         if ((mCodec->mFlags & kFlagPushBlankBuffersToNativeWindowOnShutdown)
@@ -9013,9 +9245,15 @@ void ACodec::FlushingState::changeStateIfWeOwnAllBuffers() {
 status_t ACodec::queryCapabilities(
         const char* owner, const char* name, const char* mime, bool isEncoder,
         MediaCodecInfo::CapabilitiesWriter* caps) {
-    const char *role = GetComponentRole(isEncoder, mime);
+    const char *role = AVUtils::get()->getComponentRole(isEncoder, mime);
     if (role == NULL) {
         return BAD_VALUE;
+    }
+
+    // Workaround for when there is no seperate dolby vision decoder
+    if (kSupportDolbyVision && !strcmp(mime, MEDIA_MIMETYPE_VIDEO_DOLBY_VISION)) {
+        AString cName = name;
+        role = GetComponentRole(isEncoder, resolveDolbyVision(cName));
     }
 
     OMXClient client;
@@ -9057,6 +9295,36 @@ status_t ACodec::queryCapabilities(
             if (err != OK) {
                 break;
             }
+
+            if (kSupportDolbyVision) {
+                // Workaround for when there is no seperate dolby vision decoder.
+                // This section must be removed if the implementation supports Dolby
+                // Vision decoder as separate OMX component. The supported profile
+                // and level information should be exposed as part of that component
+                AString cName = name;
+                AString cMime = mime;
+                if (cMime.startsWithIgnoreCase(MEDIA_MIMETYPE_VIDEO_DOLBY_VISION)) {
+                    if (cName.endsWithIgnoreCase("hevc") || cName.endsWithIgnoreCase("hevc.secure")) {
+                        param.eProfile  = OMX_VIDEO_DolbyVisionProfileDvheStn;
+                        param.eLevel    = OMX_VIDEO_DolbyVisionLevelFhd30;
+                        caps->addProfileLevel(param.eProfile, param.eLevel);
+                        param.eProfile  = OMX_VIDEO_DolbyVisionProfileDvheDtr;
+                        param.eLevel    = OMX_VIDEO_DolbyVisionLevelFhd30;
+                        caps->addProfileLevel(param.eProfile, param.eLevel);
+                        param.eProfile  = OMX_VIDEO_DolbyVisionProfileDvheSt;
+                        param.eLevel    = OMX_VIDEO_DolbyVisionLevelFhd30;
+                        caps->addProfileLevel(param.eProfile, param.eLevel);
+                    } else if (cName.endsWithIgnoreCase("avc") ||
+                                cName.endsWithIgnoreCase("avc.secure")) {
+                        param.eProfile = OMX_VIDEO_DolbyVisionProfileDvavSe;
+                        param.eLevel   = OMX_VIDEO_DolbyVisionLevelFhd60;
+                        caps->addProfileLevel(param.eProfile, param.eLevel);
+                    }
+                    ALOGV("%s DOLBY_VISION profile %d level %d", __FUNCTION__, param.eProfile, param.eLevel);
+                    break;
+                }
+            }
+
             caps->addProfileLevel(param.eProfile, param.eLevel);
 
             // AVC components may not list the constrained profiles explicitly, but

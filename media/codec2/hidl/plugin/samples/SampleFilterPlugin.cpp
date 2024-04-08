@@ -592,6 +592,7 @@ private:
                     .setUseColorManagerment(true)
                     .setEnableProtectedContext(false)
                     .setPrecacheToneMapperShaderOnly(true)
+                    .setRealtime(false)
                     .setContextPriority(renderengine::RenderEngine::ContextPriority::LOW)
                     .build());
         if (!renderEngine) {
@@ -791,7 +792,7 @@ private:
         STOPPING,   // RUNNING -> STOPPED
         RESETTING,  // <<ANY>> -> STOPPED
         RELEASING,  // STOPPED -> RELEASED
-    } mState;
+    } mState = STOPPED;
 
     mutable std::mutex mProcessingMutex;
     std::thread mProcessingThread;

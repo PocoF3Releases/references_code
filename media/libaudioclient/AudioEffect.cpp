@@ -16,7 +16,7 @@
 */
 
 
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
 #define LOG_TAG "AudioEffect"
 
 #include <stdint.h>
@@ -86,6 +86,12 @@ status_t AudioEffect::set(const effect_uuid_t *type,
     const sp<IAudioFlinger>& audioFlinger = AudioSystem::get_audio_flinger();
     if (audioFlinger == 0) {
         ALOGE("set(): Could not get audioflinger");
+        return NO_INIT;
+    }
+
+    const sp<IAudioPolicyService>& aps = AudioSystem::get_audio_policy_service();
+    if (aps == 0) {
+        ALOGE("set(): Could not get aps");
         return NO_INIT;
     }
 

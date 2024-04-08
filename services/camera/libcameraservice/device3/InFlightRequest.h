@@ -101,6 +101,14 @@ typedef enum {
     ERROR_BUF_RETURN_NOTIFY
 } ERROR_BUF_STRATEGY;
 
+#ifdef __XIAOMI_CAMERA__
+enum BuffersStatus {
+    STATUS_INITED,
+    STATUS_POSTED,
+    STATUS_RETURNED,
+};
+#endif
+
 struct InFlightRequest {
     // Set by notify() SHUTTER call.
     nsecs_t shutterTimestamp;
@@ -177,6 +185,11 @@ struct InFlightRequest {
     // Indicates a ZSL capture request
     bool zslCapture;
 
+#ifdef __XIAOMI_CAMERA__
+    // Indicates has returned buffer
+    BuffersStatus bufferReturned;
+    bool pluginBurstReq;
+#endif
     // Indicates that ROTATE_AND_CROP was set to AUTO
     bool rotateAndCropAuto;
 
@@ -218,7 +231,11 @@ struct InFlightRequest {
     InFlightRequest(int numBuffers, CaptureResultExtras extras, bool hasInput,
             bool hasAppCallback, nsecs_t minDuration, nsecs_t maxDuration,
             const std::set<std::set<String8>>& physicalCameraIdSet, bool isStillCapture,
-            bool isZslCapture, bool rotateAndCropAuto, const std::set<std::string>& idsWithZoom,
+            bool isZslCapture,
+#ifdef __XIAOMI_CAMERA__
+            bool isPluginBurstReq,
+#endif
+            bool rotateAndCropAuto, const std::set<std::string>& idsWithZoom,
             nsecs_t requestNs, const SurfaceMap& outSurfaces = SurfaceMap{}) :
             shutterTimestamp(0),
             sensorTimestamp(0),
@@ -235,6 +252,10 @@ struct InFlightRequest {
             physicalCameraIds(physicalCameraIdSet),
             stillCapture(isStillCapture),
             zslCapture(isZslCapture),
+#ifdef __XIAOMI_CAMERA__
+            bufferReturned(STATUS_INITED),
+            pluginBurstReq(isPluginBurstReq),
+#endif
             rotateAndCropAuto(rotateAndCropAuto),
             cameraIdsWithZoom(idsWithZoom),
             requestTimeNs(requestNs),

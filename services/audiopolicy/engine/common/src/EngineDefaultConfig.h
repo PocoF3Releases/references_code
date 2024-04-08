@@ -30,7 +30,7 @@ const engineConfig::ProductStrategies gOrderedStrategies = {
             AUDIO_FLAG_NONE, ""}},
          },
          {"sco", AUDIO_STREAM_BLUETOOTH_SCO, "AUDIO_STREAM_BLUETOOTH_SCO",
-          {{AUDIO_CONTENT_TYPE_UNKNOWN, AUDIO_USAGE_UNKNOWN, AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_SCO,
+          {{AUDIO_CONTENT_TYPE_UNKNOWN, AUDIO_USAGE_BLUETOOTH_SCO, AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_SCO,
             ""}},
          }
      },
@@ -50,7 +50,7 @@ const engineConfig::ProductStrategies gOrderedStrategies = {
     {"STRATEGY_ENFORCED_AUDIBLE",
      {
          {"", AUDIO_STREAM_ENFORCED_AUDIBLE, "AUDIO_STREAM_ENFORCED_AUDIBLE",
-          {{AUDIO_CONTENT_TYPE_UNKNOWN, AUDIO_USAGE_UNKNOWN, AUDIO_SOURCE_DEFAULT,
+          {{AUDIO_CONTENT_TYPE_UNKNOWN, AUDIO_USAGE_ENFORCED_AUDIBLE, AUDIO_SOURCE_DEFAULT,
             AUDIO_FLAG_AUDIBILITY_ENFORCED, ""}}
          }
      },
@@ -123,7 +123,7 @@ const engineConfig::ProductStrategies gOrderedStrategies = {
      {
          {"", AUDIO_STREAM_TTS, "AUDIO_STREAM_TTS",
           {
-              {AUDIO_CONTENT_TYPE_UNKNOWN, AUDIO_USAGE_UNKNOWN, AUDIO_SOURCE_DEFAULT,
+              {AUDIO_CONTENT_TYPE_UNKNOWN, AUDIO_USAGE_TTS, AUDIO_SOURCE_DEFAULT,
                 AUDIO_FLAG_BEACON, ""},
               {AUDIO_CONTENT_TYPE_ULTRASOUND, AUDIO_USAGE_UNKNOWN, AUDIO_SOURCE_DEFAULT,
                 AUDIO_FLAG_NONE, ""}

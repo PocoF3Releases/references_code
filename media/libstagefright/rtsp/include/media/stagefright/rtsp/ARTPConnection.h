@@ -39,7 +39,8 @@ struct ARTPConnection : public AHandler {
             int rtpSocket, int rtcpSocket,
             const sp<ASessionDescription> &sessionDesc, size_t index,
             const sp<AMessage> &notify,
-            bool injected);
+            bool injected,
+            bool isIPV6 = false);
     void seekStream();
     void removeStream(int rtpSocket, int rtcpSocket);
 
@@ -65,6 +66,7 @@ struct ARTPConnection : public AHandler {
 protected:
     virtual ~ARTPConnection();
     virtual void onMessageReceived(const sp<AMessage> &msg);
+    virtual void onAddStream(const sp<AMessage> &msg);
 
 private:
     enum {
@@ -95,7 +97,6 @@ private:
 
     int32_t mCumulativeBytes;
 
-    void onAddStream(const sp<AMessage> &msg);
     void onSeekStream(const sp<AMessage> &msg);
     void onRemoveStream(const sp<AMessage> &msg);
     void onPollStreams();

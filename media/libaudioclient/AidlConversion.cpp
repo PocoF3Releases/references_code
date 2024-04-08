@@ -20,6 +20,7 @@
 #include <vector>
 
 #define LOG_TAG "AidlConversion"
+#define AUDIO_FORMAT_FORCE_AOSP ((audio_format_t)0x7F000000u)
 //#define LOG_NDEBUG 0
 #include <utils/Log.h>
 
@@ -179,6 +180,14 @@ ConversionResult<audio_port_handle_t> aidl2legacy_int32_t_audio_port_handle_t(in
 }
 
 ConversionResult<int32_t> legacy2aidl_audio_port_handle_t_int32_t(audio_port_handle_t legacy) {
+    return convertReinterpret<int32_t>(legacy);
+}
+
+ConversionResult<audio_app_type_f> aidl2legacy_int32_t_audio_app_type_f(int32_t aidl) {
+    return convertReinterpret<audio_app_type_f>(aidl);
+}
+
+ConversionResult<int32_t> legacy2aidl_audio_app_type_f_int32_t(audio_app_type_f legacy) {
     return convertReinterpret<int32_t>(legacy);
 }
 
@@ -545,6 +554,10 @@ const detail::AudioDevicePairs& getAudioDevicePairs() {
             {
                 AUDIO_DEVICE_OUT_EARPIECE, make_AudioDeviceDescription(
                         AudioDeviceType::OUT_SPEAKER_EARPIECE)
+            },
+            {
+                AUDIO_DEVICE_OUT_MULTIROUTE, make_AudioDeviceDescription(
+                        AudioDeviceType::OUT_DEVICE)
             },
             {
                 AUDIO_DEVICE_OUT_SPEAKER, make_AudioDeviceDescription(
@@ -1000,6 +1013,11 @@ const detail::AudioFormatPairs& getAudioFormatPairs() {
         },
         {
             // Note: not in the IANA registry.
+            VX_AUDIO_FORMAT_APTX_ADAPTIVE_QLEA,
+            make_AudioFormatDescription("audio/vnd.qcom.aptx.adaptive.r3")
+        },
+        {
+            // Note: not in the IANA registry.
             AUDIO_FORMAT_LHDC, make_AudioFormatDescription("audio/vnd.savitech.lhdc")
         },
         {
@@ -1038,6 +1056,9 @@ const detail::AudioFormatPairs& getAudioFormatPairs() {
         },
         {
             AUDIO_FORMAT_DRA, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_DRA)
+        },
+        {
+            AUDIO_FORMAT_FORCE_AOSP, make_AudioFormatDescription("audio/btshare")
         },
     }};
     return pairs;
@@ -1441,6 +1462,12 @@ ConversionResult<audio_input_flags_t> aidl2legacy_AudioInputFlags_audio_input_fl
             return AUDIO_INPUT_FLAG_DIRECT;
         case AudioInputFlags::ULTRASOUND:
             return AUDIO_INPUT_FLAG_ULTRASOUND;
+        case AudioInputFlags::INCALL_UPLINK_DOWNLINK:
+            return AUDIO_INPUT_FLAG_INCALL_UPLINK_DOWNLINK;
+        case AudioInputFlags::CAR_VOIP_TX:
+            return AUDIO_INPUT_FLAG_CAR_VOIP_TX;
+        case AudioInputFlags::VOIP_RECORD:
+            return AUDIO_INPUT_FLAG_VOIP_RECORD;
     }
     return unexpected(BAD_VALUE);
 }
@@ -1468,6 +1495,12 @@ ConversionResult<AudioInputFlags> legacy2aidl_audio_input_flags_t_AudioInputFlag
             return AudioInputFlags::DIRECT;
         case AUDIO_INPUT_FLAG_ULTRASOUND:
             return AudioInputFlags::ULTRASOUND;
+        case AUDIO_INPUT_FLAG_INCALL_UPLINK_DOWNLINK:
+            return AudioInputFlags::INCALL_UPLINK_DOWNLINK;
+        case AUDIO_INPUT_FLAG_CAR_VOIP_TX:
+            return AudioInputFlags::CAR_VOIP_TX;
+        case AUDIO_INPUT_FLAG_VOIP_RECORD:
+            return AudioInputFlags::VOIP_RECORD;
     }
     return unexpected(BAD_VALUE);
 }
@@ -1511,6 +1544,10 @@ ConversionResult<audio_output_flags_t> aidl2legacy_AudioOutputFlags_audio_output
             return AUDIO_OUTPUT_FLAG_ULTRASOUND;
         case AudioOutputFlags::SPATIALIZER:
             return AUDIO_OUTPUT_FLAG_SPATIALIZER;
+        case AudioOutputFlags::VIRTUAL_DEEP_BUFFER:
+            return AUDIO_OUTPUT_FLAG_VIRTUAL_DEEP_BUFFER;
+        case AudioOutputFlags::CAR_VOIP_RX:
+            return AUDIO_OUTPUT_FLAG_CAR_VOIP_RX;
     }
     return unexpected(BAD_VALUE);
 }
@@ -1556,6 +1593,10 @@ ConversionResult<AudioOutputFlags> legacy2aidl_audio_output_flags_t_AudioOutputF
             return AudioOutputFlags::ULTRASOUND;
         case AUDIO_OUTPUT_FLAG_SPATIALIZER:
             return AudioOutputFlags::SPATIALIZER;
+        case AUDIO_OUTPUT_FLAG_VIRTUAL_DEEP_BUFFER:
+            return AudioOutputFlags::VIRTUAL_DEEP_BUFFER;
+        case AUDIO_OUTPUT_FLAG_CAR_VOIP_RX:
+            return AudioOutputFlags::CAR_VOIP_RX;
     }
     return unexpected(BAD_VALUE);
 }
@@ -1769,6 +1810,12 @@ ConversionResult<audio_source_t> aidl2legacy_AudioSource_audio_source_t(
             return AUDIO_SOURCE_FM_TUNER;
         case AudioSource::HOTWORD:
             return AUDIO_SOURCE_HOTWORD;
+        case AudioSource::VOIP_UPLINK:
+            return AUDIO_SOURCE_VOIP_UPLINK;
+        case AudioSource::VOIP_DOWNLINK:
+            return AUDIO_SOURCE_VOIP_DOWNLINK;
+        case AudioSource::VOIP_CALL:
+            return AUDIO_SOURCE_VOIP_CALL;
     }
     return unexpected(BAD_VALUE);
 }
@@ -1808,6 +1855,12 @@ ConversionResult<AudioSource> legacy2aidl_audio_source_t_AudioSource(
             return AudioSource::FM_TUNER;
         case AUDIO_SOURCE_HOTWORD:
             return AudioSource::HOTWORD;
+        case AUDIO_SOURCE_VOIP_UPLINK:
+            return AudioSource::VOIP_UPLINK;
+        case AUDIO_SOURCE_VOIP_DOWNLINK:
+            return AudioSource::VOIP_DOWNLINK;
+        case AUDIO_SOURCE_VOIP_CALL:
+            return AudioSource::VOIP_CALL;
     }
     return unexpected(BAD_VALUE);
 }
@@ -2228,6 +2281,12 @@ aidl2legacy_AudioUsage_audio_usage_t(AudioUsage aidl) {
             return AUDIO_USAGE_ASSISTANT;
         case AudioUsage::CALL_ASSISTANT:
             return AUDIO_USAGE_CALL_ASSISTANT;
+        case AudioUsage::ENFORCED_AUDIBLE:
+            return AUDIO_USAGE_ENFORCED_AUDIBLE;
+        case AudioUsage::BLUETOOTH_SCO:
+            return AUDIO_USAGE_BLUETOOTH_SCO;
+        case AudioUsage::TTS:
+            return AUDIO_USAGE_TTS;
         case AudioUsage::EMERGENCY:
             return AUDIO_USAGE_EMERGENCY;
         case AudioUsage::SAFETY:
@@ -2279,6 +2338,12 @@ legacy2aidl_audio_usage_t_AudioUsage(audio_usage_t legacy) {
             return AudioUsage::ASSISTANT;
         case AUDIO_USAGE_CALL_ASSISTANT:
             return AudioUsage::CALL_ASSISTANT;
+        case AUDIO_USAGE_ENFORCED_AUDIBLE:
+            return AudioUsage::ENFORCED_AUDIBLE;
+        case AUDIO_USAGE_BLUETOOTH_SCO:
+            return AudioUsage::BLUETOOTH_SCO;
+        case AUDIO_USAGE_TTS:
+            return AudioUsage::TTS;
         case AUDIO_USAGE_EMERGENCY:
             return AudioUsage::EMERGENCY;
         case AUDIO_USAGE_SAFETY:
@@ -2328,6 +2393,10 @@ aidl2legacy_AudioFlag_audio_flags_mask_t(media::AudioFlag aidl) {
             return AUDIO_FLAG_NEVER_SPATIALIZE;
         case media::AudioFlag::CALL_REDIRECTION:
             return AUDIO_FLAG_CALL_REDIRECTION;
+        case media::AudioFlag::CAR_VOIP:
+            return AUDIO_FLAG_CAR_VOIP;
+        case media::AudioFlag::INCALL_MUSIC:
+            return AUDIO_FLAG_INCALL_MUSIC;
     }
     return unexpected(BAD_VALUE);
 }
@@ -2371,6 +2440,10 @@ legacy2aidl_audio_flags_mask_t_AudioFlag(audio_flags_mask_t legacy) {
             return media::AudioFlag::NEVER_SPATIALIZE;
         case AUDIO_FLAG_CALL_REDIRECTION:
             return media::AudioFlag::CALL_REDIRECTION;
+        case AUDIO_FLAG_CAR_VOIP:
+            return media::AudioFlag::CAR_VOIP;
+        case AUDIO_FLAG_INCALL_MUSIC:
+            return media::AudioFlag::INCALL_MUSIC;
     }
     return unexpected(BAD_VALUE);
 }

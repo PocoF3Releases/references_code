@@ -258,6 +258,10 @@ status_t C2SoftAacEnc::setAudioParams() {
         ALOGE("Failed to set AAC encoder parameters");
         return UNKNOWN_ERROR;
     }
+    if (AACENC_OK != aacEncoder_SetParam(mAACEncoder, AACENC_BANDWIDTH, 20000)) {
+        ALOGE("Failed to set AAC encoder parameters");
+        return UNKNOWN_ERROR;
+    }
     if (AACENC_OK != aacEncoder_SetParam(mAACEncoder, AACENC_BITRATE, mIntf->getBitrate())) {
         ALOGE("Failed to set AAC encoder parameters");
         return UNKNOWN_ERROR;

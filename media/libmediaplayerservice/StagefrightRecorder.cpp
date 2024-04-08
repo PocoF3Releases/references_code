@@ -24,6 +24,8 @@
 #include <android-base/logging.h>
 #include <utils/Log.h>
 
+#include <cutils/properties.h>
+#include <inttypes.h>
 #include <webm/WebmWriter.h>
 
 #include "StagefrightRecorder.h"
@@ -55,25 +57,36 @@
 #include <media/stagefright/MediaDefs.h>
 #include <media/stagefright/MetaData.h>
 #include <media/stagefright/MediaCodecSource.h>
+#include <media/stagefright/MediaCodecConstants.h>
 #include <media/stagefright/OggWriter.h>
 #include <media/stagefright/PersistentSurface.h>
 #include <media/MediaProfiles.h>
 #include <camera/CameraParameters.h>
+#include <media/stagefright/IMediaCodecEvent.h>
 
 #include <utils/Errors.h>
 #include <sys/types.h>
 #include <ctype.h>
 #include <unistd.h>
+#include <future>
 
 #include <system/audio.h>
 
 #include <media/stagefright/rtsp/ARTPWriter.h>
+#include <stagefright/AVExtensions.h>
+//MIUI ADD: start MIAUDIO_OZO
+#include <MediaStub.h>
+//MIUI ADD: end
+
+static const bool kSupportOZO = property_get_bool("ro.vendor.audio.zoom.support", false );
 
 namespace android {
 
 static const float kTypicalDisplayRefreshingRate = 60.f;
 // display refresh rate drops on battery saver
-static const float kMinTypicalDisplayRefreshingRate = kTypicalDisplayRefreshingRate / 2;
+// 60 fps refreshing rate is the most common
+// upto 60 fps, it should be no layer encoding.
+static const float kMinTypicalDisplayRefreshingRate = kTypicalDisplayRefreshingRate;
 static const int kMaxNumVideoTemporalLayers = 8;
 
 // key for media statistics
@@ -107,6 +120,7 @@ static const char *kRecorderDurationMs = "android.media.mediarecorder.durationMs
 static const char *kRecorderPaused = "android.media.mediarecorder.pausedMs";
 static const char *kRecorderNumPauses = "android.media.mediarecorder.NPauses";
 
+static const int64_t kMax32BitFileSize = 0x00ffffffffLL; // 4GB
 
 // To collect the encoder usage for the battery app
 static void addBatteryData(uint32_t params) {
@@ -135,10 +149,18 @@ StagefrightRecorder::StagefrightRecorder(const AttributionSourceState& client)
       mSelectedDeviceId(AUDIO_PORT_HANDLE_NONE),
       mDeviceCallbackEnabled(false),
       mSelectedMicDirection(MIC_DIRECTION_UNSPECIFIED),
-      mSelectedMicFieldDimension(MIC_FIELD_DIMENSION_NORMAL) {
+//MIUI ADD: start MIAUDIO_OZO
+      mSelectedMicFieldDimension(MIC_FIELD_DIMENSION_NORMAL),
+      mOzoBrandEnabled(false),
+      mCodecEventListener(nullptr),
+      mOzoTuneWriter(nullptr) {
+    if(kSupportOZO){
+        MediaStub::createOzoAudioParamsStagefright(mOzoAudioParams);
+    }
+//MIUI ADD: end
 
     ALOGV("Constructor");
-
+    mEnabledCompressAudioRecording = false;
     mMetricsItem = NULL;
     mAnalyticsDirty = false;
     reset();
@@ -155,6 +177,16 @@ StagefrightRecorder::~StagefrightRecorder() {
     // log the current record, provided it has some information worth recording
     // NB: this also reclaims & clears mMetricsItem.
     flushAndResetMetrics(false);
+//MIUI ADD: start MIAUDIO_OZO
+    if(kSupportOZO){
+        MediaStub::destroyOzoAudioParamsStagefright(mOzoAudioParams);
+        if (mCodecEventListener != nullptr) {
+            delete mCodecEventListener;
+            mCodecEventListener = nullptr;
+        }
+        MediaStub::closeOzoAudioTuneFile(mOzoTuneWriter);
+    }
+//MIUI ADD: end
 }
 
 void StagefrightRecorder::updateMetrics() {
@@ -179,7 +211,7 @@ void StagefrightRecorder::updateMetrics() {
     mMetricsItem->setInt32(kRecorderAudioChannels, mAudioChannels);
     mMetricsItem->setInt32(kRecorderAudioBitrate, mAudioBitRate);
     // TBD mInterleaveDurationUs = 0;
-    mMetricsItem->setInt32(kRecorderVideoIframeInterval, mIFramesIntervalSec);
+    mMetricsItem->setFloat(kRecorderVideoIframeInterval, mIFramesIntervalSec);
     // TBD mAudioSourceNode = 0;
     // TBD mUse64BitFileOffset = false;
     if (mMovieTimeScale != -1)
@@ -455,6 +487,31 @@ status_t StagefrightRecorder::setNextOutputFile(int fd) {
 
 // Attempt to parse an float literal optionally surrounded by whitespace,
 // returns true on success, false otherwise.
+static bool safe_strtof(const char *s, float *val) {
+    char *end;
+
+    // It is lame, but according to man page, we have to set errno to 0
+    // before calling strtod().
+    errno = 0;
+    *val = strtof(s, &end);
+
+    if (end == s || errno == ERANGE) {
+        return false;
+    }
+
+    // Skip trailing whitespace
+    while (isspace(*end)) {
+        ++end;
+    }
+
+    // For a successful return, the string must contain nothing but a valid
+    // float literal optionally surrounded by whitespace.
+
+    return *end == '\0';
+}
+
+// Attempt to parse an float literal optionally surrounded by whitespace,
+// returns true on success, false otherwise.
 static bool safe_strtod(const char *s, double *val) {
     char *end;
 
@@ -548,7 +605,7 @@ status_t StagefrightRecorder::setParamAudioSamplingRate(int32_t sampleRate) {
 
 status_t StagefrightRecorder::setParamAudioNumberOfChannels(int32_t channels) {
     ALOGV("setParamAudioNumberOfChannels: %d", channels);
-    if (channels <= 0 || channels >= 3) {
+    if (channels <= 0 || channels > 6) {
         ALOGE("Invalid number of audio channels: %d", channels);
         return BAD_VALUE;
     }
@@ -627,43 +684,46 @@ status_t StagefrightRecorder::setParamVideoRotation(int32_t degrees) {
 }
 
 status_t StagefrightRecorder::setParamMaxFileDurationUs(int64_t timeUs) {
-    ALOGV("setParamMaxFileDurationUs: %lld us", (long long)timeUs);
+    ALOGV("setParamMaxFileDurationUs: %" PRId64 " us", timeUs);
 
     // This is meant for backward compatibility for MediaRecorder.java
     if (timeUs <= 0) {
-        ALOGW("Max file duration is not positive: %lld us. Disabling duration limit.",
-                (long long)timeUs);
+        ALOGW("Max file duration is not positive: %" PRId64 " us. Disabling duration limit.", timeUs);
         timeUs = 0; // Disable the duration limit for zero or negative values.
     } else if (timeUs <= 100000LL) {  // XXX: 100 milli-seconds
-        ALOGE("Max file duration is too short: %lld us", (long long)timeUs);
+        ALOGE("Max file duration is too short: %" PRId64 " us", timeUs);
         return BAD_VALUE;
     }
 
     if (timeUs <= 15 * 1000000LL) {
-        ALOGW("Target duration (%lld us) too short to be respected", (long long)timeUs);
+        ALOGW("Target duration (%" PRId64 " us) too short to be respected", timeUs);
     }
     mMaxFileDurationUs = timeUs;
     return OK;
 }
 
 status_t StagefrightRecorder::setParamMaxFileSizeBytes(int64_t bytes) {
-    ALOGV("setParamMaxFileSizeBytes: %lld bytes", (long long)bytes);
+    ALOGV("setParamMaxFileSizeBytes: %" PRId64 " bytes", bytes);
 
     // This is meant for backward compatibility for MediaRecorder.java
     if (bytes <= 0) {
-        ALOGW("Max file size is not positive: %lld bytes. "
-             "Disabling file size limit.", (long long)bytes);
+        ALOGW("Max file size is not positive: %" PRId64 " bytes. "
+             "Disabling file size limit.", bytes);
         bytes = 0; // Disable the file size limit for zero or negative values.
     } else if (bytes <= 1024) {  // XXX: 1 kB
-        ALOGE("Max file size is too small: %lld bytes", (long long)bytes);
+        ALOGE("Max file size is too small: %" PRId64 " bytes", bytes);
         return BAD_VALUE;
     }
 
     if (bytes <= 100 * 1024) {
-        ALOGW("Target file size (%lld bytes) is too small to be respected", (long long)bytes);
+        ALOGW("Target file size (%" PRId64 " bytes) is too small to be respected", bytes);
     }
 
     mMaxFileSizeBytes = bytes;
+
+    // If requested size is >4GB, force 64-bit offsets
+    mUse64BitFileOffset |= (bytes >= kMax32BitFileSize);
+
     return OK;
 }
 
@@ -689,9 +749,18 @@ status_t StagefrightRecorder::setParamInterleaveDuration(int32_t durationUs) {
 // If seconds <  0, only the first frame is I frame, and rest are all P frames
 // If seconds == 0, all frames are encoded as I frames. No P frames
 // If seconds >  0, it is the time spacing (seconds) between 2 neighboring I frames
-status_t StagefrightRecorder::setParamVideoIFramesInterval(int32_t seconds) {
-    ALOGV("setParamVideoIFramesInterval: %d seconds", seconds);
+status_t StagefrightRecorder::setParamVideoIFramesInterval(float seconds) {
+    ALOGV("setParamVideoIFramesInterval: %f seconds", seconds);
     mIFramesIntervalSec = seconds;
+    return OK;
+}
+
+// Add by xiaomi
+// If mode == 0,  use CAVLC
+// If mode == 1,  use CABAC
+status_t StagefrightRecorder::setParamEntropyMode(int32_t mode) {
+    ALOGV("setParamEntropyMode: %d ", mode);
+    mEntropyMode = mode;
     return OK;
 }
 
@@ -712,9 +781,9 @@ status_t StagefrightRecorder::setParamVideoCameraId(int32_t cameraId) {
 }
 
 status_t StagefrightRecorder::setParamTrackTimeStatus(int64_t timeDurationUs) {
-    ALOGV("setParamTrackTimeStatus: %lld", (long long)timeDurationUs);
+    ALOGV("setParamTrackTimeStatus: %" PRId64 "", timeDurationUs);
     if (timeDurationUs < 20000) {  // Infeasible if shorter than 20 ms?
-        ALOGE("Tracking time duration too short: %lld us", (long long)timeDurationUs);
+        ALOGE("Tracking time duration too short: %" PRId64 " us", timeDurationUs);
         return BAD_VALUE;
     }
     mTrackEveryTimeDurationUs = timeDurationUs;
@@ -1007,8 +1076,8 @@ status_t StagefrightRecorder::setParameter(
             return setParamVideoRotation(degrees);
         }
     } else if (key == "video-param-i-frames-interval") {
-        int32_t seconds;
-        if (safe_strtoi32(value.string(), &seconds)) {
+        float seconds;
+        if (safe_strtof(value.string(), &seconds)) {
             return setParamVideoIFramesInterval(seconds);
         }
     } else if (key == "video-param-encoder-profile") {
@@ -1098,9 +1167,23 @@ status_t StagefrightRecorder::setParameter(
         }
     } else if (key == "log-session-id") {
         return setLogSessionId(value);
+     // add by xiaomi
+    } else if (key == "vendor.qti-ext-enc-entropy-mode.value") {
+        int32_t mode;
+        if (safe_strtoi32(value.string(), &mode)) {
+            return setParamEntropyMode(mode);
+        }
     } else {
         ALOGE("setParameter: failed to find key %s", key.string());
     }
+//MIUI ADD: start MIAUDIO_OZO
+    if(kSupportOZO){
+        if (MediaStub::ozoAudioSetParameterStagefrightImpl(mOzoAudioParams, mOzoFileSourceEnable, key, value))
+            return OK;
+
+        ALOGE("setParameter: failed to find key %s", key.string());
+    }
+//MIUI ADD: end
     return BAD_VALUE;
 }
 
@@ -1138,6 +1221,21 @@ status_t StagefrightRecorder::setParameters(const String8 &params) {
     }
     return OK;
 }
+
+//MIUI ADD: start MIAUDIO_OZO
+status_t StagefrightRecorder::setOzoAudioTuneFile(int fd)
+{
+
+    return MediaStub::setOzoAudioTuneFileStagefrightRecorder(mOzoTuneWriter, fd);
+
+}
+
+status_t StagefrightRecorder::setOzoRunTimeParameters(const String8 &params) {
+
+    return MediaStub::setOzoRunTimeParametersStagefright(mOzoAudioParams, mAudioEncoderSource, params);
+
+}
+//MIUI ADD: end
 
 status_t StagefrightRecorder::setListener(const sp<IMediaRecorderClient> &listener) {
     mListener = listener;
@@ -1193,8 +1291,10 @@ status_t StagefrightRecorder::prepareInternal() {
             break;
 
         default:
-            ALOGE("Unsupported output file format: %d", mOutputFormat);
-            status = UNKNOWN_ERROR;
+            if (handleCustomRecording() != OK) {
+                ALOGE("Unsupported output file format: %d", mOutputFormat);
+                status = UNKNOWN_ERROR;
+            }
             break;
     }
 
@@ -1279,8 +1379,10 @@ status_t StagefrightRecorder::start() {
 
         default:
         {
-            ALOGE("Unsupported output file format: %d", mOutputFormat);
-            status = UNKNOWN_ERROR;
+            if (handleCustomOutputFormats() != OK) {
+                ALOGE("Unsupported output file format: %d", mOutputFormat);
+                status = UNKNOWN_ERROR;
+            }
             break;
         }
     }
@@ -1356,8 +1458,29 @@ sp<MediaCodecSource> StagefrightRecorder::createAudioSource() {
         }
     }
 
-    sp<AudioSource> audioSource =
-        new AudioSource(
+    status_t err;
+    sp<AudioSource> audioSource;
+    bool use_ozo_capture = false;
+//MIUI ADD: start MIAUDIO_OZO
+    if(kSupportOZO){
+        err = MediaStub::createOzoAudioSource(
+                attr,
+                mAttributionSource,
+                sourceSampleRate,
+                mAudioChannels,
+                mSampleRate,
+                mSelectedDeviceId,
+                mSelectedMicDirection,
+                mSelectedMicFieldDimension,
+                mAudioEncoder,
+                mOutputFormat,
+                mOzoAudioParams,
+                audioSource,
+                mAudioSourceNode,
+                mOzoFileSourceEnable,
+                use_ozo_capture);
+        if (HW_NOT_SUPPORT == err) {
+            audioSource = AVFactory::get()->createAudioSource(
                 &attr,
                 mAttributionSource,
                 sourceSampleRate,
@@ -1367,7 +1490,23 @@ sp<MediaCodecSource> StagefrightRecorder::createAudioSource() {
                 mSelectedMicDirection,
                 mSelectedMicFieldDimension);
 
-    status_t err = audioSource->initCheck();
+           err = audioSource->initCheck();
+        }
+    } else {
+        audioSource = AVFactory::get()->createAudioSource(
+                &attr,
+                mAttributionSource,
+                sourceSampleRate,
+                mAudioChannels,
+                mSampleRate,
+                mSelectedDeviceId,
+                mSelectedMicDirection,
+                mSelectedMicFieldDimension);
+
+        err = audioSource->initCheck();
+    }
+
+//MIUI ADD: end
 
     if (err != OK) {
         ALOGE("audio source is not initialized");
@@ -1386,22 +1525,31 @@ sp<MediaCodecSource> StagefrightRecorder::createAudioSource() {
         case AUDIO_ENCODER_AAC:
             format->setString("mime", MEDIA_MIMETYPE_AUDIO_AAC);
             format->setInt32("aac-profile", OMX_AUDIO_AACObjectLC);
+            format->setInt32("profile", AACObjectLC);
             break;
         case AUDIO_ENCODER_HE_AAC:
             format->setString("mime", MEDIA_MIMETYPE_AUDIO_AAC);
             format->setInt32("aac-profile", OMX_AUDIO_AACObjectHE);
+            format->setInt32("profile", AACObjectHE);
             break;
         case AUDIO_ENCODER_AAC_ELD:
             format->setString("mime", MEDIA_MIMETYPE_AUDIO_AAC);
             format->setInt32("aac-profile", OMX_AUDIO_AACObjectELD);
+            format->setInt32("profile", AACObjectELD);
             break;
         case AUDIO_ENCODER_OPUS:
             format->setString("mime", MEDIA_MIMETYPE_AUDIO_OPUS);
             break;
+        case AUDIO_ENCODER_FLAC:
+            format->setString("mime", MEDIA_MIMETYPE_AUDIO_FLAC);
+            break;
+
 
         default:
-            ALOGE("Unknown audio encoder: %d", mAudioEncoder);
-            return NULL;
+            if (handleCustomAudioSource(format) != OK) {
+                ALOGE("Unknown audio encoder: %d", mAudioEncoder);
+                return NULL;
+            }
     }
 
     // log audio mime type for media metrics
@@ -1417,8 +1565,18 @@ sp<MediaCodecSource> StagefrightRecorder::createAudioSource() {
                 kKeyMaxInputSize, &maxInputSize));
 
     format->setInt32("max-input-size", maxInputSize);
-    format->setInt32("channel-count", mAudioChannels);
-    format->setInt32("sample-rate", mSampleRate);
+//MIUI ADD: start MIAUDIO_OZO
+    int32_t channels = mAudioChannels;
+    int32_t samplerate = mSampleRate;
+    if(kSupportOZO){
+        MediaStub::setOzoAudioFormat( channels, samplerate, mOzoAudioParams,
+            mCodecEventListener, use_ozo_capture, mOzoBrandEnabled, mAudioBitRate,
+            audioSource, mOzoTuneWriter, mListener, format );
+    }
+    format->setInt32("channel-count", channels);
+    format->setInt32("sample-rate", samplerate);
+
+//MIUI ADD: end
     format->setInt32("bitrate", mAudioBitRate);
     if (mAudioTimeScale > 0) {
         format->setInt32("time-scale", mAudioTimeScale);
@@ -1427,14 +1585,15 @@ sp<MediaCodecSource> StagefrightRecorder::createAudioSource() {
 
     sp<MediaCodecSource> audioEncoder =
             MediaCodecSource::Create(mLooper, format, audioSource);
-    sp<AudioSystem::AudioDeviceCallback> callback = mAudioDeviceCallback.promote();
+    if (audioEncoder == NULL) {
+        ALOGE("Failed to create audio encoder");
+    } else {
+        sp<AudioSystem::AudioDeviceCallback> callback = mAudioDeviceCallback.promote();
     if (mDeviceCallbackEnabled && callback != 0) {
         audioSource->addAudioDeviceCallback(callback);
     }
     mAudioSourceNode = audioSource;
 
-    if (audioEncoder == NULL) {
-        ALOGE("Failed to create audio encoder");
     }
 
     return audioEncoder;
@@ -1496,13 +1655,23 @@ status_t StagefrightRecorder::setupRawAudioRecording() {
     }
 
     sp<MediaCodecSource> audioEncoder = createAudioSource();
-    if (audioEncoder == NULL) {
+    if (audioEncoder != NULL) {
+        CHECK(mWriter != 0);
+        mWriter->addSource(audioEncoder);
+        mAudioEncoderSource = audioEncoder;
+    } else if (audioEncoder == NULL && mAudioEncoder == AUDIO_ENCODER_LPCM) {
+        CHECK(mWriter != 0);
+        sp<MediaSource> src = setPCMRecording();
+        if (src == NULL) {
+            ALOGE("Recording source is null");
+            return UNKNOWN_ERROR;
+        }
+        mAudioSourceNode =  reinterpret_cast<AudioSource* > (src.get());
+        mWriter->addSource(src);
+    } else if (audioEncoder == NULL) {
         return UNKNOWN_ERROR;
     }
 
-    CHECK(mWriter != 0);
-    mWriter->addSource(audioEncoder);
-    mAudioEncoderSource = audioEncoder;
 
     if (mMaxFileDurationUs != 0) {
         mWriter->setMaxFileDuration(mMaxFileDurationUs);
@@ -1570,11 +1739,12 @@ status_t StagefrightRecorder::setupMPEG2TSRecording() {
             return ERROR_UNSUPPORTED;
         }
 
-        status_t err = setupAudioEncoder(writer);
+        status_t err = setupAudioEncoder();
 
         if (err != OK) {
             return err;
         }
+        writer->addSource(mAudioEncoderSource);
     }
 
     if (mVideoSource < VIDEO_SOURCE_LIST_END) {
@@ -1889,23 +2059,25 @@ status_t StagefrightRecorder::setupCameraSource(
     pid_t pid = VALUE_OR_RETURN_STATUS(aidl2legacy_int32_t_pid_t(mAttributionSource.pid));
     String16 clientName = VALUE_OR_RETURN_STATUS(
         aidl2legacy_string_view_String16(mAttributionSource.packageName.value_or("")));
-    if (mCaptureFpsEnable) {
+    if (mCaptureFpsEnable && mCaptureFps != mFrameRate ) {
         if (!(mCaptureFps > 0.)) {
             ALOGE("Invalid mCaptureFps value: %lf", mCaptureFps);
             return BAD_VALUE;
         }
 
-        mCameraSourceTimeLapse = CameraSourceTimeLapse::CreateFromCamera(
+        mCameraSourceTimeLapse = AVFactory::get()->CreateCameraSourceTimeLapseFromCamera(
                 mCamera, mCameraProxy, mCameraId, clientName, uid, pid,
                 videoSize, mFrameRate, mPreviewSurface,
                 std::llround(1e6 / mCaptureFps));
         *cameraSource = mCameraSourceTimeLapse;
     } else {
-        *cameraSource = CameraSource::CreateFromCamera(
+        mCameraSource = AVFactory::get()->CreateCameraSourceFromCamera(
                 mCamera, mCameraProxy, mCameraId, clientName, uid, pid,
                 videoSize, mFrameRate,
                 mPreviewSurface);
+        *cameraSource = mCameraSource;
     }
+    AVUtils::get()->cacheCaptureBuffers(mCamera, mVideoEncoder);
     mCamera.clear();
     mCameraProxy.clear();
     if (*cameraSource == NULL) {
@@ -1966,6 +2138,10 @@ status_t StagefrightRecorder::setupVideoEncoder(
             format->setString("mime", MEDIA_MIMETYPE_VIDEO_HEVC);
             break;
 
+        case VIDEO_ENCODER_DOLBY_VISION:
+            format->setString("mime", MEDIA_MIMETYPE_VIDEO_DOLBY_VISION);
+            break;
+
         default:
             CHECK(!"Should not be here, unsupported video encoding.");
             break;
@@ -2011,6 +2187,7 @@ status_t StagefrightRecorder::setupVideoEncoder(
         }
     }
 
+    setupCustomVideoEncoderParams(cameraSource, format);
     if (mOutputFormat == OUTPUT_FORMAT_RTP_AVP) {
         // This indicates that a raw image provided to encoder needs to be rotated.
         format->setInt32("rotation-degrees", mRotationDegrees);
@@ -2019,7 +2196,14 @@ status_t StagefrightRecorder::setupVideoEncoder(
     format->setInt32("bitrate", mVideoBitRate);
     format->setInt32("bitrate-mode", mVideoBitRateMode);
     format->setInt32("frame-rate", mFrameRate);
-    format->setInt32("i-frame-interval", mIFramesIntervalSec);
+    format->setFloat("i-frame-interval", mIFramesIntervalSec);
+    // In order to customize native recordings
+    format->setInt32("vendor.qti-ext-enc-info-native_recording.value", 1);
+    // set EntropyMode: 0 for CAVLC, 1 for CABAC, default value is 1
+    // add by xiaomi
+    if (mEntropyMode != 1) {
+        format->setInt32("vendor.qti-ext-enc-entropy-mode.value", mEntropyMode);
+    }
 
     if (mVideoTimeScale > 0) {
         format->setInt32("time-scale", mVideoTimeScale);
@@ -2044,6 +2228,7 @@ status_t StagefrightRecorder::setupVideoEncoder(
             preferBFrames = false;
             tsLayers = 2; // use at least two layers as resulting video will likely be sped up
         } else if (mCaptureFps > maxPlaybackFps) { // slow-mo
+            format->setInt32("high-frame-rate", 1);
             maxPlaybackFps = mCaptureFps; // assume video will be played back at full capture speed
             preferBFrames = false;
         }
@@ -2073,7 +2258,8 @@ status_t StagefrightRecorder::setupVideoEncoder(
         }
     }
 
-    if (tsLayers > 1) {
+    // mIFramesIntervalSec == 0 means all Intra frame, can't support P/B layers
+    if (tsLayers > 1 && mIFramesIntervalSec != 0) {
         uint32_t bLayers = std::min(2u, tsLayers - 1); // use up-to 2 B-layers
         uint32_t pLayers = tsLayers - bLayers;
         format->setString(
@@ -2087,6 +2273,15 @@ status_t StagefrightRecorder::setupVideoEncoder(
     if (mMetaDataStoredInVideoBuffers != kMetadataBufferTypeInvalid) {
         format->setInt32("android._input-metadata-buffer-type", mMetaDataStoredInVideoBuffers);
     }
+
+    if (mOutputFormat == OUTPUT_FORMAT_MPEG_4 && mVideoEncoder != VIDEO_ENCODER_DOLBY_VISION) {
+        format->setInt32("feature-nal-length-bitstream", 1);
+        format->setInt32("nal-length-in-bytes", 4);
+        format->setInt32("vendor.qti-ext-enc-nal-length-bs.num-bytes", 4);
+    }
+
+    // Will send this info to encoder component for custom optimizations
+    format->setInt32("isNativeRecorder", 1);
 
     uint32_t flags = 0;
     if (cameraSource == NULL) {
@@ -2118,7 +2313,7 @@ status_t StagefrightRecorder::setupVideoEncoder(
     return OK;
 }
 
-status_t StagefrightRecorder::setupAudioEncoder(const sp<MediaWriter>& writer) {
+status_t StagefrightRecorder::setupAudioEncoder() {
     ATRACE_CALL();
     status_t status = BAD_VALUE;
     if (OK != (status = checkAudioEncoderCapabilities())) {
@@ -2132,28 +2327,38 @@ status_t StagefrightRecorder::setupAudioEncoder(const sp<MediaWriter>& writer) {
         case AUDIO_ENCODER_HE_AAC:
         case AUDIO_ENCODER_AAC_ELD:
         case AUDIO_ENCODER_OPUS:
+        case AUDIO_ENCODER_FLAC:
             break;
 
         default:
-            ALOGE("Unsupported audio encoder: %d", mAudioEncoder);
-            return UNKNOWN_ERROR;
+            if (handleCustomAudioEncoder() != OK) {
+                ALOGE("Unsupported audio encoder: %d", mAudioEncoder);
+                return UNKNOWN_ERROR;
+            }
     }
 
     sp<MediaCodecSource> audioEncoder = createAudioSource();
     if (audioEncoder == NULL) {
         return UNKNOWN_ERROR;
     }
-
-    writer->addSource(audioEncoder);
     mAudioEncoderSource = audioEncoder;
+//MIUI ADD: start MIAUDIO_OZO
+    if(kSupportOZO){
+        MediaStub::setOzoAudioCodecInfo(mAudioEncoderSource, mOzoTuneWriter,
+            mCodecEventListener);
+    }
+//MIUI ADD: end
     return OK;
 }
 
 status_t StagefrightRecorder::setupMPEG4orWEBMRecording() {
     mWriter.clear();
     mTotalBitRate = 0;
+    sp<MediaCodecSource> videoSource;
+    std::future<status_t> futureVal;
 
     status_t err = OK;
+    status_t errVideo = OK;
     sp<MediaWriter> writer;
     sp<MPEG4Writer> mp4writer;
     if (mOutputFormat == OUTPUT_FORMAT_WEBM) {
@@ -2171,15 +2376,8 @@ status_t StagefrightRecorder::setupMPEG4orWEBMRecording() {
             return err;
         }
 
-        sp<MediaCodecSource> encoder;
-        err = setupVideoEncoder(mediaSource, &encoder);
-        if (err != OK) {
-            return err;
-        }
-
-        writer->addSource(encoder);
-        mVideoEncoderSource = encoder;
-        mTotalBitRate += mVideoBitRate;
+        futureVal = std::async(std::launch::async, &StagefrightRecorder::setupVideoEncoder,
+                this, mediaSource, &videoSource);
     }
 
     // Audio source is added at the end if it exists.
@@ -2187,9 +2385,43 @@ status_t StagefrightRecorder::setupMPEG4orWEBMRecording() {
     // camcorder applications in the recorded files.
     // disable audio for time lapse recording
     const bool disableAudio = mCaptureFpsEnable && mCaptureFps < mFrameRate;
-    if (!disableAudio && mAudioSource != AUDIO_SOURCE_CNT) {
-        err = setupAudioEncoder(writer);
+    bool isCmpAudRecSupted = false;
+    if (!disableAudio && mAudioSource != AUDIO_SOURCE_CNT &&
+        isCompressAudioRecordingSupported()) {
+        isCmpAudRecSupted = true;
+        String16 clientName = VALUE_OR_RETURN_STATUS(
+        aidl2legacy_string_view_String16(mAttributionSource.packageName.value_or("")));
+        bool isCtsApp = (!android::String16("com.android.cts.verifier").compare(clientName));
+        if(isCtsApp || !android::String16("com.skype.raider").compare(clientName))
+            mAudioSourceNode = nullptr;
+        else
+            mAudioSourceNode = setCompressAudioRecording();
+    }
+
+    if (!disableAudio && mAudioSource != AUDIO_SOURCE_CNT &&
+        !mEnabledCompressAudioRecording) {
+        err = setupAudioEncoder();
+    }
+    if (mVideoSource < VIDEO_SOURCE_LIST_END) {
+        errVideo = futureVal.get();
+        if (errVideo != OK) return errVideo;
+        writer->addSource(videoSource);
+        mVideoEncoderSource = videoSource;
+        mTotalBitRate += mVideoBitRate;
+    }
+    if (!disableAudio && mAudioSource != AUDIO_SOURCE_CNT &&
+        isCmpAudRecSupted) {
+        if (mAudioSourceNode == nullptr) {
+            ALOGE("%s: unable to create compress audio recording", __func__);
+        } else {
+            writer->addSource(mAudioSourceNode);
+            ALOGI("%s:  created compress audio recording", __func__);
+        }
+    }
+    if (!disableAudio && mAudioSource != AUDIO_SOURCE_CNT &&
+        !mEnabledCompressAudioRecording) {
         if (err != OK) return err;
+        writer->addSource(mAudioEncoderSource);
         mTotalBitRate += mAudioBitRate;
     }
 
@@ -2216,11 +2448,15 @@ status_t StagefrightRecorder::setupMPEG4orWEBMRecording() {
         mStartTimeOffsetMs = mEncoderProfiles->getStartTimeOffsetMs(mCameraId);
     } else if (mVideoSource == VIDEO_SOURCE_SURFACE) {
         // surface source doesn't need large initial delay
-        mStartTimeOffsetMs = 100;
+        mStartTimeOffsetMs = 320; //mi changed 100 to 320
     }
     if (mStartTimeOffsetMs > 0) {
         writer->setStartTimeOffsetMs(mStartTimeOffsetMs);
     }
+//MIUI ADD: start MIAUDIO_OZO
+    if (kSupportOZO && mOzoBrandEnabled)
+        mp4writer->setOzoBranding();
+//MIUI ADD: end
 
     writer->setListener(mListener);
     mWriter = writer;
@@ -2274,6 +2510,12 @@ status_t StagefrightRecorder::pause() {
     if (mAudioEncoderSource != NULL) {
         mAudioEncoderSource->pause();
     }
+
+    /* compress recording pause*/
+    if (mAudioSourceNode != NULL && mEnabledCompressAudioRecording) {
+        mAudioSourceNode->pause();
+    }
+
     if (mVideoEncoderSource != NULL) {
         mVideoEncoderSource->pause(meta.get());
     }
@@ -2296,6 +2538,18 @@ status_t StagefrightRecorder::resume() {
 
     int64_t bufferStartTimeUs = 0;
     bool allSourcesStarted = true;
+
+    /* compress recording resume*/
+    if (mAudioSourceNode != NULL && mEnabledCompressAudioRecording) {
+        int64_t timeUs = mAudioSourceNode->getFirstSampleSystemTimeUs();
+        if (timeUs < 0) {
+            allSourcesStarted = false;
+        }
+        if (bufferStartTimeUs < timeUs) {
+            bufferStartTimeUs = timeUs;
+        }
+    }
+
     for (const auto &source : { mAudioEncoderSource, mVideoEncoderSource }) {
         if (source == nullptr) {
             continue;
@@ -2317,7 +2571,8 @@ status_t StagefrightRecorder::resume() {
         mTotalPausedDurationUs += resumeStartTimeUs - mPauseStartTimeUs - 30000;
     }
     double timeOffset = -mTotalPausedDurationUs;
-    if (mCaptureFpsEnable && (mVideoSource == VIDEO_SOURCE_CAMERA)) {
+    if (mCaptureFpsEnable && (mVideoSource == VIDEO_SOURCE_CAMERA) &&
+          (mVideoSource != VIDEO_SOURCE_SURFACE)) {
         timeOffset *= mCaptureFps / mFrameRate;
     }
     sp<MetaData> meta = new MetaData;
@@ -2330,6 +2585,10 @@ status_t StagefrightRecorder::resume() {
         source->start(meta.get());
     }
 
+     /* compress audio recording resume*/
+    if (mAudioSourceNode != NULL && mEnabledCompressAudioRecording) {
+        mAudioSourceNode->start(meta.get());
+    }
 
     // sum info on pause duration
     // (ignore the 30msec of overlap adjustment factored into mTotalPausedDurationUs)
@@ -2360,6 +2619,14 @@ status_t StagefrightRecorder::stop() {
             ALOGW("Failed to set stopTime %lld us for %s",
                     (long long)stopTimeUs, source->isVideo() ? "Video" : "Audio");
         }
+    }
+
+    if (mVideoEncoderSource != NULL) {
+        mVideoEncoderSource->notifyPerformanceMode();
+    }
+
+    if (mCameraSource != NULL) {
+        mCameraSource->notifyPerformanceMode();
     }
 
     if (mWriter != NULL) {
@@ -2400,7 +2667,11 @@ status_t StagefrightRecorder::stop() {
         ::close(mOutputFd);
         mOutputFd = -1;
     }
-
+//MIUI ADD: start MIAUDIO_OZO
+    if(kSupportOZO){
+        MediaStub::closeOzoAudioTuneFile(mOzoTuneWriter);
+    }
+//MIUI ADD: end
     if (mStarted) {
         mStarted = false;
 
@@ -2448,6 +2719,8 @@ status_t StagefrightRecorder::reset() {
     mAudioBitRate  = 12200;
     mInterleaveDurationUs = 0;
     mIFramesIntervalSec = 1;
+    mEnabledCompressAudioRecording = false;
+    mAudioSourceNode.clear();
     mAudioSourceNode = 0;
     mUse64BitFileOffset = false;
     mMovieTimeScale  = -1;
@@ -2469,14 +2742,23 @@ status_t StagefrightRecorder::reset() {
     mLatitudex10000 = -3600000;
     mLongitudex10000 = -3600000;
     mTotalBitRate = 0;
+    // Add by xiaomi
+    mEntropyMode = 1;
 
     // tracking how long we recorded.
     mDurationRecordedUs = 0;
     mStartedRecordingUs = 0;
     mDurationPausedUs = 0;
     mNPauses = 0;
-
+//MIUI ADD: start MIAUDIO_OZO
+    if(kSupportOZO){
+        mOzoFileSourceEnable = false;
+        MediaStub::ozoAudioInitStagefrightImpl(mOzoAudioParams);
+    }
+//MIUI ADD: end
     mOutputFd = -1;
+
+    mCameraSource = NULL;
 
     return OK;
 }
@@ -2652,7 +2934,7 @@ status_t StagefrightRecorder::dump(
     result.append(buffer);
     snprintf(buffer, SIZE, "     Encoder level: %d\n", mVideoEncoderLevel);
     result.append(buffer);
-    snprintf(buffer, SIZE, "     I frames interval (s): %d\n", mIFramesIntervalSec);
+    snprintf(buffer, SIZE, "     I frames interval (s): %f\n", mIFramesIntervalSec);
     result.append(buffer);
     snprintf(buffer, SIZE, "     Frame size (pixels): %dx%d\n", mVideoWidth, mVideoHeight);
     result.append(buffer);

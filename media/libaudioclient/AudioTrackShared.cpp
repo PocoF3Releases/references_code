@@ -15,7 +15,7 @@
  */
 
 #define LOG_TAG "AudioTrackShared"
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
 
 #include <atomic>
 #include <android-base/macros.h>
@@ -25,6 +25,12 @@
 
 #include <linux/futex.h>
 #include <sys/syscall.h>
+
+#include <utils/Trace.h>
+#ifdef ATRACE_TAG
+#undef ATRACE_TAG
+#define ATRACE_TAG ATRACE_TAG_AUDIO
+#endif
 
 namespace android {
 

@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "APM::AudioPolicyEngine/VolumeGroup"
-//#define LOG_NDEBUG 0
+#define LOG_TAG "APM::AudioPolicyEngine::VolumeGroup"
+#define LOG_NDEBUG 0
 
 #include "VolumeGroup.h"
 #include <media/TypeConverter.h>

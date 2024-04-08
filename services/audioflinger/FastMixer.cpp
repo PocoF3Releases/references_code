@@ -21,7 +21,8 @@
 // </IMPORTANT_WARNING>
 
 #define LOG_TAG "FastMixer"
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
+#define LOG_NDEBUG_ASSERT 0
 
 #define ATRACE_TAG ATRACE_TAG_AUDIO
 
@@ -376,7 +377,9 @@ void FastMixer::onWork()
     const size_t frameCount = current->mFrameCount;
 
     if ((command & FastMixerState::MIX) && (mMixer != NULL) && mIsWarm) {
+#if LOG_NDEBUG_ASSERT
         ALOG_ASSERT(mMixerBuffer != NULL);
+#endif
 
         // AudioMixer::mState.enabledTracks is undefined if mState.hook == process__validate,
         // so we keep a side copy of enabledTracks
@@ -507,7 +510,9 @@ void FastMixer::onWork()
         ATRACE_END();
         dumpState->mWriteSequence++;
         if (framesWritten >= 0) {
+#if LOG_NDEBUG_ASSERT
             ALOG_ASSERT((size_t) framesWritten <= frameCount);
+#endif
             mTotalNativeFramesWritten += framesWritten;
             dumpState->mFramesWritten = mTotalNativeFramesWritten;
             //if ((size_t) framesWritten == frameCount) {

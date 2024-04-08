@@ -62,7 +62,8 @@ public:
     template<typename T>
     auto watchThread(T func, uint32_t tid, uint32_t cycles, uint32_t cycleLength) {
         auto res = NULL;
-
+        ALOGI("%s, cycles: %u, mMaxCycles: %u, cycleLength: %u, mCycleLength: %u",
+              __FUNCTION__, cycles, mMaxCycles, cycleLength, mCycleLengthMs);
         if (cycles != mMaxCycles || cycleLength != mCycleLengthMs) {
             // Create another instance of the watchdog to prevent disruption
             // of timer for current monitored calls

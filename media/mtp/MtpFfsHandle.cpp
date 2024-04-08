@@ -310,8 +310,17 @@ int MtpFfsHandle::waitEvents(struct io_buffer *buf, int min_events, struct io_ev
 
     while (num_events < min_events) {
         if (poll(mPollFds, 2, POLL_TIMEOUT_MS) == -1) {
-            PLOG(ERROR) << "Mtp error during poll()";
-            return -1;
+            // MIUI MOD:START
+            // PLOG(ERROR) << "Mtp error during poll()";
+            // return -1;
+            if (errno != EINTR) {
+                PLOG(ERROR) << "Mtp error during poll()";
+                return -1;
+            } else {
+                PLOG(ERROR) << "system call during poll()";
+                continue;
+            }
+            // END
         }
         if (mPollFds[0].revents & POLLIN) {
             mPollFds[0].revents = 0;

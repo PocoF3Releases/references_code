@@ -61,6 +61,10 @@
 #include <algorithm>
 #include <tuple>
 
+#ifdef __XIAOMI_CAMERA__
+#include "xm/CameraStub.h"
+#endif
+
 using namespace android::camera3;
 using namespace android::hardware::camera;
 using namespace android::hardware::camera::device::V3_2;
@@ -168,6 +172,10 @@ status_t HidlCamera3Device::initialize(sp<CameraProviderManager> manager,
         session->close();
         return res;
     }
+
+#ifdef __XIAOMI_CAMERA__
+    mPricacyCamera = CameraStub::createPrivacyCamera(mDeviceInfo);
+#endif
     mSupportNativeZoomRatio = manager->supportNativeZoomRatio(mId.string());
 
     std::vector<std::string> physicalCameraIds;
@@ -363,7 +371,12 @@ hardware::Return<void> HidlCamera3Device::processCaptureResult_3_4(
         mNumPartialResults, mVendorTagId, mDeviceInfo, mPhysicalDeviceInfoMap,
         mDistortionMappers, mZoomRatioMappers, mRotateAndCropMappers,
         mTagMonitor, mInputStream, mOutputStreams, mSessionStatsBuilder, listener, *this, *this,
-        *mInterface, mLegacyClient, mMinExpectedDuration}, mResultMetadataQueue
+        *mInterface, mLegacyClient, mMinExpectedDuration
+#ifdef __XIAOMI_CAMERA__
+        , mPricacyCamera
+        , mEnableJank
+#endif
+        }, mResultMetadataQueue
     };
 
     //HidlCaptureOutputStates hidlStates {
@@ -425,7 +438,12 @@ hardware::Return<void> HidlCamera3Device::processCaptureResult(
         mNumPartialResults, mVendorTagId, mDeviceInfo, mPhysicalDeviceInfoMap,
         mDistortionMappers, mZoomRatioMappers, mRotateAndCropMappers,
         mTagMonitor, mInputStream, mOutputStreams, mSessionStatsBuilder, listener, *this, *this,
-        *mInterface, mLegacyClient, mMinExpectedDuration}, mResultMetadataQueue
+        *mInterface, mLegacyClient, mMinExpectedDuration
+#ifdef __XIAOMI_CAMERA__
+        , mPricacyCamera
+        , mEnableJank
+#endif
+      }, mResultMetadataQueue
     };
 
     for (const auto& result : results) {
@@ -472,7 +490,12 @@ hardware::Return<void> HidlCamera3Device::notifyHelper(
         mNumPartialResults, mVendorTagId, mDeviceInfo, mPhysicalDeviceInfoMap,
         mDistortionMappers, mZoomRatioMappers, mRotateAndCropMappers,
         mTagMonitor, mInputStream, mOutputStreams, mSessionStatsBuilder, listener, *this, *this,
-        *mInterface, mLegacyClient, mMinExpectedDuration}, mResultMetadataQueue
+        *mInterface, mLegacyClient, mMinExpectedDuration
+#ifdef __XIAOMI_CAMERA__
+        , mPricacyCamera
+        , mEnableJank
+#endif
+      }, mResultMetadataQueue
     };
     for (const auto& msg : msgs) {
         camera3::notify(states, msg);
@@ -708,12 +731,17 @@ HidlCamera3Device::createCamera3DeviceInjectionMethods(wp<Camera3Device> parent)
     return new HidlCamera3DeviceInjectionMethods(parent);
 }
 
+#ifdef __XIAOMI_CAMERA__
+bool HidlCamera3Device::initJankStub(wp<Camera3Device> parent, const CameraMetadata& sessionParams) {
+   return CameraStub::initJank(parent, this, NULL, sessionParams);
+}
+#endif
+
 status_t HidlCamera3Device::injectionCameraInitialize(const String8 &injectedCamId,
             sp<CameraProviderManager> manager) {
         return (static_cast<HidlCamera3DeviceInjectionMethods *>(
                 mInjectionMethods.get()))->injectionInitialize(injectedCamId, manager, this);
 };
-
 
 HidlCamera3Device::HidlHalInterface::HidlHalInterface(
             sp<device::V3_2::ICameraDeviceSession> &session,
@@ -1853,4 +1881,42 @@ status_t HidlCamera3Device::HidlCamera3DeviceInjectionMethods::replaceHalInterfa
     return OK;
 }
 
+#ifdef __XIAOMI_CAMERA__
+HidlCaptureOutputStates HidlCamera3Device::getCaptureOutputStates(bool enableJank, sp<HidlCamera3Device> parent) {
+    sp<NotificationListener> listener;
+    {
+        std::lock_guard<std::mutex> l(parent->mOutputLock);
+        listener = parent->mListener.promote();
+    }
+    HidlCaptureOutputStates states {
+    {
+        parent->mId,
+        parent->mInFlightLock, parent->mLastCompletedRegularFrameNumber,
+        parent->mLastCompletedReprocessFrameNumber, parent->mLastCompletedZslFrameNumber,
+        parent->mInFlightMap, parent->mOutputLock,  parent->mResultQueue, parent->mResultSignal,
+        parent->mNextShutterFrameNumber,
+        parent->mNextReprocessShutterFrameNumber, parent->mNextZslStillShutterFrameNumber,
+        parent->mNextResultFrameNumber,
+        parent->mNextReprocessResultFrameNumber, parent->mNextZslStillResultFrameNumber,
+        parent->mUseHalBufManager, parent->mUsePartialResult, parent->mNeedFixupMonochromeTags,
+        parent->mNumPartialResults, parent->mVendorTagId, parent->mDeviceInfo, parent->mPhysicalDeviceInfoMap,
+        parent->mDistortionMappers, parent->mZoomRatioMappers, parent->mRotateAndCropMappers,
+        parent->mTagMonitor, parent->mInputStream, parent->mOutputStreams, parent->mSessionStatsBuilder, listener, *parent, *parent,
+        *(parent->mInterface),
+        /*legacyClient*/ false,
+        mMinExpectedDuration,
+        parent->mPricacyCamera,
+        enableJank}, mResultMetadataQueue
+    };
+
+    return states;
+}
+
+void HidlCamera3Device::cloneRequestStub(sp<CaptureRequest> dstReq, sp<CaptureRequest> srcReq) {
+    if (NULL == dstReq || NULL == srcReq) {
+        return ;
+    }
+    return CameraStub::cloneRequest(dstReq, srcReq);
+}
+#endif
 }; // namespace android

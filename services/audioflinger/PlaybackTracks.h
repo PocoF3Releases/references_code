@@ -127,6 +127,7 @@ public:
             status_t    setAudioDescriptionMixLevel(float leveldB);
             status_t    getPlaybackRateParameters(audio_playback_rate_t* playbackRate);
             status_t    setPlaybackRateParameters(const audio_playback_rate_t& playbackRate);
+            void        setFastTrackType(bool isFastTrack) { mFastTrack = isFastTrack; }
 
 // implement FastMixerState::VolumeProvider interface
     virtual gain_minifloat_packed_t getVolumeLR();
@@ -154,6 +155,10 @@ public:
     using MetadataInserter = std::back_insert_iterator<SourceMetadatas>;
     /** Copy the track metadata in the provided iterator. Thread safe. */
     virtual void    copyMetadataTo(MetadataInserter& backInserter) const;
+
+    pid_t mCallingPid;
+    uid_t mCallingUid;
+    bool  mFastTrack = false;
 
             /** Return haptic playback of the track is enabled or not, used in mixer. */
             bool    getHapticPlaybackEnabled() const { return mHapticPlaybackEnabled; }
@@ -259,8 +264,19 @@ protected:
     void notifyPresentationComplete();
 
     void signalClientFlag(int32_t flag);
+    fade_type mFadeType;
+    bool mbFadeFeatureOn;
+    bool mbIsAttrNeedFade;
+    volatile bool isFadingOut;
+    void setFadeIn();
+    void setFadeOut();
+    bool isFadeNeeded();
+    bool isInWhiteList(const AttributionSourceState attr,uid_t uid);
+    bool isFading() { return mFadeType == TYPE_FADENONE; }
+    float getFadeRatio();
 
 public:
+    void setFadeFeatureOn(bool on) { mbFadeFeatureOn = on; }
     void triggerEvents(AudioSystem::sync_event_t type);
     virtual void invalidate();
     void disable();

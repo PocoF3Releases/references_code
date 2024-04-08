@@ -33,6 +33,14 @@
 #include "api2/CameraDeviceClient.h"
 #include "utils/CameraServiceProxyWrapper.h"
 
+#ifdef __XIAOMI_CAMERA__
+#include "xm/CameraStub.h"
+#endif
+
+#ifdef __XIAOMI_CAMERA_PERF__
+#include "xm/CameraPerf.h"
+#endif
+
 #include <camera_metadata_hidden.h>
 
 #include "DepthCompositeStream.h"
@@ -103,8 +111,19 @@ CameraDeviceClient::CameraDeviceClient(const sp<CameraService>& cameraService,
     mInputStream(),
     mStreamingRequestId(REQUEST_ID_NONE),
     mRequestIdCounter(0),
+    mPrivilegedClient(false),
     mOverrideForPerfClass(overrideForPerfClass) {
 
+    char value[PROPERTY_VALUE_MAX];
+    property_get("persist.vendor.camera.privapp.list", value, "");
+    String16 packagelist(value);
+    if (packagelist.contains(clientPackageName.string())) {
+        mPrivilegedClient = true;
+    }
+
+#ifdef __XIAOMI_CAMERA__
+    CameraStub::setClientPackageName(mClientPackageName, 2 /*API2*/);
+#endif
     ATRACE_CALL();
     ALOGI("CameraDeviceClient %s: Opened", cameraId.string());
 }
@@ -862,6 +881,10 @@ binder::Status CameraDeviceClient::createStream(
         int32_t* newStreamId) {
     ATRACE_CALL();
 
+#ifdef __XIAOMI_CAMERA_PERF__
+    TEMP_THREAD_PRIORITY();
+#endif
+
     binder::Status res;
     if (!(res = checkPidStatus(__FUNCTION__)).isOk()) return res;
 
@@ -923,7 +946,10 @@ binder::Status CameraDeviceClient::createStream(
         res = SessionConfigurationUtils::createSurfaceFromGbp(streamInfo,
                 isStreamInfoValid, surface, bufferProducer, mCameraIdStr,
                 mDevice->infoPhysical(physicalCameraId), sensorPixelModesUsed, dynamicRangeProfile,
-                streamUseCase, timestampBase, mirrorMode);
+                streamUseCase,
+                timestampBase,
+                mirrorMode,
+                mPrivilegedClient);
 
         if (!res.isOk())
             return res;
@@ -1283,7 +1309,10 @@ binder::Status CameraDeviceClient::updateOutputConfiguration(int streamId,
         res = SessionConfigurationUtils::createSurfaceFromGbp(outInfo,
                 /*isStreamInfoValid*/ false, surface, newOutputsMap.valueAt(i), mCameraIdStr,
                 mDevice->infoPhysical(physicalCameraId), sensorPixelModesUsed, dynamicRangeProfile,
-                streamUseCase, timestampBase, mirrorMode);
+                streamUseCase,
+                timestampBase,
+                mirrorMode,
+                mPrivilegedClient);
         if (!res.isOk())
             return res;
 
@@ -1657,7 +1686,10 @@ binder::Status CameraDeviceClient::finalizeOutputConfigurations(int32_t streamId
         res = SessionConfigurationUtils::createSurfaceFromGbp(mStreamInfoMap[streamId],
                 true /*isStreamInfoValid*/, surface, bufferProducer, mCameraIdStr,
                 mDevice->infoPhysical(physicalId), sensorPixelModesUsed, dynamicRangeProfile,
-                streamUseCase, timestampBase, mirrorMode);
+                streamUseCase,
+                timestampBase,
+                mirrorMode,
+                mPrivilegedClient);
 
         if (!res.isOk())
             return res;

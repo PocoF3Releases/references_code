@@ -15,7 +15,7 @@
  */
 
 #define LOG_TAG "AudioSystem"
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
 
 #include <utils/Log.h>
 
@@ -253,6 +253,45 @@ status_t AudioSystem::setMode(audio_mode_t mode) {
 status_t AudioSystem::setParameters(audio_io_handle_t ioHandle, const String8& keyValuePairs) {
     const sp<IAudioFlinger>& af = AudioSystem::get_audio_flinger();
     if (af == 0) return PERMISSION_DENIED;
+//MIUI ADD: start MIAUDIO_MULTI_ROUTE
+    // Multiroute: add setProParameters to APM
+    String8 filteredKeyValuePairs = keyValuePairs;
+    String8 MultirouteState;
+    AudioParameter param = AudioParameter(filteredKeyValuePairs);
+    if (param.get(String8(AudioParameter::keyAudioRouteCast), MultirouteState) == NO_ERROR
+                    && (MultirouteState == AudioParameter::valueOn || MultirouteState == AudioParameter::valueOff)){
+        const sp<IAudioPolicyService>& aps = AudioSystem::get_audio_policy_service();
+        if (aps == 0) return PERMISSION_DENIED;
+        if (statusTFromBinderStatus(aps->setProParameters(keyValuePairs.string())) != NO_ERROR)
+                return BAD_VALUE;
+    }
+//MIUI ADD: end
+
+//MIUI ADD: start MIAUDIO_EFFECT_SWITCH
+    String8 oldVulmeCurve;
+    AudioParameter oldVolumeCurveParam = AudioParameter(keyValuePairs);
+    if (oldVolumeCurveParam.get(String8("old_volume_curve"), oldVulmeCurve) == NO_ERROR){
+        const sp<IAudioPolicyService>& aps = AudioSystem::get_audio_policy_service();
+        if (aps == 0) return PERMISSION_DENIED;
+        if (statusTFromBinderStatus(aps->setProParameters(keyValuePairs.string())) != NO_ERROR)
+                return BAD_VALUE;
+        return NO_ERROR;
+    }
+//MIUI ADD: end
+
+//MIUI ADD: start MIAUDIO_VEHICLE_VOIP_TX
+    String8 carVoipState;
+    AudioParameter carVoipTxParam = AudioParameter(keyValuePairs);
+    if (carVoipTxParam.get(String8("car_voip_tx"), carVoipState) == NO_ERROR
+                    && (carVoipState == String8("true") || carVoipState == String8("false"))){
+        const sp<IAudioPolicyService>& aps = AudioSystem::get_audio_policy_service();
+        if (aps == 0) return PERMISSION_DENIED;
+        if (statusTFromBinderStatus(aps->setProParameters(keyValuePairs.string())) != NO_ERROR)
+                return BAD_VALUE;
+        return NO_ERROR;
+    }
+//MIUI ADD: end
+
     return af->setParameters(ioHandle, keyValuePairs);
 }
 
@@ -1849,6 +1888,20 @@ status_t AudioSystem::setAudioHalPids(const std::vector<pid_t>& pids) {
     return af->setAudioHalPids(pids);
 }
 
+// MIUI ADD: START
+status_t AudioSystem::pauseAudioTracks(uid_t uid, pid_t pid) {
+    const sp<IAudioFlinger>& af = AudioSystem::get_audio_flinger();
+    if (af == nullptr) return PERMISSION_DENIED;
+    return af->pauseAudioTracks(uid, pid);
+}
+
+status_t AudioSystem::resumeAudioTracks(uid_t uid, pid_t pid) {
+    const sp<IAudioFlinger>& af = AudioSystem::get_audio_flinger();
+    if (af == nullptr) return PERMISSION_DENIED;
+    return af->resumeAudioTracks(uid, pid);
+}
+// END
+
 status_t AudioSystem::getSurroundFormats(unsigned int* numSurroundFormats,
                                          audio_format_t* surroundFormats,
                                          bool* surroundFormatsEnabled) {
@@ -1947,6 +2000,25 @@ status_t AudioSystem::setCurrentImeUid(uid_t uid) {
     return statusTFromBinderStatus(aps->setCurrentImeUid(uidAidl));
 }
 
+//MIUI ADD: start MIAUDIO_INPUT_REUSE
+bool AudioSystem::isReuseInput(uid_t uid, audio_session_t session)
+{
+    const sp<IAudioPolicyService>& aps = AudioSystem::get_audio_policy_service();
+    if (aps == 0)
+        return false;
+
+    auto result = [&]() -> ConversionResult<bool> {
+        int32_t uidAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_uid_t_int32_t(uid));
+        int32_t sessionAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_audio_session_t_int32_t(session));
+        bool retAidl;
+        RETURN_IF_ERROR(statusTFromBinderStatus(
+                aps->isReuseInput(uidAidl, sessionAidl, &retAidl)));
+        return retAidl;
+    }();
+    return result.value_or(false);
+}
+//MIUI ADD: end
+
 bool AudioSystem::isHapticPlaybackSupported() {
     const sp<IAudioPolicyService>& aps = AudioSystem::get_audio_policy_service();
     if (aps == 0) return false;
@@ -1968,6 +2040,20 @@ bool AudioSystem::isUltrasoundSupported() {
         bool retVal;
         RETURN_IF_ERROR(
                 statusTFromBinderStatus(aps->isUltrasoundSupported(&retVal)));
+        return retVal;
+    }();
+    return result.value_or(false);
+}
+
+bool AudioSystem::setIsCERegion(bool isCERegion)
+{
+    const sp<IAudioPolicyService>& aps = AudioSystem::get_audio_policy_service();
+    if (aps == 0) return false;
+
+    auto result = [&]() -> ConversionResult<bool> {
+        bool retVal;
+        RETURN_IF_ERROR(
+                statusTFromBinderStatus(aps->setIsCERegion(isCERegion, &retVal)));
         return retVal;
     }();
     return result.value_or(false);

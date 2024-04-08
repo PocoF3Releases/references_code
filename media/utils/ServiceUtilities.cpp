@@ -16,6 +16,10 @@
 
 #define LOG_TAG "ServiceUtilities"
 
+// MIUI ADD START
+#include <android-base/properties.h>
+#include <cutils/properties.h>
+// MIUI ADD END
 #include <audio_utils/clock.h>
 #include <binder/AppOpsManager.h>
 #include <binder/IPCThreadState.h>
@@ -113,6 +117,32 @@ std::optional<AttributionSourceState> resolveAttributionSource(
     return std::optional<AttributionSourceState>{myAttributionSource};
 }
 
+// MIUI ADD START
+bool blockWhenInvisible(uid_t uid, String16& pkgName) {
+    bool blockMode = false;
+    char invisibleState[PROPERTY_VALUE_MAX] = { 0 };
+    property_get("persist.sys.invisible_mode", invisibleState, "0");
+    if (!strncmp(invisibleState, "1", 1)) {
+        if (multiuser_get_app_id(uid) == AID_SYSTEM) {
+            PermissionController permissionController;
+            if (!String16("com.miui.screenrecorder").compare(resolveCallingPackage(
+                permissionController, pkgName, uid))) {
+                blockMode = true;
+            }
+        } else {
+            AppOpsManager appOps;
+            PermissionController permissionController;
+            blockMode = appOps.noteOp(AppOpsManager::OP_RECORD_AUDIO, uid, resolveCallingPackage(
+                    permissionController, pkgName, uid)) == AppOpsManager::MODE_IGNORED;
+        }
+    }
+    if (blockMode) {
+        ALOGE("MIUILOG-RecordAudio Request denied for invisible mode");
+    }
+    return blockMode;
+}
+// MIUI ADD END
+
 static bool checkRecordingInternal(const AttributionSourceState& attributionSource,
         const String16& msg, bool start, audio_source_t source) {
     // Okay to not track in app ops as audio server or media server is us and if
@@ -121,6 +151,13 @@ static bool checkRecordingInternal(const AttributionSourceState& attributionSour
     // user is active, but it is a core system service so let it through.
     // TODO(b/141210120): UserManager.DISALLOW_RECORD_AUDIO should not affect system user 0
     uid_t uid = VALUE_OR_FATAL(aidl2legacy_int32_t_uid_t(attributionSource.uid));
+    // MIUI ADD: START
+    String16 pkgName = VALUE_OR_FATAL(aidl2legacy_string_view_String16(
+        attributionSource.packageName.value_or("")));
+    if(blockWhenInvisible(uid, pkgName)) {
+        return false;
+    }
+    // MIUI ADD:END
     if (isAudioServerOrMediaServerOrSystemServerOrRootUid(uid)) return true;
 
     // We specify a pid and uid here as mediaserver (aka MediaRecorder or StageFrightRecorder)
@@ -129,6 +166,7 @@ static bool checkRecordingInternal(const AttributionSourceState& attributionSour
     const std::optional<AttributionSourceState> resolvedAttributionSource =
             resolveAttributionSource(attributionSource);
     if (!resolvedAttributionSource.has_value()) {
+        ALOGW("Request denied by app op: AttributionSource no value");
         return false;
     }
 
@@ -145,6 +183,8 @@ static bool checkRecordingInternal(const AttributionSourceState& attributionSour
                 sAndroidPermissionRecordAudio, resolvedAttributionSource.value(), msg,
                 attributedOpCode) != permission::PermissionChecker::PERMISSION_HARD_DENIED);
     }
+    if (!permitted)
+        ALOGW("Request denied by app op: android.permission.RECORD_AUDIO when start %d ", start);
 
     return permitted;
 }
@@ -389,6 +429,156 @@ sp<content::pm::IPackageManagerNative> MediaPackageManager::retrievePackageManag
     return interface_cast<content::pm::IPackageManagerNative>(packageManager);
 }
 
+//MIUI ADD START
+/*white list of players which can be capture by MediaProjection even targetSDK < 29*/
+std::string allowedPlaybackCaptureWhiteList[] = {
+    "com.netflix.mediaclient",
+    "com.hulu.plus",
+    "com.amazon.avod.thirdpartyclient",
+    "com.tubitv",
+    "com.hbo.hbonow",
+    "com.gotv.crackle.handset",
+    "tv.twitch.android.app",
+    "com.disney.disneyplus",
+    "com.imdb.mobile",
+    "com.cbs.app",
+    "com.microsoft.xboxone.smartglass",
+    "com.cw.fullepisodes.android",
+    "com.TWCableTV",
+    "com.fox.now",
+    "com.nbcuni.nbc",
+    "com.disney.datg.videoplatforms.android.abc",
+    "com.disney.datg.videoplatforms.android.watchdc",
+    "com.peacocktv.peacockandroid",
+    "com.hulu.livingroomplus",
+    "com.cbs.ott",
+    "com.google.android.youtube",
+    "com.mxtech.videoplayer.ad",
+    "com.facebook.orca",
+    "com.facebook.katana",
+    "com.instagram.android",
+    "com.snapchat.android",
+    "com.whatsapp",
+    "com.skype.raider",
+    "com.twitter.android",
+    "com.zhiliaoapp.musically",
+    "kik.android",
+    "com.jb.gosms",
+    "com.tumblr",
+    "com.viber.voip",
+    "jp.naver.line.android",
+    "com.android.chrome",
+    "com.myyearbook.m",
+    "com.reddit.frontpage",
+    "com.facebook.mlite",
+    "com.textmeinc.textme",
+    "org.telegram.messenger",
+    "com.tencent.mm",
+    "com.ss.android.ugc.aweme",
+    "com.android.browser",
+    "com.tencent.mobileqq",
+    "com.miui.video",
+    "com.smile.gifmaker",
+    "com.ss.android.ugc.aweme.lite",
+    "com.kuaishou.nebula",
+    "com.tencent.mtt",
+    "tv.danmaku.bili",
+    "com.sina.weibo",
+    "com.UCMobile",
+    "com.tencent.qqlive",
+    "com.kugou.android",
+    "com.netease.cloudmusic",
+    "com.tencent.qqmusic",
+    "com.qiyi.video",
+    "com.miui.player",
+    "com.zhihu.android",
+    "com.ss.android.article.video",
+    "com.xingin.xhs",
+    "com.ximalaya.ting.android",
+    "com.ss.android.ugc.live",
+    "com.youku.phone",
+    "com.quark.browser",
+    "com.tencent.weishi",
+    "com.baidu.tieba",
+    "com.duowan.kiwi",
+    "com.baidu.haokan",
+    "air.tv.douyu.android",
+    "com.baidu.searchbox.lite",
+    "com.xiaomi.vipaccount",
+    "com.tencent.gamehelper.smoba",
+    "cn.soulapp.android",
+    "cn.kuwo.player",
+    "com.hunantv.imgo.activity",
+    "com.immomo.momo",
+    "com.tencent.qt.qtl",
+    "cn.xiaochuankeji.tieba",
+    "com.sup.android.superb",
+    "com.le123.ysdq",
+    "com.p1.mobile.putong",
+    "com.babycloud.hanju",
+    "com.mihoyo.hyperion",
+    "com.cctv.yangshipin.app.androidp",
+    "com.douban.frodo",
+    "com.yuncheapp.android.pearl",
+    "com.zhongduomei.rrmj.society",
+    "cmccwm.mobilemusic",
+    "com.cmcc.cmvideo",
+    "cn.cntv",
+    "tv.pps.mobile",
+    "com.ume.browser.hs",
+    "mark.via",
+    "com.kuaiyin.player",
+    "com.duowan.mobile",
+    "com.ss.android.ugc.livelite",
+    "fm.qingting.qtradio",
+    "com.qiyi.video.lite",
+    "com.qihoo.browser",
+    "com.sogou.activity.src",
+    "org.mozilla.firefox",
+    "com.all.video",
+    "com.ucmobile.lite",
+    "sogou.mobile.explorer",
+    "com.microsoft.emmx",
+    "com.xfplay.play",
+    "com.tencent.qgame",
+    "tv.acfundanmaku.video",
+    "com.wondertek.miguaikan",
+    "com.qihoo.contents",
+    "com.baidu.video",
+    "com.jovetech.CloudSee.temp",
+    "cn.vcinema.cinema",
+    "com.wali.live",
+    "com.tencent.nbagametime",
+    "com.sohu.sohuvideo",
+    "com.baidu.browser.apps",
+    "tv.yixia.bobo",
+    "com.huajiao",
+    "com.tencent.tv.qie",
+    "com.kugou.fanxing",
+    "com.baidu.searchcraft",
+    "com.kwai.thanos",
+    "com.tencent.videolite.android",
+    "com.tencent.now",
+    "com.iyuba.ted",
+    "com.tencent.tmgp.sgame",
+    "com.tencent.tmgp.pubgmhd",
+};
+
+bool isInWhiteList( std::string packageName)
+{
+    bool boRet = false;
+    uint32_t size = sizeof(allowedPlaybackCaptureWhiteList) / sizeof(allowedPlaybackCaptureWhiteList[0]);
+    uint32_t i;
+    for (i = 0; i < size; i++) {
+        if (!strcmp(packageName.c_str(), allowedPlaybackCaptureWhiteList[i].c_str())) {
+            boRet = true;
+            break;
+        }
+    }
+    return boRet;
+}
+//END
+
 std::optional<bool> MediaPackageManager::doIsAllowed(uid_t uid) {
     if (mPackageManager == nullptr) {
         /** Can not fetch package manager at construction it may not yet be registered. */
@@ -435,7 +625,16 @@ std::optional<bool> MediaPackageManager::doIsAllowed(uid_t uid) {
     // Only allow playback record if all packages in this UID allow it
     bool playbackCaptureAllowed = std::all_of(begin(isAllowed), end(isAllowed),
                                                   [](bool b) { return b; });
-
+    //MIUI ADD START
+    if (!playbackCaptureAllowed){
+        for (const auto& package : packages) {
+            if (isInWhiteList(package.name)) {
+                playbackCaptureAllowed = true;
+                break;
+            }
+        }
+    }
+    //END
     return playbackCaptureAllowed;
 }
 

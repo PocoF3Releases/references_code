@@ -16,7 +16,7 @@
 */
 
 #define LOG_TAG "IAudioFlinger"
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
 
 #include <utils/Log.h>
 
@@ -381,11 +381,13 @@ bool AudioFlingerClientAdapter::getMicMute() const {
     return result.value_or(false);
 }
 
-void AudioFlingerClientAdapter::setRecordSilenced(audio_port_handle_t portId, bool silenced) {
+void AudioFlingerClientAdapter::setRecordSilenced(audio_port_handle_t portId, audio_app_type_f appType, bool silenced) {
     auto result = [&]() -> status_t {
         int32_t portIdAidl = VALUE_OR_RETURN_STATUS(
                 legacy2aidl_audio_port_handle_t_int32_t(portId));
-        return statusTFromBinderStatus(mDelegate->setRecordSilenced(portIdAidl, silenced));
+        int32_t appTypeAidl = VALUE_OR_RETURN_STATUS(
+                legacy2aidl_audio_app_type_f_int32_t(appType));
+        return statusTFromBinderStatus(mDelegate->setRecordSilenced(portIdAidl, appTypeAidl, silenced));
     }();
     // Failure is ignored.
     (void) result;
@@ -762,6 +764,20 @@ status_t AudioFlingerClientAdapter::setAudioHalPids(const std::vector<pid_t>& pi
     return statusTFromBinderStatus(mDelegate->setAudioHalPids(pidsAidl));
 }
 
+// MIUI ADD: START
+status_t AudioFlingerClientAdapter::pauseAudioTracks(uid_t uid, pid_t pid) {
+    int32_t uidAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_uid_t_int32_t(uid));
+    int32_t pidAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_pid_t_int32_t(pid));
+    return statusTFromBinderStatus(mDelegate->pauseAudioTracks(uidAidl, pidAidl));
+}
+
+status_t AudioFlingerClientAdapter::resumeAudioTracks(uid_t uid, pid_t pid) {
+    int32_t uidAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_uid_t_int32_t(uid));
+    int32_t pidAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_pid_t_int32_t(pid));
+    return statusTFromBinderStatus(mDelegate->resumeAudioTracks(uidAidl, pidAidl));
+}
+// END
+
 status_t AudioFlingerClientAdapter::setVibratorInfos(
         const std::vector<media::AudioVibratorInfo>& vibratorInfos) {
     return statusTFromBinderStatus(mDelegate->setVibratorInfos(vibratorInfos));
@@ -950,10 +966,12 @@ Status AudioFlingerServerAdapter::getMicMute(bool* _aidl_return) {
     return Status::ok();
 }
 
-Status AudioFlingerServerAdapter::setRecordSilenced(int32_t portId, bool silenced) {
+Status AudioFlingerServerAdapter::setRecordSilenced(int32_t portId, int32_t appType, bool silenced) {
     audio_port_handle_t portIdLegacy = VALUE_OR_RETURN_BINDER(
             aidl2legacy_int32_t_audio_port_handle_t(portId));
-    mDelegate->setRecordSilenced(portIdLegacy, silenced);
+    audio_app_type_f appTypeLegacy = VALUE_OR_RETURN_BINDER(
+            aidl2legacy_int32_t_audio_app_type_f(appType));
+    mDelegate->setRecordSilenced(portIdLegacy, appTypeLegacy, silenced);
     return Status::ok();
 }
 
@@ -1266,6 +1284,22 @@ Status AudioFlingerServerAdapter::setAudioHalPids(const std::vector<int32_t>& pi
     RETURN_BINDER_IF_ERROR(mDelegate->setAudioHalPids(pidsLegacy));
     return Status::ok();
 }
+
+// MIUI ADD: START
+Status AudioFlingerServerAdapter::pauseAudioTracks(int32_t uid, pid_t pid)
+{
+    uid_t uidLegacy = VALUE_OR_RETURN_BINDER(aidl2legacy_int32_t_uid_t(uid));
+    uid_t pidLegacy = VALUE_OR_RETURN_BINDER(aidl2legacy_int32_t_pid_t(pid));
+    return Status::fromStatusT(mDelegate->pauseAudioTracks(uidLegacy, pidLegacy));
+}
+
+Status AudioFlingerServerAdapter::resumeAudioTracks(int32_t uid, pid_t pid)
+{
+    uid_t uidLegacy = VALUE_OR_RETURN_BINDER(aidl2legacy_int32_t_uid_t(uid));
+    uid_t pidLegacy = VALUE_OR_RETURN_BINDER(aidl2legacy_int32_t_pid_t(pid));
+    return Status::fromStatusT(mDelegate->resumeAudioTracks(uidLegacy, pidLegacy));
+}
+// END
 
 Status AudioFlingerServerAdapter::setVibratorInfos(
         const std::vector<media::AudioVibratorInfo>& vibratorInfos) {

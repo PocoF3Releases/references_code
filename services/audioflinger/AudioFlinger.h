@@ -78,6 +78,8 @@
 #include <mediautils/Synchronization.h>
 #include <mediautils/ThreadSnapshot.h>
 
+#include <media/RecordBufferConverter.h>
+
 #include <audio_utils/clock.h>
 #include <audio_utils/FdToString.h>
 #include <audio_utils/LinearMap.h>
@@ -104,6 +106,9 @@
 #include <vibrator/ExternalVibration.h>
 #include <vibrator/ExternalVibrationUtils.h>
 
+// MIUI ADD: DOLBY_ENABLE
+#include "ds_config.h"
+
 #include "android/media/BnAudioRecord.h"
 #include "android/media/BnEffect.h"
 
@@ -118,7 +123,7 @@ class DevicesFactoryHalInterface;
 class EffectsFactoryHalInterface;
 class FastMixer;
 class PassthruBufferProvider;
-class RecordBufferConverter;
+//class RecordBufferConverter;
 class ServerProxy;
 
 // ----------------------------------------------------------------------------
@@ -175,7 +180,7 @@ public:
     virtual     status_t    setMicMute(bool state);
     virtual     bool        getMicMute() const;
 
-    virtual     void        setRecordSilenced(audio_port_handle_t portId, bool silenced);
+    virtual     void        setRecordSilenced(audio_port_handle_t portId, audio_app_type_f appType, bool silenced);
 
     virtual     status_t    setParameters(audio_io_handle_t ioHandle, const String8& keyValuePairs);
     virtual     String8     getParameters(audio_io_handle_t ioHandle, const String8& keys) const;
@@ -293,6 +298,12 @@ public:
 
     virtual status_t setDeviceConnectedState(const struct audio_port_v7 *port, bool connected);
 
+    // MIUI ADD: START
+    virtual status_t pauseAudioTracks(uid_t uid, pid_t pid);
+
+    virtual status_t resumeAudioTracks(uid_t uid, pid_t pid);
+    // END
+
     status_t onTransactWrapper(TransactionCode code, const Parcel& data, uint32_t flags,
         const std::function<status_t()>& delegate) override;
 
@@ -333,6 +344,7 @@ private:
     // for as long as possible.  The memory is only freed when it is needed for another log writer.
     Vector< sp<NBLog::Writer> > mUnregisteredWriters;
     Mutex               mUnregisteredWritersLock;
+    bool mbFadeFeatureOn;
 
 public:
     // Life cycle of gAudioFlinger and AudioFlinger:
@@ -487,7 +499,9 @@ private:
 
     SimpleLog mThreadLog{16}; // 16 Thread history limit
 
+public:
     class ThreadBase;
+private:
     void dumpToThreadLog_l(const sp<ThreadBase> &thread);
 
     // --- Client ---
@@ -565,8 +579,10 @@ private:
     // Requests media.log to start merging log buffers
     void requestLogMerge();
 
+    class Track;
     class TrackHandle;
     class RecordHandle;
+public:
     class RecordThread;
     class PlaybackThread;
     class MixerThread;
@@ -574,13 +590,14 @@ private:
     class OffloadThread;
     class DuplicatingThread;
     class AsyncCallbackThread;
-    class Track;
     class RecordTrack;
+
     class EffectBase;
     class EffectModule;
     class EffectHandle;
     class EffectChain;
     class DeviceEffectProxy;
+private:
     class DeviceEffectManager;
     class PatchPanel;
     class DeviceEffectManagerCallback;
@@ -619,12 +636,14 @@ using effect_buffer_t = float;
 using effect_buffer_t = int16_t;
 #endif
 
+public:
 #include "Threads.h"
 
+private:
 #include "PatchPanel.h"
-
+public:
 #include "Effects.h"
-
+private:
 #include "DeviceEffectManager.h"
 
     // Find io handle by session id.
@@ -675,6 +694,7 @@ using effect_buffer_t = int16_t;
         binder::Status getDualMonoMode(media::AudioDualMonoMode* _aidl_return) override;
         binder::Status setDualMonoMode(media::AudioDualMonoMode mode) override;
         binder::Status getAudioDescriptionMixLevel(float* _aidl_return) override;
+        binder::Status setFastTrackType(bool isFastTrack); //specified a track is a FAST_TRACK
         binder::Status setAudioDescriptionMixLevel(float leveldB) override;
         binder::Status getPlaybackRateParameters(
                 media::AudioPlaybackRate* _aidl_return) override;
@@ -883,6 +903,8 @@ using effect_buffer_t = int16_t;
                 // NOTE: If both mLock and mHardwareLock mutexes must be held,
                 // always take mLock before mHardwareLock
 
+                //MIUI MODIFICATION
+                sp<PlaybackThread> mPrimaryThread;
                 // guarded by mHardwareLock
                 AudioHwDevice* mPrimaryHardwareDev;
                 DefaultKeyedVector<audio_module_handle_t, AudioHwDevice*>  mAudioHwDevs;
@@ -967,6 +989,8 @@ private:
     sp<Client>  registerPid(pid_t pid);    // always returns non-0
 
     // for use from destructor
+    status_t replaceTrack(audio_io_handle_t dup_io, audio_io_handle_t old_io,
+                                  audio_io_handle_t new_io);
     status_t    closeOutput_nonvirtual(audio_io_handle_t output);
     void        closeThreadInternal_l(const sp<PlaybackThread>& thread);
     status_t    closeInput_nonvirtual(audio_io_handle_t input);
@@ -1013,6 +1037,7 @@ private:
     std::vector<media::AudioVibratorInfo> mAudioVibratorInfos;
 
     static inline constexpr const char *mMetricsId = AMEDIAMETRICS_KEY_AUDIO_FLINGER;
+    static String16 getPackageName(uid_t uid);
 
     // Keep in sync with java definition in media/java/android/media/AudioRecord.java
     static constexpr int32_t kMaxSharedAudioHistoryMs = 5000;
@@ -1021,6 +1046,9 @@ private:
              std::vector<media::audio::common::AudioMMapPolicyInfo>> mPolicyInfos;
     int32_t mAAudioBurstsPerBuffer = 0;
     int32_t mAAudioHwBurstMinMicros = 0;
+
+// MIUI ADD: DOLBY_ENABLE
+#include "EffectDapController.h"
 };
 
 #undef INCLUDING_FROM_AUDIOFLINGER_H

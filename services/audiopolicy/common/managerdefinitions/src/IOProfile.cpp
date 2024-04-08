@@ -15,7 +15,8 @@
  */
 
 #define LOG_TAG "APM::IOProfile"
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
+#define LOG_NDEBUG_ASSERT 0
 
 #include <system/audio.h>
 #include "IOProfile.h"
@@ -33,13 +34,17 @@ bool IOProfile::isCompatibleProfile(const DeviceVector &devices,
                                     audio_channel_mask_t *updatedChannelMask,
                                     // FIXME type punning here
                                     uint32_t flags,
-                                    bool exactMatchRequiredForInputFlags) const
+                                    bool exactMatchRequiredForInputFlags,
+                                    bool checkExactFormat,
+                                    bool checkExactChannelMask) const
 {
     const bool isPlaybackThread =
             getType() == AUDIO_PORT_TYPE_MIX && getRole() == AUDIO_PORT_ROLE_SOURCE;
     const bool isRecordThread =
             getType() == AUDIO_PORT_TYPE_MIX && getRole() == AUDIO_PORT_ROLE_SINK;
+#if LOG_NDEBUG_ASSERT
     ALOG_ASSERT(isPlaybackThread != isRecordThread);
+#endif
 
     if (!devices.isEmpty()) {
         if (!mSupportedDevices.containsAllDevices(devices)) {
@@ -69,7 +74,8 @@ bool IOProfile::isCompatibleProfile(const DeviceVector &devices,
                 return false;
             }
         } else if (checkCompatibleAudioProfile(
-                myUpdatedSamplingRate, myUpdatedChannelMask, myUpdatedFormat) != NO_ERROR) {
+                myUpdatedSamplingRate, myUpdatedChannelMask, myUpdatedFormat, checkExactFormat,
+                checkExactChannelMask) != NO_ERROR) {
             return false;
         }
     } else {

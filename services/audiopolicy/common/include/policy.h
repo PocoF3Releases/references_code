@@ -35,7 +35,7 @@ static const uint32_t SONIFICATION_RESPECTFUL_AFTER_MUSIC_DELAY = 5000;
 
 // For mixed output and inputs, the policy will use max mixer sampling rates.
 // Do not limit sampling rate otherwise
-#define SAMPLE_RATE_HZ_MAX 192000
+#define SAMPLE_RATE_HZ_MAX 384000
 
 // Used when a client opens a capture stream, without specifying a desired sample rate.
 #define SAMPLE_RATE_HZ_DEFAULT 48000
@@ -235,6 +235,35 @@ static inline audio_devices_t apm_extract_one_audio_device(
             return AUDIO_DEVICE_OUT_AUX_LINE;
         } else if (deviceTypes.count(AUDIO_DEVICE_OUT_SPDIF) != 0) {
             return AUDIO_DEVICE_OUT_SPDIF;
+        // MIUI ADD: support AUDIO_DEVICE_OUT_WIRED_HEADSET and AUDIO_DEVICE_OUT_WIRED_HEADPHONE
+        } else if(deviceTypes.count(AUDIO_DEVICE_OUT_REMOTE_SUBMIX) != 0) {
+            if (deviceTypes.count(AUDIO_DEVICE_OUT_WIRED_HEADSET) != 0) {
+                return AUDIO_DEVICE_OUT_WIRED_HEADSET;
+            } else if (deviceTypes.count(AUDIO_DEVICE_OUT_WIRED_HEADPHONE) != 0) {
+                return AUDIO_DEVICE_OUT_WIRED_HEADPHONE;
+            } else if (deviceTypes.count(AUDIO_DEVICE_OUT_USB_DEVICE) != 0) {
+                return AUDIO_DEVICE_OUT_USB_DEVICE;
+            } else if (deviceTypes.count(AUDIO_DEVICE_OUT_USB_HEADSET) != 0) {
+                return AUDIO_DEVICE_OUT_USB_HEADSET;
+            } else if (deviceTypes.count(AUDIO_DEVICE_OUT_BLUETOOTH_SCO) != 0) {
+                return AUDIO_DEVICE_OUT_BLUETOOTH_SCO;
+            } else if (deviceTypes.count(AUDIO_DEVICE_OUT_BLUETOOTH_SCO_HEADSET) != 0) {
+                return AUDIO_DEVICE_OUT_BLUETOOTH_SCO_HEADSET;
+            } else if (deviceTypes.count(AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_SPEAKER) != 0) {
+                return AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_SPEAKER;
+            } else if (deviceTypes.count(AUDIO_DEVICE_OUT_BLUETOOTH_SCO_CARKIT) != 0) {
+                return AUDIO_DEVICE_OUT_BLUETOOTH_SCO_CARKIT;
+            } else if (deviceTypes.count(AUDIO_DEVICE_OUT_BLUETOOTH_A2DP) != 0) {
+                return AUDIO_DEVICE_OUT_BLUETOOTH_A2DP;
+            } else if (deviceTypes.count(AUDIO_DEVICE_OUT_BLE_HEADSET) != 0) {
+                return AUDIO_DEVICE_OUT_BLE_HEADSET;
+            } else if (deviceTypes.count(AUDIO_DEVICE_OUT_BLE_SPEAKER) != 0) {
+                return AUDIO_DEVICE_OUT_BLE_SPEAKER;
+            } else {
+                ALOGW("%s() miss the correct deviceType(%s)", __func__, android::dumpDeviceTypes(deviceTypes).c_str());
+                return AUDIO_DEVICE_NONE;
+            }
+        //END
         } else {
             std::vector<audio_devices_t> a2dpDevices = android::Intersection(
                     deviceTypes, android::getAudioDeviceOutAllA2dpSet());

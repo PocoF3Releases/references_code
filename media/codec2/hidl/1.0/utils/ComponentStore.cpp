@@ -41,6 +41,7 @@
 #include <C2Config.h>
 #include <DefaultFilterPlugin.h>
 #include <FilterWrapper.h>
+#include <android-base/properties.h>
 #endif
 
 namespace android {
@@ -190,6 +191,15 @@ std::shared_ptr<FilterWrapper> ComponentStore::GetFilterWrapper() {
     constexpr const char kPluginPath[] = "libc2filterplugin.so";
     static std::shared_ptr<FilterWrapper> wrapper = FilterWrapper::Create(
             std::make_unique<DefaultFilterPlugin>(kPluginPath));
+    // add dolby vision transcoding
+    constexpr const char filterPluginPath[] = "libsamplefilterplugin.so";
+    static std::shared_ptr<FilterWrapper> transcodingWrapper = FilterWrapper::Create(
+            std::make_unique<DefaultFilterPlugin>(filterPluginPath));
+    int mediatranscodingEnable = base::GetIntProperty( "debug.media.transcoding.filter_plugin_enable",0);
+    if (mediatranscodingEnable == 1) {
+        return transcodingWrapper;
+    }
+    // add dolby vision transcoding
     return wrapper;
 }
 #endif

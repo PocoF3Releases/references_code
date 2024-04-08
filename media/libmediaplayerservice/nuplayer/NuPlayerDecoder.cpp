@@ -39,10 +39,19 @@
 #include <media/stagefright/MediaCodec.h>
 #include <media/stagefright/MediaDefs.h>
 #include <media/stagefright/MediaErrors.h>
+#include <stagefright/AVExtensions.h>
+#include "mediaplayerservice/AVNuExtensions.h"
 #include <media/stagefright/SurfaceUtils.h>
 #include <mpeg2ts/ATSParser.h>
 #include <gui/Surface.h>
+//MIUI ADD: start MIAUDIO_OZO
+#include <MediaStub.h>
+//MIUI ADD: end
+#include <media/stagefright/MediaCodecList.h>
 
+static const bool kSupportOZO = property_get_bool("ro.vendor.audio.zoom.support", false );
+static const bool kSupportDolbyVisionOMX = property_get_bool("ro.video.dolby_vision_omx", false);
+static const bool kSupportDolbyVisionC2 = property_get_bool("ro.video.dolby_vision_c2", false);
 namespace android {
 
 static float kDisplayRefreshingRate = 60.f; // TODO: get this from the display
@@ -89,7 +98,8 @@ NuPlayer::Decoder::Decoder(
       mNumVideoTemporalLayerAllowed(1),
       mCurrentMaxVideoTemporalLayerId(0),
       mResumePending(false),
-      mComponentName("decoder") {
+      mComponentName("decoder"),
+      mVideoRenderFps(0.0f) {
     mCodecLooper = new ALooper;
     mCodecLooper->setName("NPDecoder-CL");
     mCodecLooper->start(false, false, ANDROID_PRIORITY_AUDIO);
@@ -103,6 +113,11 @@ NuPlayer::Decoder::~Decoder() {
         mCodec->release();
     }
     releaseAndResetMediaBuffers();
+//MIUI ADD: start MIAUDIO_OZO
+    if (kSupportOZO && mOzoPlayCtrl) {
+        MediaStub::destroyOzoPlayCtrl( mOzoPlayCtrl );
+    }
+//MIUI ADD: end
 }
 
 sp<AMessage> NuPlayer::Decoder::getStats() {
@@ -156,7 +171,11 @@ void NuPlayer::Decoder::onMessageReceived(const sp<AMessage> &msg) {
                 {
                     int32_t index;
                     CHECK(msg->findInt32("index", &index));
-
+//MIUI ADD: start MIAUDIO_OZO
+                    if(kSupportOZO){
+                        MediaStub::ozoPlayCtrlSignal(mCodec, mOzoPlayCtrl);
+                    }
+//MIUI ADD: end
                     handleAnInputBuffer(index);
                     break;
                 }
@@ -295,13 +314,26 @@ void NuPlayer::Decoder::onConfigure(const sp<AMessage> &format) {
 
     mIsAudio = !strncasecmp("audio/", mime.c_str(), 6);
     mIsVideoAVC = !strcasecmp(MEDIA_MIMETYPE_VIDEO_AVC, mime.c_str());
-
+//MIUI ADD: start MIAUDIO_OZO
+    if (kSupportOZO && mIsAudio)
+        MediaStub::tryOzoAudioConfigureImpl(format, mime, mOzoPlayCtrl);
+//MIUI ADD: end
     mComponentName = mime;
     mComponentName.append(" decoder");
     ALOGV("[%s] onConfigure (surface=%p)", mComponentName.c_str(), mSurface.get());
 
-    mCodec = MediaCodec::CreateByType(
-            mCodecLooper, mime.c_str(), false /* encoder */, NULL /* err */, mPid, mUid, format);
+    // Workaround to make AVC and HEVC coexist
+    if ((kSupportDolbyVisionOMX || kSupportDolbyVisionC2)
+            && !strcmp(mime.c_str(), MEDIA_MIMETYPE_VIDEO_DOLBY_VISION)) {
+        dolbyVisionDecoderOnConfigure(mime, format);
+    } else {
+        mCodec = AVUtils::get()->createCustomComponentByName(mCodecLooper, mime.c_str(), false /* encoder */, format);
+        if (mCodec == NULL) {
+            mCodec = MediaCodec::CreateByType(
+                    mCodecLooper, mime.c_str(), false /* encoder */, NULL /* err */, mPid, mUid, format);
+        }
+    }
+
     int32_t secure = 0;
     if (format->findInt32("secure", &secure) && secure != 0) {
         if (mCodec != NULL) {
@@ -345,6 +377,8 @@ void NuPlayer::Decoder::onConfigure(const sp<AMessage> &format) {
     mIsEncryptedObservedEarlier = mIsEncryptedObservedEarlier || mIsEncrypted;
     ALOGV("onConfigure mCrypto: %p (%d)  mIsSecure: %d",
             crypto.get(), (crypto != NULL ? crypto->getStrongCount() : 0), mIsSecure);
+    // set flag to drop frame with corrupt flag
+    format->setInt32("vendor.qti-ext-dec-drop-corrupt.value", 1);
 
     err = mCodec->configure(
             format, mSurface, crypto, 0 /* flags */);
@@ -435,6 +469,7 @@ void NuPlayer::Decoder::onSetParameters(const sp<AMessage> &params) {
 
     if (needAdjustLayers) {
         float decodeFrameRate = mFrameRateTotal;
+        float operating_rate;
         // enable temporal layering optimization only if we know the layering depth
         if (mNumVideoTemporalLayerTotal > 1) {
             int32_t layerId;
@@ -456,7 +491,10 @@ void NuPlayer::Decoder::onSetParameters(const sp<AMessage> &params) {
         }
 
         sp<AMessage> codecParams = new AMessage();
-        codecParams->setFloat("operating-rate", decodeFrameRate * mPlaybackSpeed);
+        operating_rate = decodeFrameRate * mPlaybackSpeed;
+        if ((int)operating_rate > 100)
+            mRequestInputBufferDelay = (1000.f/operating_rate) * 1000LL;
+        codecParams->setFloat("operating-rate", operating_rate);
         mCodec->setParameters(codecParams);
     }
 }
@@ -755,6 +793,11 @@ bool NuPlayer::Decoder::handleAnOutputBuffer(
         buffer->meta()->setInt64("frameIndex", frameIndex);
     }
 
+    if (mVideoRenderFps > 0.0f) {
+        buffer->meta()->setFloat("renderFps", mVideoRenderFps);
+        mVideoRenderFps = 0.0f; //Reset the value after setting to renderer once
+    }
+
     bool eos = flags & MediaCodec::BUFFER_FLAG_EOS;
     // we do not expect CODECCONFIG or SYNCFRAME for decoder
 
@@ -788,6 +831,12 @@ bool NuPlayer::Decoder::handleAnOutputBuffer(
         }
 
         mSkipRenderingUntilMediaTimeUs = -1;
+    } else if ((flags & MediaCodec::BUFFER_FLAG_DATACORRUPT) &&
+            AVNuUtils::get()->dropCorruptFrame()) {
+        ALOGV("[%s] dropping corrupt buffer at time %lld as requested.",
+                     mComponentName.c_str(), (long long)timeUs);
+        reply->post();
+        return true;
     }
 
     // wait until 1st frame comes out to signal resume complete
@@ -817,6 +866,14 @@ void NuPlayer::Decoder::handleOutputFormatChange(const sp<AMessage> &format) {
         notify->setInt32("what", kWhatVideoSizeChanged);
         notify->setMessage("format", format);
         notify->post();
+
+        // Use the render rate from decoder, if decoder has set it.
+        float renderRate = 0.0f;
+        if (format->findFloat("vendor.qti-ext-dec-output-render-frame-rate.value",
+                 &renderRate) && renderRate > 0.0f) {
+            mVideoRenderFps = renderRate;
+            ALOGI("Got video render rate from decoder as %f", mVideoRenderFps);
+        }
     } else if (mRenderer != NULL) {
         uint32_t flags;
         int64_t durationUs;
@@ -905,6 +962,7 @@ status_t NuPlayer::Decoder::fetchInputData(sp<AMessage> &reply) {
                     // treat seamless format change separately
                     formatChange = !seamlessFormatChange;
                 }
+                AVNuUtils::get()->checkFormatChange(&formatChange, accessUnit);
 
                 // For format or time change, return EOS to queue EOS input,
                 // then wait for EOS on output.
@@ -1049,6 +1107,14 @@ bool NuPlayer::Decoder::onInputBufferFetched(const sp<AMessage> &msg) {
                         mComponentName.c_str(), (long long)resumeAtMediaTimeUs);
                 mSkipRenderingUntilMediaTimeUs = resumeAtMediaTimeUs;
             }
+        }
+
+        sp<ABuffer> hdr10PlusInfo;
+        if (buffer->meta()->findBuffer("hdr10-plus-info", &hdr10PlusInfo) &&
+                hdr10PlusInfo != NULL) {
+           sp<AMessage> hdr10PlusMsg = new AMessage;
+           hdr10PlusMsg->setBuffer("hdr10-plus-info", hdr10PlusInfo);
+           mCodec->setParameters(hdr10PlusMsg);
         }
 
         int64_t timeUs = 0;
@@ -1327,6 +1393,49 @@ void NuPlayer::Decoder::notifyResumeCompleteIfNecessary() {
         notify->post();
     }
 }
+
+// DLB_VISION begin
+void NuPlayer::Decoder::dolbyVisionDecoderOnConfigure(const AString &mime,
+                const sp<AMessage> &format) {
+    ALOGV("dolby vision decoder onConfigure");
+    Vector<AString> matchingCodecs;
+    MediaCodecList::findMatchingCodecs(mime.c_str(),
+            false,  // createEncoder
+            0,      // flags
+            &matchingCodecs);
+    int codecProfile = -1;
+    format->findInt32("profile", &codecProfile);
+
+    Vector<AString> dolbyCodecs;
+    sp<IMediaCodecList> mcl = MediaCodecList::getInstance();
+    if (mcl.get() != NULL) {
+        for (size_t i = 0; i < matchingCodecs.size(); ++i) {
+            AString codecName = matchingCodecs[i].c_str();
+            // OMX_VIDEO_DolbyVisionProfileDvavSe (512)
+            if (codecName.endsWithIgnoreCase("hevc") &&
+                    codecProfile < 512) {
+                dolbyCodecs.push_back(matchingCodecs[i]);
+                break;
+            } else if (codecName.endsWithIgnoreCase("avc") &&
+                    codecProfile == 512) {
+                dolbyCodecs.push_back(matchingCodecs[i]);
+                break;
+            } else if (codecName.find("avc-hevc") >= 0 &&
+                    codecProfile <= 512 && kSupportDolbyVisionC2) {
+                dolbyCodecs.push_back(matchingCodecs[i]);
+                break;
+            }
+        }
+    }
+
+    if (dolbyCodecs.size() > 0) {
+        mComponentName = dolbyCodecs[0];
+        ALOGI("[%s] creating dolby decoder", mComponentName.c_str());
+        mCodec = MediaCodec::CreateByComponentName(
+            mCodecLooper, mComponentName.c_str(), NULL /* err */, mPid, mUid);
+    }
+}
+// DLB_VISION end
 
 }  // namespace android
 

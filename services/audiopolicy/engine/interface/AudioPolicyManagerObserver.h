@@ -51,6 +51,8 @@ public:
 
     virtual const sp<DeviceDescriptor> &getDefaultOutputDevice() const = 0;
 
+
+
 protected:
     virtual ~AudioPolicyManagerObserver() {}
 };

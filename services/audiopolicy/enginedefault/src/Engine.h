@@ -48,6 +48,13 @@ public:
     Engine();
     virtual ~Engine() = default;
 
+    //MIUI ADD: MIAUDIO_MULTI_ROUTE
+    bool setForceSkipDevice(audio_skip_device_t skipDevive) override;
+
+    bool mForceSkipProxy = false;
+    bool mForceSkipRemoteSubmix = false;
+    bool mForceSkipA2DP = false;
+
 private:
     ///
     /// from EngineBase, so from EngineInterface

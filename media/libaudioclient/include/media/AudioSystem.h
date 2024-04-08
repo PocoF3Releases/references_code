@@ -449,9 +449,14 @@ public:
     static status_t setA11yServicesUids(const std::vector<uid_t>& uids);
     static status_t setCurrentImeUid(uid_t uid);
 
+    //MIUI ADD: input reuse
+    static bool isReuseInput(uid_t uid, audio_session_t session);
+
     static bool     isHapticPlaybackSupported();
 
     static bool     isUltrasoundSupported();
+
+    static bool     setIsCERegion(bool isCERegion);
 
     static status_t listAudioProductStrategies(AudioProductStrategyVector &strategies);
     static status_t getProductStrategyFromAudioAttributes(
@@ -475,6 +480,12 @@ public:
      * when generating audio HAL servers tombstones
      */
     static status_t setAudioHalPids(const std::vector<pid_t>& pids);
+
+    // MIUI ADD: START
+    static status_t pauseAudioTracks(uid_t uid, pid_t pid);
+
+    static status_t resumeAudioTracks(uid_t uid, pid_t pid);
+    // END
 
     static status_t setDevicesRoleForStrategy(product_strategy_t strategy,
             device_role_t role, const AudioDeviceTypeAddrVector &devices);

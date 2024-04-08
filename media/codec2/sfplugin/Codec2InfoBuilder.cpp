@@ -592,6 +592,12 @@ status_t Codec2InfoBuilder::buildMediaCodecList(MediaCodecListWriter* writer) {
                     rank = 1;
                 }
                 break;
+            case 5:
+                // add 5 to refuse hardware codec register
+                if (!hasPrefix(canonName, "c2.android.") && !hasPrefix(canonName, "OMX.google")) {
+                    ALOGD("bypass codec %s", canonName.c_str());
+                    continue;
+                }
             }
 
             const MediaCodecsXmlParser::CodecProperties &codec =

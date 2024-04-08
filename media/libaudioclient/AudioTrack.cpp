@@ -15,7 +15,8 @@
 ** limitations under the License.
 */
 
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
+#define LOG_NDEBUG_ASSERT 0
 #define LOG_TAG "AudioTrack"
 
 #include <inttypes.h>
@@ -39,10 +40,40 @@
 #include <media/AudioSystem.h>
 #include <media/MediaMetricsItem.h>
 #include <media/TypeConverter.h>
+#include <binder/MemoryDealer.h>
+#include "media/AVMediaExtensions.h"
+#include "AudioClientStub.h"
+
+#include <media/CMusicLimiter.h>
+#include <media/Mi3DAudioMapping.h>
+#include <media/Mi3DAudioMapping.h>
+#include <media/Mi3DAudioMappingHeadphone.h>
+
+#include <binder/PermissionController.h>
+#include <cutils/properties.h>
+#include <set>
+
+#include <utils/Trace.h>
+#ifdef ATRACE_TAG
+#undef ATRACE_TAG
+#define ATRACE_TAG ATRACE_TAG_AUDIO
+#endif
+
+static const bool kSupport3DPlay = property_get_bool("ro.audio.3d_play", false );
+static const bool kSupport3DPlay_Dump = property_get_bool("ro.audio.3d_play_dump", false );
 
 #define WAIT_PERIOD_MS                  10
 #define WAIT_STREAM_END_TIMEOUT_SEC     120
+#define DUMMY_TRACK_SMP_BUF_SIZE        12000
+
+#define LONG_TIME_ZERO_CHECK_TIME       1000*60
+// MIUI ADD
+#define LONG_TIME_ZERO_THRESHOLD        1000*1
+#define MUTE_LOOP_GAP_MS                1000
+#define FINE_LOOP_GAP_MS                5000
+
 static const int kMaxLoopCountNotifications = 32;
+audio_devices_t mDevice = AUDIO_DEVICE_OUT_SPEAKER;
 
 using ::android::aidl_utils::statusTFromBinderStatus;
 using ::android::base::StringPrintf;
@@ -52,6 +83,12 @@ namespace android {
 
 using media::VolumeShaper;
 using android::content::AttributionSourceState;
+
+// MIUI ADD: START
+enum {
+    REPORT_TRACK_STATUS_TRANSACTION = IBinder::FIRST_CALL_TRANSACTION + 33,
+};
+// END
 
 // TODO: Move to a separate .h
 
@@ -108,6 +145,24 @@ static inline float adjustPitch(float pitch)
 {
     return kFixPitch ? AUDIO_TIMESTRETCH_PITCH_NORMAL : pitch;
 }
+
+/*Audio add start*/
+static String16 getCallingPackageName(uid_t uid)
+{
+    String16 clientName;
+    if (uid == 0) {
+        uid = IPCThreadState::self()->getCallingUid();
+    }
+
+    PermissionController permissionController;
+    Vector<String16> packages;
+    permissionController.getPackagesForUid(uid, packages);
+    if (!packages.isEmpty()) {
+        clientName = packages[0];
+    }
+    return clientName;
+}
+//MIUI ADD: end
 
 // static
 status_t AudioTrack::getMinFrameCount(
@@ -242,9 +297,13 @@ AudioTrack::AudioTrack(const AttributionSourceState& attributionSource)
       mPausedPosition(0),
       mSelectedDeviceId(AUDIO_PORT_HANDLE_NONE),
       mRoutedDeviceId(AUDIO_PORT_HANDLE_NONE),
+      mPauseTimeRealUs(0),
       mClientAttributionSource(attributionSource),
       mAudioTrackCallback(new AudioTrackCallback())
 {
+    if (kSupport3DPlay){
+        mMi3DAudioMapping = NULL;
+    }
     mAttributes.content_type = AUDIO_CONTENT_TYPE_UNKNOWN;
     mAttributes.usage = AUDIO_USAGE_UNKNOWN;
     mAttributes.flags = AUDIO_FLAG_NONE;
@@ -276,6 +335,9 @@ AudioTrack::AudioTrack(
       mAudioTrackCallback(new AudioTrackCallback())
 {
     mAttributes = AUDIO_ATTRIBUTES_INITIALIZER;
+    if (kSupport3DPlay){
+        mMi3DAudioMapping = NULL;
+    }
 
     // make_unique does not aggregate init until c++20
     mSetParams = std::unique_ptr<SetParams>{
@@ -352,6 +414,9 @@ AudioTrack::AudioTrack(
       mAudioTrackCallback(new AudioTrackCallback())
 {
     mAttributes = AUDIO_ATTRIBUTES_INITIALIZER;
+    if (kSupport3DPlay){
+        mMi3DAudioMapping = NULL;
+    }
     if (callback != nullptr) {
         mLegacyCallbackWrapper = sp<LegacyCallbackWrapper>::make(callback, user);
     } else if (user) {
@@ -386,9 +451,14 @@ AudioTrack::AudioTrack(
       mPreviousSchedulingGroup(SP_DEFAULT),
       mPausedPosition(0),
       mSelectedDeviceId(AUDIO_PORT_HANDLE_NONE),
+      mPauseTimeRealUs(0),
+      mTrackOffloaded(false),
       mAudioTrackCallback(new AudioTrackCallback())
 {
     mAttributes = AUDIO_ATTRIBUTES_INITIALIZER;
+    if (kSupport3DPlay){
+        mMi3DAudioMapping = NULL;
+    }
 
     mSetParams = std::unique_ptr<SetParams>{
             new SetParams{streamType, sampleRate, format, channelMask, 0 /*frameCount*/, flags,
@@ -423,6 +493,9 @@ AudioTrack::AudioTrack(
       mAudioTrackCallback(new AudioTrackCallback())
 {
     mAttributes = AUDIO_ATTRIBUTES_INITIALIZER;
+    if (kSupport3DPlay){
+        mMi3DAudioMapping = NULL;
+    }
     if (callback) {
         mLegacyCallbackWrapper = sp<LegacyCallbackWrapper>::make(callback, user);
     } else if (user) {
@@ -444,6 +517,21 @@ void AudioTrack::onFirstRef() {
 
 AudioTrack::~AudioTrack()
 {
+    ALOGD("~AudioTrack(sessionID=%d)", mSessionId);
+    // AudioTrack Parameter Bigdata
+    {
+        // Usage: attr.usage
+        audio_attributes_t attr = AUDIO_ATTRIBUTES_INITIALIZER;;
+        if (mOriginalStreamType != AUDIO_STREAM_DEFAULT) {
+            attr = AudioSystem::streamTypeToAttributes(mOriginalStreamType);
+        } else {
+            attr = mAttributes;
+        }
+        if((int)(mActiveTimeMs/1000) > 5){ //时长>5秒上报打点
+            AudioClientStub::reportAudiotrackParameters((int)(mActiveTimeMs/1000), String8(ClientName).string(), toString(attr.usage).c_str(),
+                toString(mFlags).c_str(), (int)mChannelMask, toString(mFormat).c_str(), (int)mSampleRate);
+        }
+    }
     // pull together the numbers, before we clean up our structures
     mMediaMetrics.gather(this);
 
@@ -457,10 +545,26 @@ AudioTrack::~AudioTrack()
         .set(AMEDIAMETRICS_PROP_STATUS, (int32_t)mStatus)
         .record();
 
+    // To avoid A2DP session stop on remote device during Next/Prev of playback
+    // for split a2dp solution via offload path, create dummy Low latency session
+    // which will ensure session is active
+    if(isOffloadedOrDirect_l() &&
+       ((AudioSystem::getDeviceConnectionState((audio_devices_t)
+         AUDIO_DEVICE_OUT_BLE_HEADSET,"") == AUDIO_POLICY_DEVICE_STATE_AVAILABLE) ||
+        (AudioSystem::getDeviceConnectionState((audio_devices_t)
+        AUDIO_DEVICE_OUT_BLUETOOTH_A2DP,"") == AUDIO_POLICY_DEVICE_STATE_AVAILABLE))) {
+        ALOGD("Creating Dummy track for A2DP/BLE offload session");
+        createDummyAudioSessionForBluetooth();
+    }
+
     stopAndJoinCallbacks(); // checks mStatus
 
     if (mStatus == NO_ERROR) {
         IInterface::asBinder(mAudioTrack)->unlinkToDeath(mDeathNotifier, this);
+        String16 clientName = getCallingPackageName(VALUE_OR_FATAL(aidl2legacy_int32_t_uid_t(mClientAttributionSource.uid)));
+        if (clientName == String16("com.miui.voiceassist")){
+            usleep(400000);
+        }
         mAudioTrack.clear();
         mCblkMemory.clear();
         mSharedBuffer.clear();
@@ -471,8 +575,58 @@ AudioTrack::~AudioTrack()
                 mSessionId, IPCThreadState::self()->getCallingPid(), clientPid);
         AudioSystem::releaseAudioSessionId(mSessionId, clientPid);
     }
+
+    //MIUI ADD: start MIAUDIO_3D_PLAY
+    if (kSupport3DPlay){
+        releaseMi3DAudioMapping();
+    }
+    //MIUI ADD: end
 }
 
+void AudioTrack::createDummyAudioSessionForBluetooth() {
+   sp<AudioTrack> dummyTrack;
+
+   // Do not create dummy session if session is paused more than 3 secs
+   if(mPauseTimeRealUs &&
+      ((systemTime(SYSTEM_TIME_MONOTONIC) / 1000ll) - mPauseTimeRealUs) >= 3000000ll)
+      return;
+
+   sp<MemoryDealer> heap;
+   sp<IMemory> iMem;
+   uint8_t* p;
+
+   heap = new MemoryDealer(1024*1024, "AudioTrack Heap Base");
+   iMem = heap->allocate(DUMMY_TRACK_SMP_BUF_SIZE*sizeof(short));
+   // TODO(b/142073222): Using unsecurePointer() has some associated security pitfalls
+   //       (see declaration for details).
+   //       Either document why it is safe in this case or address the
+   //       issue (e.g. by copying).
+   p = static_cast<uint8_t*>(iMem->unsecurePointer());
+   memset(p, '\0', DUMMY_TRACK_SMP_BUF_SIZE*sizeof(short));
+
+   dummyTrack = new AudioTrack(AUDIO_STREAM_MUSIC,// stream type
+                               48000, AUDIO_FORMAT_PCM_16_BIT,
+                               AUDIO_CHANNEL_OUT_STEREO, iMem,
+                               AUDIO_OUTPUT_FLAG_FAST);
+   status_t status = dummyTrack->initCheck();
+   if(status != NO_ERROR) {
+       dummyTrack.clear();
+       ALOGD("Dummry Track Failed for initCheck()");
+       iMem.clear();
+       heap.clear();
+       return;
+   }
+
+   // start play
+   ALOGD("split_a2dp dummy track start success");
+   dummyTrack->start();
+   usleep(10000);
+   dummyTrack->stop();
+   dummyTrack.clear();
+   iMem.clear();
+   heap.clear();
+   ALOGD("split_a2dp dummy track stop completed");
+}
 void AudioTrack::stopAndJoinCallbacks() {
     // Prevent nullptr crash if it did not open properly.
     if (mStatus != NO_ERROR) return;
@@ -496,6 +650,62 @@ void AudioTrack::stopAndJoinCallbacks() {
         mDeviceCallback.clear();
     }
 }
+
+//MIUI ADD: start MIAUDIO_3D_PLAY
+void AudioTrack::initMi3DAudioMapping()
+{
+    enableValue = true;
+    if (mMi3DAudioMapping == NULL) {
+        mMi3DAudioMapping = new Mi3DAudioMapping();
+        if (mMi3DAudioMapping == NULL) {
+            delete mMi3DAudioMapping;
+            mMi3DAudioMapping = NULL;
+            ALOGE("initMi3DAudioMapping Init Failed");
+        }
+    ALOGD("Mi3DAudioMapping init Success");
+    }
+}
+void AudioTrack::releaseMi3DAudioMapping()
+{
+    if (mMi3DAudioMapping != NULL) {
+        delete mMi3DAudioMapping;
+        mMi3DAudioMapping = NULL;
+        ALOGD("Mi3DAudioMapping Release Success");
+    }
+}
+//MIUI ADD: end
+
+// AudioCpuSched start
+static int64_t isAudioCpuSchedEnabled = 0;
+static int cpus = 8;
+static int audioCpuSet = 0xff;
+static int64_t rtMode = 0;
+static bool aTWSet = false; // set once for audioTrack::write
+static void reScheduleCpu(int cpuSet, int cpus, pid_t tid)
+{
+    cpu_set_t set;
+
+    ALOGD("[APM]-AT %s() cpuSet=%d tid=%d", __func__, cpuSet, tid);
+    CPU_ZERO(&set);
+
+    for (int i = 0; i < cpus; i++) {
+        if ((cpuSet >> i) & (0x1)) {
+            CPU_SET(i, &set);
+        }
+    }
+    int err = sched_setaffinity(tid, sizeof(cpu_set_t), &set);
+    ALOGE_IF(err, "[APM]-AT: failed to sched %d for tid %d; error %d",
+            cpuSet, tid, err);
+}
+
+static void APMRequestThreadPriority(int poior, SchedPolicy policy, pid_t tid)
+{
+    int err = setpriority(PRIO_PROCESS, tid, poior);
+    ALOGE_IF(err, "[APM]-AT: failed to setPrior for tid %d; error %d", tid, err);
+    err = set_sched_policy(tid, policy);
+    ALOGE_IF(err, "[APM]-AT: failed to schedPolicy for tid %d; error %d", tid, err);
+}
+// AudioCpuSched end
 
 status_t AudioTrack::set(
         audio_stream_type_t streamType,
@@ -557,12 +767,30 @@ status_t AudioTrack::set(
     uid_t uid = VALUE_OR_FATAL(aidl2legacy_int32_t_uid_t(attributionSource.uid));
     pid_t pid = VALUE_OR_FATAL(aidl2legacy_int32_t_pid_t(attributionSource.pid));
     std::string errorMessage;
+    String16 clientName;
+
+    mClientAttributionSource = AttributionSourceState(attributionSource);
+    if(mClientAttributionSource.packageName.has_value()){
+        ClientName = String16(mClientAttributionSource.packageName.value().c_str());
+    }
+    if(String8(ClientName).isEmpty()){
+        ClientName=getCallingPackageName(0);
+    }
+
+    ALOGD("set(sessionId=%d)", sessionId);
     // Note mPortId is not valid until the track is created, so omit mPortId in ALOG for set.
-    ALOGV("%s(): streamType %d, sampleRate %u, format %#x, channelMask %#x, frameCount %zu, "
+    ALOGD("%s(): streamType %d, sampleRate %u, format %#x, channelMask %#x, frameCount %zu, "
           "flags #%x, notificationFrames %d, sessionId %d, transferType %d, uid %d, pid %d",
           __func__,
           streamType, sampleRate, format, channelMask, frameCount, flags, notificationFrames,
           sessionId, transferType, attributionSource.uid, attributionSource.pid);
+
+//MIUI ADD: start  MIAUDIO_3D_PLAY
+    if (kSupport3DPlay){
+        initMi3DAudioMapping();
+    }
+//MIUI ADD: end
+
 
     mThreadCanCallJava = threadCanCallJava;
 
@@ -605,6 +833,32 @@ status_t AudioTrack::set(
                 // FIXME why can't we allow direct AND fast?
                 ((flags | AUDIO_OUTPUT_FLAG_DIRECT) & ~AUDIO_OUTPUT_FLAG_FAST);
     }
+
+    // use ull track route for io.iftech.android.box
+    if (!String16("io.iftech.android.box").compare(ClientName) && (flags & AUDIO_OUTPUT_FLAG_PRIMARY) &&
+        (streamType == AUDIO_STREAM_MUSIC) && (sampleRate == 44100)) {
+        flags = (audio_output_flags_t) (flags | AUDIO_OUTPUT_FLAG_RAW);
+    }
+    if ((!String16("com.wedobest.szhrd.mi").compare(ClientName)) && (sampleRate == 11025) && (streamType == AUDIO_STREAM_MUSIC)) {
+        flags = (audio_output_flags_t) (flags | AUDIO_OUTPUT_FLAG_RAW);
+    }
+
+    // force direct flag for QQ Music Hi-Res playback
+    if(audio_is_linear_pcm(format) && (sampleRate == 96000 || sampleRate == 192000)
+        && mAttributes.usage == AUDIO_USAGE_MEDIA && !String16("com.tencent.qqmusic").compare(ClientName)){
+       flags = AUDIO_OUTPUT_FLAG_DIRECT;
+       ALOGD("%s(): Force direct flag , flags(0x%x) sampleRate(%d) format(0x%x)",__func__,flags,sampleRate,format);
+    }
+
+    //MIUI ADD: start force direct flag for SpatialAudio
+    if (property_get_bool("ro.vendor.audio.multichannel.5point1", false) &&
+        channelMask == AUDIO_CHANNEL_OUT_5POINT1 && sampleRate != 0 &&
+        String16("android.media.cts").compare(ClientName) &&
+        String16("android.media.audio.cts").compare(ClientName)) {
+        ALOGD("%s(): Force direct flag , flags(0x%x) channelMask(0x%x)",__func__,flags,channelMask);
+        flags=(audio_output_flags_t)(AUDIO_OUTPUT_FLAG_DIRECT);
+    }
+    //MIUI ADD: end
 
     // force direct flag if HW A/V sync requested
     if ((flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC) != 0) {
@@ -681,6 +935,10 @@ status_t AudioTrack::set(
             goto error;
         }
         mOriginalStreamType = streamType;
+        mAttributes.content_type = AUDIO_CONTENT_TYPE_UNKNOWN;
+        mAttributes.usage = AUDIO_USAGE_UNKNOWN;
+        mAttributes.flags = AUDIO_FLAG_NONE;
+        strcpy(mAttributes.tags, "");
     } else {
         mOriginalStreamType = AUDIO_STREAM_DEFAULT;
     }
@@ -699,6 +957,11 @@ status_t AudioTrack::set(
     }
     channelCount = audio_channel_count_from_out_mask(channelMask);
     mChannelCount = channelCount;
+//MIUI ADD: start MIAUDIO_3D_PLAY
+    if (kSupport3DPlay) {
+        mChannelCount_start = channelCount;
+    }
+//MIUI ADD: end
 
     if (mFlags & AUDIO_OUTPUT_FLAG_DIRECT) {
         if (audio_has_proportional_frames(format)) {
@@ -707,11 +970,23 @@ status_t AudioTrack::set(
             mFrameSize = sizeof(uint8_t);
         }
     } else {
+#if LOG_NDEBUG_ASSERT
         ALOG_ASSERT(audio_has_proportional_frames(format));
+#endif
         mFrameSize = channelCount * audio_bytes_per_sample(format);
         // createTrack will return an error if PCM format is not supported by server,
         // so no need to check for specific PCM formats here
     }
+
+    //MIUI ADD: start MIAUDIO_3D_PLAY
+    if ((kSupport3DPlay)&&(channelMask == AUDIO_CHANNEL_OUT_5POINT1)) {
+        mChannelMask = AUDIO_CHANNEL_OUT_QUAD;
+        mFrameSize = audio_bytes_per_sample(format)*4;
+        mChannelCount = 4;
+        ALOGD("%s(): AUDIO_CHANNEL_OUT_5POINT1 streamType %d frameCount %zu flags %04x,channelCount %d,mFrameSize %zu sampleRate %d channelMask %#x",
+            __func__, streamType, frameCount, flags, channelCount, mFrameSize, sampleRate, mChannelMask);
+    }
+    //MIUI ADD: end
 
     // sampling rate must be specified for direct outputs
     if (sampleRate == 0 && (mFlags & AUDIO_OUTPUT_FLAG_DIRECT) != 0) {
@@ -770,7 +1045,6 @@ status_t AudioTrack::set(
     }
     mNotificationFramesAct = 0;
     // TODO b/182392553: refactor or remove
-    mClientAttributionSource = AttributionSourceState(attributionSource);
     callingPid = IPCThreadState::self()->getCallingPid();
     myPid = getpid();
     if (uid == -1 || (callingPid != myPid)) {
@@ -780,6 +1054,7 @@ status_t AudioTrack::set(
     if (pid == (pid_t)-1 || (callingPid != myPid)) {
         mClientAttributionSource.pid = VALUE_OR_FATAL(legacy2aidl_uid_t_int32_t(callingPid));
     }
+
     mAuxEffectId = 0;
     mCallback = callback;
 
@@ -788,6 +1063,12 @@ status_t AudioTrack::set(
         mAudioTrackThread->run("AudioTrack", ANDROID_PRIORITY_AUDIO, 0 /*stack*/);
         // thread begins in paused state, and will not reference us until start()
     }
+
+//MIUI ADD: start MIAUDIO_GAME_EFFECT
+    AudioClientStub::gameEffectAudioTrackChangeStreamType(
+        VALUE_OR_FATAL(aidl2legacy_int32_t_pid_t(mClientAttributionSource.pid)), mFormat,
+        mStreamType, mSampleRate, mChannelMask, mStreamType );
+//MIUI ADD: end
 
     // create the IAudioTrack
     {
@@ -803,6 +1084,22 @@ status_t AudioTrack::set(
         // We do not goto error to prevent double-logging errors.
         goto exit;
     }
+
+    // AudioCpuSched start
+    isAudioCpuSchedEnabled = property_get_int64("vendor.audio.cpu.sched", 0 /* default_value */);
+    if (isAudioCpuSchedEnabled & AUDIO_SCHED_AT) {
+        cpus = property_get_int32("vendor.audio.cpu.sched.cpus", 8 /* default_value */);
+        audioCpuSet = property_get_int32("vendor.audio.cpu.sched.cpuset.at", 0xff /* default_value */);
+        if (mAudioTrackThread != 0)
+            reScheduleCpu(audioCpuSet, cpus, mAudioTrackThread->getTid());
+    }
+
+    rtMode = property_get_int64("vendor.audio.rt.mode", 0 /* default_value */);
+    if (rtMode & AUDIO_SCHED_AT) {
+        if (mAudioTrackThread != 0)
+            APMRequestThreadPriority(ANDROID_PRIORITY_HIGHEST, SP_RT_APP, mAudioTrackThread->getTid());
+    }
+// AudioCpuSched end
 
     mLoopCount = 0;
     mLoopStart = 0;
@@ -833,6 +1130,18 @@ status_t AudioTrack::set(
     mFramesWrittenServerOffset = 0;
     mFramesWrittenAtRestore = -1; // -1 is a unique initializer.
     mVolumeHandler = new media::VolumeHandler();
+
+    mMuteTimeMs = 0;
+    mMuteTimeSec = 0;
+    mFineTimeMs = 0;
+    mFineTimeSec = 0;
+    mSmallTimeMs = 0;
+    mSmallTimeSec = 0;
+    mNowTimeMs = 0;
+    mBeforeTimeMs = 0;
+    mMuteKillMs = 0;
+    mActiveTimeMs = 0;
+    mStartTimeMs = 0;
 
 error:
     if (status != NO_ERROR) {
@@ -893,7 +1202,7 @@ status_t AudioTrack::start()
         return INVALID_OPERATION;
     }
 
-    ALOGV("%s(%d): prior state:%s", __func__, mPortId, stateToString(mState));
+    ALOGD("%s(%d): prior state:%s", __func__, mPortId, stateToString(mState));
 
     // Defer logging here due to OpenSL ES repeated start calls.
     // TODO(b/154868033) after fix, restore this logging back to the beginning of start().
@@ -913,6 +1222,7 @@ status_t AudioTrack::start()
 
 
     mInUnderrun = true;
+    mPauseTimeRealUs = 0;
 
     State previousState = mState;
     if (previousState == STATE_PAUSED_STOPPING) {
@@ -1007,6 +1317,15 @@ status_t AudioTrack::start()
             androidSetThreadPriority(0, ANDROID_PRIORITY_AUDIO);
         }
 
+        // AudioCpuSched start
+        if (isAudioCpuSchedEnabled & AUDIO_SCHED_AT) {
+            reScheduleCpu(audioCpuSet, cpus, gettid());
+        }
+        if (rtMode & AUDIO_SCHED_AT) {
+            APMRequestThreadPriority(ANDROID_PRIORITY_HIGHEST, SP_RT_APP, gettid());
+        }
+        // AudioCpuSched end
+
         // Start our local VolumeHandler for restoration purposes.
         mVolumeHandler->setStarted();
     } else {
@@ -1022,6 +1341,14 @@ status_t AudioTrack::start()
         }
     }
 
+    {
+        bool isStartPlay = (previousState != mState) && (mState == STATE_ACTIVE);
+        if (isStartPlay && (mStartTimeMs == 0))
+        {
+            mStartTimeMs = systemTime() / 1000000;
+        }
+    }
+
     return status;
 }
 
@@ -1029,6 +1356,7 @@ void AudioTrack::stop()
 {
     const int64_t beginNs = systemTime();
 
+    ALOGD("stop(sessionID=%d)", mSessionId);
     AutoMutex lock(mLock);
     mediametrics::Defer defer([&]() {
         mediametrics::LogItem(mMetricsId)
@@ -1040,7 +1368,9 @@ void AudioTrack::stop()
             .record();
     });
 
-    ALOGV("%s(%d): prior state:%s", __func__, mPortId, stateToString(mState));
+    ALOGD("%s(%d): prior state:%s", __func__, mPortId, stateToString(mState));
+
+    State previousState = mState;
 
     if (mState != STATE_ACTIVE && mState != STATE_PAUSED) {
         return;
@@ -1081,6 +1411,24 @@ void AudioTrack::stop()
         setpriority(PRIO_PROCESS, 0, mPreviousPriority);
         set_sched_policy(0, mPreviousSchedulingGroup);
     }
+
+    {
+        bool isStopPlay = (previousState == STATE_ACTIVE) && (mState != STATE_ACTIVE);
+        if (isStopPlay && (mStartTimeMs != 0))
+        {
+            mActiveTimeMs += systemTime()/1000000 - mStartTimeMs;
+            mStartTimeMs = 0;
+        }
+    }
+
+    // AudioCpuSched start
+    if (aTWSet)
+        aTWSet = false;
+    // AudioCpuSched end
+
+    mNowTimeMs = 0;
+    mBeforeTimeMs = 0;
+    mMuteKillMs = 0;
 }
 
 bool AudioTrack::stopped() const
@@ -1113,7 +1461,9 @@ void AudioTrack::flush()
 
 void AudioTrack::flush_l()
 {
+#if LOG_NDEBUG_ASSERT
     ALOG_ASSERT(mState != STATE_ACTIVE);
+#endif
 
     // clear playback marker and periodic update counter
     mMarkerPosition = 0;
@@ -1188,6 +1538,7 @@ bool AudioTrack::pauseAndWait(const std::chrono::milliseconds& timeout)
 void AudioTrack::pause()
 {
     const int64_t beginNs = systemTime();
+    ALOGD(" pause(sessionID=%d)", mSessionId);
     AutoMutex lock(mLock);
     mediametrics::Defer defer([&]() {
         mediametrics::LogItem(mMetricsId)
@@ -1196,7 +1547,9 @@ void AudioTrack::pause()
             .set(AMEDIAMETRICS_PROP_STATE, stateToString(mState))
             .record(); });
 
-    ALOGV("%s(%d): prior state:%s", __func__, mPortId, stateToString(mState));
+    ALOGD("%s(%d): prior state:%s", __func__, mPortId, stateToString(mState));
+
+    State previousState = mState;
 
     if (mState == STATE_ACTIVE) {
         mState = STATE_PAUSED;
@@ -1207,6 +1560,7 @@ void AudioTrack::pause()
     }
     mProxy->interrupt();
     mAudioTrack->pause();
+    mPauseTimeRealUs = systemTime(SYSTEM_TIME_MONOTONIC) / 1000ll;
 
     if (isOffloaded_l()) {
         if (mOutput != AUDIO_IO_HANDLE_NONE) {
@@ -1227,16 +1581,104 @@ void AudioTrack::pause()
                     __func__, mPortId, mPausedPosition);
         }
     }
+
+    {
+        bool isStopPlay = (previousState == STATE_ACTIVE) && (mState != STATE_ACTIVE);
+        if (isStopPlay && (mStartTimeMs != 0))
+        {
+            mActiveTimeMs += systemTime()/1000000 - mStartTimeMs;
+            mStartTimeMs = 0;
+        }
+    }
+    mNowTimeMs = 0;
+    mBeforeTimeMs = 0;
+    mMuteKillMs = 0;
 }
+
+//MIUI ADD: start : reduce audio power
+bool AudioTrack::isWhiteListPackage()
+{
+    if (mIsWhiteListChecked) {
+        return mIsWhiteListPackage;
+    }
+    mIsWhiteListPackage = false;
+
+    if(String8(ClientName).isEmpty()) {
+        ClientName = getCallingPackageName(VALUE_OR_FATAL(aidl2legacy_int32_t_uid_t(mClientAttributionSource.uid)));
+    }
+    ALOGD("isWhiteListPackage() Uid %d, package name %s", mClientAttributionSource.uid, String8(ClientName).string());
+
+    mIsWhiteListPackage = (!String16("com.tencent.tmgp.pubgmhd").compare(ClientName) ||
+            !String16("com.tencent.tmgp.pubgm").compare(ClientName) ||
+            !String16("com.tencent.tmgp.sgame").compare(ClientName));
+
+    mIsWhiteListChecked = true;
+    return mIsWhiteListPackage;
+}
+
+bool AudioTrack::isHeadsetPlugIn(audio_port_handle_t deviceId)
+{
+    audio_port_v7 port;
+    port.id = deviceId;
+    AudioSystem::getAudioPort(&port);
+    audio_devices_t deviceType = port.ext.device.type;
+
+    if (deviceType == AUDIO_DEVICE_OUT_WIRED_HEADSET ||
+        deviceType == AUDIO_DEVICE_OUT_WIRED_HEADPHONE ) {
+        ALOGD("%s Headset/Headphone is pluged in", __FUNCTION__);
+        return true;
+    }
+
+    return false;
+}
+//MIUI ADD: end
+
+//MIUI ADD: start: add to reduce audio power when playing video
+//#define PROPERTY_VALUE_MAX 64
+#define DEFAULT_SCALE 1.0
+std::set<std::string> videoPlayer = {
+    "com.ss.android.ugc.aweme",      // 抖音短视频
+    "com.ss.android.ugc.live",       // 抖音火山版
+    "com.ss.android.ugc.aweme.lite", // 抖音极速版
+    "com.smile.gifmaker",            // 快手
+    "com.kuaishou.nebula",           // 快手极速版
+    "com.baidu.haokan",              // 好看视频
+    "com.zhiliaoapp.musically",      // TikTok
+    "com.zhiliaoapp.musically.go",   // TikTok lite
+    "com.instagram.android",         // Instagram
+    "video.like",                    // Likee
+};
+
+bool isVideoPlayer(const std::string packageName) {
+    std::set<std::string>::iterator it;
+    it = videoPlayer.find(packageName);
+    if(it==videoPlayer.end())
+        return false;
+    return true;
+}
+//MIUI ADD: end
 
 status_t AudioTrack::setVolume(float left, float right)
 {
+    //MIUI ADD: start: add to reduce audio power when playing video
+    if(String8(ClientName).isEmpty()) {
+        ClientName = getCallingPackageName(VALUE_OR_FATAL(aidl2legacy_int32_t_uid_t(mClientAttributionSource.uid)));
+    }
+    ALOGI("AudioTrack::setVolume L:%f R:%f and the pakage is %s", left, right, String8(ClientName).string());
+    int scale = property_get_int32("ro.vendor.audio.shortvideo.index", (int) ( DEFAULT_SCALE * 100));
+    if(isVideoPlayer(String8(ClientName).string())) {
+        left  = left * scale / 100;
+        right = right * scale / 100;
+    }
+    //MIUI ADD: end: add to reduce audio power when playing video end
+
     // This duplicates a test by AudioTrack JNI, but that is not the only caller
     if (isnanf(left) || left < GAIN_FLOAT_ZERO || left > GAIN_FLOAT_UNITY ||
             isnanf(right) || right < GAIN_FLOAT_ZERO || right > GAIN_FLOAT_UNITY) {
         return BAD_VALUE;
     }
 
+    ALOGI("AudioTrack::setVolume L:%f R:%f", left, right);
     mediametrics::LogItem(mMetricsId)
         .set(AMEDIAMETRICS_PROP_EVENT, AMEDIAMETRICS_PROP_EVENT_VALUE_SETVOLUME)
         .set(AMEDIAMETRICS_PROP_VOLUME_LEFT, (double)left)
@@ -1427,7 +1869,11 @@ status_t AudioTrack::setPlaybackRate(const AudioPlaybackRate &playbackRate)
     if (!isSampleRateSpeedAllowed_l(effectiveRate, effectiveSpeed)) {
         ALOGW("%s(%d) (%f, %f) failed (buffer size)",
                 __func__, mPortId, playbackRate.mSpeed, playbackRate.mPitch);
-        return BAD_VALUE;
+        if (!mTrackOffloaded) {
+            return BAD_VALUE;
+        }
+        ALOGD("invalidate track-offloaded track on setPlaybackRate");
+        android_atomic_or(CBLK_INVALID, &mCblk->mFlags);
     }
 
     // Check resampler ratios are within bounds
@@ -1461,6 +1907,12 @@ status_t AudioTrack::setPlaybackRate(const AudioPlaybackRate &playbackRate)
                 AMEDIAMETRICS_PROP_PLAYBACK_PITCH, (double)playbackRateTemp.mPitch)
         .record();
 
+
+    if (mTrackOffloaded &&
+        !isAudioPlaybackRateEqual(mPlaybackRate, AUDIO_PLAYBACK_RATE_DEFAULT)) {
+        ALOGD("invalidate track-offloaded track on setPlaybackRate");
+        android_atomic_or(CBLK_INVALID, &mCblk->mFlags);
+    }
     return NO_ERROR;
 }
 
@@ -1709,6 +2161,7 @@ status_t AudioTrack::getPosition(uint32_t *position)
     // There may be some latency differences between the HAL position and the proxy position.
     if (isOffloadedOrDirect_l() && !isPurePcmData_l()) {
         uint32_t dspFrames = 0;
+        status_t status;
 
         if (isOffloaded_l() && ((mState == STATE_PAUSED) || (mState == STATE_PAUSED_STOPPING))) {
             ALOGV("%s(%d): called in paused state, return cached position %u",
@@ -1719,8 +2172,11 @@ status_t AudioTrack::getPosition(uint32_t *position)
 
         if (mOutput != AUDIO_IO_HANDLE_NONE) {
             uint32_t halFrames; // actually unused
-            (void) AudioSystem::getRenderPosition(mOutput, &halFrames, &dspFrames);
-            // FIXME: on getRenderPosition() error, we return OK with frame position 0.
+            status = AudioSystem::getRenderPosition(mOutput, &halFrames, &dspFrames);
+            if (status != NO_ERROR) {
+                ALOGW("failed to getRenderPosition for offload session");
+                return INVALID_OPERATION;
+            }
         }
         // FIXME: dspFrames may not be zero in (mState == STATE_STOPPED || mState == STATE_FLUSHED)
         // due to hardware latency. We leave this behavior for now.
@@ -1943,6 +2399,21 @@ status_t AudioTrack::createTrack_l()
             input.clientInfo.clientTid = mAudioTrackThread->getTid();
         }
     }
+    // Set offload_info to defaults if track not already offloaded but can be offloaded
+    if (mOffloadInfoCopy == AUDIO_INFO_INITIALIZER &&
+        audio_is_linear_pcm(mFormat) &&
+        isAudioPlaybackRateEqual(mPlaybackRate, AUDIO_PLAYBACK_RATE_DEFAULT)) {
+        input.config.offload_info = AUDIO_INFO_INITIALIZER;
+    }
+
+    // enable the deep buffer flag, whenever mPlaybackRate is not equal to
+    // default
+    if (!isAudioPlaybackRateEqual(mPlaybackRate, AUDIO_PLAYBACK_RATE_DEFAULT)) {
+        mFlags = (audio_output_flags_t)(mFlags | AUDIO_OUTPUT_FLAG_DEEP_BUFFER);
+        ALOGV("%s: mPlaybackRate is changed, request for deep buffer path",
+              __func__);
+    }
+
     input.sharedBuffer = mSharedBuffer;
     input.notificationsPerBuffer = mNotificationsPerBufferReq;
     input.speed = 1.0;
@@ -1975,8 +2446,11 @@ status_t AudioTrack::createTrack_l()
         }
         goto exit;
     }
+#if LOG_NDEBUG_ASSERT
     ALOG_ASSERT(output.audioTrack != 0);
+#endif
 
+    mTrackOffloaded = AVMediaUtils::get()->AudioTrackIsTrackOffloaded(output.outputId);
     mFrameCount = output.frameCount;
     mNotificationFramesAct = (uint32_t)output.notificationFrameCount;
     mRoutedDeviceId = output.selectedDeviceId;
@@ -2023,6 +2497,7 @@ status_t AudioTrack::createTrack_l()
         mDeathNotifier.clear();
     }
     mAudioTrack = output.audioTrack;
+    mAudioTrack->setFastTrackType(mFlags & AUDIO_OUTPUT_FLAG_FAST);
     mCblkMemory = iMem;
     IPCThreadState::self()->flushCommands();
 
@@ -2351,6 +2826,15 @@ void AudioTrack::releaseBuffer(const Buffer* audioBuffer)
     }
     mReleased += stepCount;
     mInUnderrun = false;
+
+//MIUI ADD: start MIAUDIO_DUMP_PCM
+    if (buffer.mRaw != NULL && buffer.mFrameCount)
+        AudioClientStub::dumpAudioDataToFile(buffer.mRaw, buffer.mFrameCount * mFrameSize,
+            mFormat, mSampleRate, mChannelCount, 1,
+            aidl2legacy_int32_t_pid_t(mClientAttributionSource.pid).value_or(0), mSessionId,
+            "");
+//MIUI ADD: end
+
     mProxy->releaseBuffer(&buffer);
 
     // restart track if it was disabled by audioflinger due to previous underrun
@@ -2387,6 +2871,34 @@ ssize_t AudioTrack::write(const void* buffer, size_t userSize, bool blocking)
         }
     }
 
+    // AudioCpuSched start
+    if (!aTWSet) {
+        aTWSet = true;
+        if (isAudioCpuSchedEnabled & AUDIO_SCHED_AT) {
+            reScheduleCpu(audioCpuSet, cpus, gettid());
+        }
+        if (rtMode & AUDIO_SCHED_AT) {
+            APMRequestThreadPriority(ANDROID_PRIORITY_HIGHEST, SP_RT_APP, gettid());
+        }
+    }
+    // AudioCpuSched end
+
+    ATRACE_BEGIN("AudioTrack_write");
+    //MIUI ADD: start 3D_play_dump
+    FILE *audio_file_in = NULL;
+    FILE *audio_file_out = NULL;
+    if(kSupport3DPlay_Dump){
+        audio_file_in = fopen("/data/local/traces/input.pcm", "ab+");
+        audio_file_out = fopen("/data/local/traces/output.pcm", "ab+");
+        if (audio_file_in == NULL) {
+            ALOGE("ERROR: open audio_file_in error!\n");
+        }
+        if (audio_file_out == NULL) {
+            ALOGE("ERROR: open audio_file_out error!\n");
+        }
+    }
+    //MIUI ADD: end
+
     if (ssize_t(userSize) < 0 || (buffer == NULL && userSize != 0)) {
         // Validation: user is most-likely passing an error code, and it would
         // make the return value ambiguous (actualSize vs error).
@@ -2395,14 +2907,38 @@ ssize_t AudioTrack::write(const void* buffer, size_t userSize, bool blocking)
         return BAD_VALUE;
     }
 
+    isLongTimeZeroData(buffer, userSize);
+
     size_t written = 0;
     Buffer audioBuffer;
 
-    while (userSize >= mFrameSize) {
-        audioBuffer.frameCount = userSize / mFrameSize;
+    //MIUI ADD: start MIAUDIO_3D_PLAY
+    int mode = 0;
+    if (6 == mChannelCount_start&&kSupport3DPlay) {
+        char value[PROPERTY_VALUE_MAX];
+        if (property_get("vendor.audio.3daudio.headphone.status", value, NULL)) {
+            if ( !String16("on").compare(String16(value)) ) {
+                //ALOGD("Mi3DAudioMapping setDeviceType 1");
+                mode = 1;
+            } else if (!String16("off").compare(String16(value))) {
+                //ALOGD("Mi3DAudioMapping setDeviceType 0");
+                mode = 0;
+           }
+           mMi3DAudioMapping->setDeviceType(mode);
+        }
+    }
+    //MIUI ADD: end
 
+    while (userSize >= mFrameSize) {
+        if ((6 == mChannelCount_start)&&kSupport3DPlay) {
+            audioBuffer.frameCount = userSize / (mFrameSize / 4 * 6);
+        } else{
+            audioBuffer.frameCount = userSize / mFrameSize;
+        }
+        ATRACE_BEGIN("AudioTrack_write_obtainBuffer");
         status_t err = obtainBuffer(&audioBuffer,
                 blocking ? &ClientProxy::kForever : &ClientProxy::kNonBlocking);
+        ATRACE_END();
         if (err < 0) {
             if (written > 0) {
                 break;
@@ -2410,16 +2946,61 @@ ssize_t AudioTrack::write(const void* buffer, size_t userSize, bool blocking)
             if (err == TIMED_OUT || err == -EINTR) {
                 err = WOULD_BLOCK;
             }
+            ATRACE_END();
             return ssize_t(err);
         }
 
         size_t toWrite = audioBuffer.size();
+
+       //MIUI ADD: start MIAUDIO_3D_PLAY
+        if ((6 == mChannelCount_start)&&kSupport3DPlay) {
+            toWrite = audioBuffer.size() / 4 * 6;
+            //ALOGE("%s: AudioTrack::write1( mFormat=%x", __func__, mFormat);
+            if (mFormat == AUDIO_FORMAT_PCM_FLOAT || mFormat == AUDIO_FORMAT_PCM_SUB_FLOAT) {
+                mMi3DAudioMapping->process((float *)(audioBuffer.ui8), buffer, audioBuffer.size());
+                //ALOGE("Mi3DAudioMapping mFormat AUDIO_FORMAT_PCM_FLOAT"); 
+            } else
+                mMi3DAudioMapping->process((void *)(audioBuffer.ui8), buffer, audioBuffer.size(), mFrameSize/mChannelCount);
+           //MIUI ADD: start MIAUDIO_3DPLAY_DUMP
+           if (kSupport3DPlay_Dump) {
+             if(audio_file_in){
+                ALOGE("Mi3DAudioMapping dump in");
+                fwrite((const uint8_t *) buffer, 1, toWrite, audio_file_in);
+             }
+            }
+            //MIUI ADD: end
+            buffer = ((const char *) buffer) + toWrite;
+            userSize -= toWrite;
+            written += audioBuffer.size();
+        } else {
+            toWrite = audioBuffer.size();
+
         memcpy(audioBuffer.raw, buffer, toWrite);
         buffer = ((const char *) buffer) + toWrite;
         userSize -= toWrite;
         written += toWrite;
 
+    }
+//MIUI ADD: start MIAUDIO_3DPLAY_DUMP
+        if (kSupport3DPlay_Dump) {
+          if(audio_file_out){
+            ALOGE("Mi3DAudioMapping dump out");
+            fwrite((const uint8_t *) audioBuffer.ui8, 1, audioBuffer.size(), audio_file_out);
+          }
+        }
+//MIUI ADD: end
+
         releaseBuffer(&audioBuffer);
+
+//MIUI ADD: start MIAUDIO_3DPLAY_DUMP
+        if(kSupport3DPlay_Dump){
+            if (audio_file_in)
+                fclose(audio_file_in);
+            if (audio_file_out)
+                fclose(audio_file_out);
+        }
+//MIUI ADD: end
+
     }
 
     if (written > 0) {
@@ -2435,6 +3016,11 @@ ssize_t AudioTrack::write(const void* buffer, size_t userSize, bool blocking)
         }
     }
 
+//MIUI ADD:start  MIAUDIO_3D_PLAY
+    if ((6 == mChannelCount_start)&&kSupport3DPlay)
+        written = written / 4 * 6;
+//MIUI ADD: end
+    ATRACE_END();
     return written;
 }
 
@@ -2720,7 +3306,11 @@ nsecs_t AudioTrack::processAudioBuffer()
         Buffer audioBuffer;
         audioBuffer.frameCount = mRemainingFrames;
         size_t nonContig;
+
+        ATRACE_BEGIN("AudioTrack_processAudioBuffer_obtainBuffer");
         status_t err = obtainBuffer(&audioBuffer, requested, NULL, &nonContig);
+        ATRACE_END();
+
         LOG_ALWAYS_FATAL_IF((err != NO_ERROR) != (audioBuffer.frameCount == 0),
                 "%s(%d): obtainBuffer() err=%d frameCount=%zu",
                  __func__, mPortId, err, audioBuffer.frameCount);
@@ -2781,7 +3371,12 @@ nsecs_t AudioTrack::processAudioBuffer()
         const size_t writtenSize = (mTransfer == TRANSFER_CALLBACK)
                                       ? callback->onMoreData(audioBuffer)
                                       : callback->onCanWriteMoreData(audioBuffer);
+        //Clear dirty buffer when restoreTrack
+        if (mObservedSequence != mSequence) {
+            memset(audioBuffer.data(),0,writtenSize);
+        }
         // Validate on returned size
+	isLongTimeZeroData(audioBuffer.raw, audioBuffer.size());
         if (ssize_t(writtenSize) < 0 || writtenSize > reqSize) {
             ALOGE("%s(%d): EVENT_MORE_DATA requested %zu bytes but callback returned %zd bytes",
                     __func__, mPortId, reqSize, ssize_t(writtenSize));
@@ -2909,11 +3504,19 @@ status_t AudioTrack::restoreTrack_l(const char *from)
     // output parameters and new IAudioFlinger in createTrack_l()
     AudioSystem::clearAudioConfigCache();
 
-    if (isOffloadedOrDirect_l() || mDoNotReconnect) {
+    if (isOffloadedOrDirect_l() || mDoNotReconnect ||
+        (mOrigFlags & AUDIO_OUTPUT_FLAG_DIRECT) != 0) {
         // FIXME re-creation of offloaded and direct tracks is not yet implemented;
         // reconsider enabling for linear PCM encodings when position can be preserved.
-        result = DEAD_OBJECT;
-        return result;
+
+        // Tear down sink only for non-internal invalidation.
+        // Since new track could again have invalidation on setPlayback rate causing
+        // continuous creation and tear down.
+        if (!mTrackOffloaded ||
+              isAudioPlaybackRateEqual(mPlaybackRate, AUDIO_PLAYBACK_RATE_DEFAULT)) {
+            result = DEAD_OBJECT;
+            return result;
+        }
     }
 
     // Save so we can return count since creation.
@@ -3683,6 +4286,16 @@ void AudioTrack::onAudioDeviceUpdate(audio_io_handle_t audioIo,
         }
     }
 
+    //MIUI ADD: start reduce audio power
+    audio_port_v7 port;
+    port.id = mRoutedDeviceId;
+    AudioSystem::getAudioPort(&port);
+    audio_devices_t deviceType = port.ext.device.type;
+    if(deviceType != mDevice){
+      mDevice = deviceType;
+    }
+    //MIUI ADD: end
+
     if (callback.get() != nullptr) {
         callback->onAudioDeviceUpdate(mOutput, mRoutedDeviceId);
     }
@@ -3736,6 +4349,131 @@ status_t AudioTrack::pendingDuration(int32_t *msec, ExtendedTimestamp::Location 
     *msec = (diff <= 0) ? 0
             : (int32_t)((double)diff * 1000 / ((double)mSampleRate * mPlaybackRate.mSpeed));
     return NO_ERROR;
+}
+
+// MIUI ADD: START
+void AudioTrack::reportTrackStatus(int uid, int pid, int sessionId, bool isMuted) {
+    if (mProcessManager == nullptr) {
+        const sp<IServiceManager> sm(defaultServiceManager());
+        if (sm != nullptr) {
+            mProcessManager = sm->checkService(String16("ProcessManager"));
+        }
+    }
+
+    if (mProcessManager != nullptr) {
+        Parcel parcelData, reply;
+        parcelData.writeInterfaceToken(String16("miui.IProcessManager"));
+        parcelData.writeInt32(uid);
+        parcelData.writeInt32(pid);
+        parcelData.writeInt32(sessionId);
+        parcelData.writeBool(isMuted);
+        mProcessManager->transact(REPORT_TRACK_STATUS_TRANSACTION,
+             parcelData, &reply, IBinder::FLAG_ONEWAY);
+    }
+}
+// END
+
+bool AudioTrack::isLongTimeZeroData(const void *buffer, int size){
+    bool islongtime = false;
+    bool isMuted = false;
+    int16_t mMaxAmplitude = 0;
+    int16_t gap = 2; // int16_t / int8_t
+    int16_t value = 0;
+    const int16_t *check_point = (const int16_t *)buffer;
+    int64_t duration = 0;
+    if ((mFormat & AUDIO_FORMAT_MAIN_MASK) != AUDIO_FORMAT_PCM)
+        return false;
+    if (!buffer || size <= 0)
+        return false;
+    //check audio track volume
+    isMuted = mVolume[AUDIO_INTERLEAVE_LEFT] == 0.0f &&
+              mVolume[AUDIO_INTERLEAVE_RIGHT] == 0.0f;
+    mBeforeTimeMs = mNowTimeMs;
+    mNowTimeMs = getNowUs() / 1000;
+    if (mBeforeTimeMs == 0)
+        return false;
+    duration = mNowTimeMs - mBeforeTimeMs;
+    if (!isMuted) {
+        for (int i = 0; i < size / gap; i++) {
+            value = check_point[i];
+            if (value < 0) {
+                value = -value;
+            }
+            if (mMaxAmplitude < value) {
+                mMaxAmplitude = value;
+            }
+        }
+        if (mMaxAmplitude > 0) {
+            // get one buffer time for unsilent
+            if (mMaxAmplitude >= 5)
+                mFineTimeMs += duration;
+            else
+                mSmallTimeMs += duration;
+            mMuteKillMs = 0;
+
+            // MIUI ADD: START
+            if (mProcessManager != nullptr && mMuteReported) {
+                reportTrackStatus(mClientAttributionSource.uid,
+                        mClientAttributionSource.pid, getSessionId(), false);
+                mMuteReported = false;
+            }
+            // END
+        } else {
+            // get one buffer time for silent (ms)
+            mMuteTimeMs += duration;
+            mMuteKillMs += duration;
+        }
+        // for power keeper
+	if (mMuteKillMs > LONG_TIME_ZERO_CHECK_TIME) {
+            LOG_EVENT_STRING(30203, String8::format("%d&%d", mClientAttributionSource.pid, mClientAttributionSource.uid).string());
+            ALOGI("[audioTrackData] isLongTimeZeroData out of time %ldS %ldmS", (long)mMuteKillMs/1000, (long)mMuteKillMs%1000);
+            islongtime = true;
+            mMuteKillMs = 0;
+        }
+        // mute
+        if ((mMuteTimeMs - MUTE_LOOP_GAP_MS + 1000) / 1000 > mMuteTimeSec) {
+            mMuteTimeSec = mMuteTimeMs / 1000;
+            ALOGD("[audioTrackData][mute] %lds(f:%ld m:%ld s:%ld k:%ld) : pid %d uid %d sessionId %d sr %d ch %d fmt %x",
+                (long)mMuteTimeSec, (long)mFineTimeMs, (long)mMuteTimeMs, (long)mSmallTimeMs, (long)mMuteKillMs,
+                mClientAttributionSource.pid, mClientAttributionSource.uid, getSessionId(),
+                mSampleRate, mChannelCount, mFormat);
+            if (mMuteTimeMs >= LONG_TIME_ZERO_CHECK_TIME) {
+                mMuteTimeMs = 0;
+                mMuteTimeSec = 0;
+            }
+            // MIUI ADD: START
+            if (!mMuteReported && mMuteKillMs > LONG_TIME_ZERO_THRESHOLD) {
+                reportTrackStatus(mClientAttributionSource.uid,
+                        mClientAttributionSource.pid, getSessionId(), true);
+                mMuteReported = true;
+            }
+            // END
+        // fine
+	} else if ((mFineTimeMs - FINE_LOOP_GAP_MS + 1000) / 1000 > mFineTimeSec) {
+            mFineTimeSec = mFineTimeMs / 1000;
+            ALOGD("[audioTrackData][fine] %lds(f:%ld m:%ld s:%ld k:%ld) : pid %d uid %d sessionId %d sr %d ch %d fmt %x",
+                (long)mFineTimeSec, (long)mFineTimeMs, (long)mMuteTimeMs, (long)mSmallTimeMs, (long)mMuteKillMs,
+                mClientAttributionSource.pid, mClientAttributionSource.uid, getSessionId(),
+                mSampleRate, mChannelCount, mFormat);
+            if (mFineTimeMs >= LONG_TIME_ZERO_CHECK_TIME) {
+                mFineTimeMs = 0;
+                mFineTimeSec = 0;
+            }
+            // small
+        } else if ((mSmallTimeMs - FINE_LOOP_GAP_MS + 1000) / 1000 > mSmallTimeSec) {
+            mSmallTimeSec = mSmallTimeMs / 1000;
+           ALOGD("[audioTrackData][fine] %lds(f:%ld m:%ld s:%ld k:%ld) : pid %d uid %d sessionId %d sr %d ch %d fmt %x",
+                (long)mFineTimeSec, (long)mFineTimeMs, (long)mMuteTimeMs, (long)mSmallTimeMs, (long)mMuteKillMs,
+                mClientAttributionSource.pid, mClientAttributionSource.uid, getSessionId(),
+                mSampleRate, mChannelCount, mFormat);
+            if (mSmallTimeMs >= LONG_TIME_ZERO_CHECK_TIME) {
+                mSmallTimeMs = 0;
+                mSmallTimeSec = 0;
+            }
+        } else
+            ;
+    }
+    return islongtime;
 }
 
 bool AudioTrack::hasStarted()
@@ -3863,7 +4601,9 @@ bool AudioTrack::AudioTrackThread::threadLoop()
     if (exitPending()) {
         return false;
     }
+    ATRACE_BEGIN("AudioTrackThread_processAudioBuffer");
     nsecs_t ns = mReceiver.processAudioBuffer();
+    ATRACE_END();
     switch (ns) {
     case 0:
         return true;
@@ -3947,6 +4687,12 @@ void AudioTrack::AudioTrackCallback::setAudioTrackCallback(
         const sp<media::IAudioTrackCallback> &callback) {
     AutoMutex lock(mAudioTrackCbLock);
     mCallback = callback;
+}
+
+//get package name for audioTrack_callBack_pullFromBuffQueue function
+String16 AudioTrack::getPackagenameInMcbf()
+{
+    return ClientName;
 }
 
 } // namespace android

@@ -20,9 +20,9 @@
 
 #include <media/MediaMetricsItem.h>
 #include <media/MediaRecorderBase.h>
+#include <media/stagefright/AudioSource.h>
 #include <camera/CameraParameters.h>
 #include <utils/String8.h>
-
 #include <system/audio.h>
 
 #include <media/hardware/MetadataBufferType.h>
@@ -44,6 +44,11 @@ class MetaData;
 struct AudioSource;
 class MediaProfiles;
 struct ALooper;
+struct AMessage;
+//#ifdef MIAUDIO_OZO
+class IMediaSource;
+class IMediaCodecEventListener;
+//#endif
 
 struct StagefrightRecorder : public MediaRecorderBase {
     explicit StagefrightRecorder(const AttributionSourceState& attributionSource);
@@ -89,7 +94,7 @@ struct StagefrightRecorder : public MediaRecorderBase {
             status_t getPortId(audio_port_handle_t *portId) const override;
     virtual status_t getRtpDataUsage(uint64_t *bytes);
 
-private:
+protected:
 
     enum privacy_sensitive_t {
         PRIVACY_SENSITIVE_DEFAULT = -1,
@@ -120,6 +125,7 @@ private:
     audio_encoder mAudioEncoder;
     video_encoder mVideoEncoder;
     bool mUse64BitFileOffset;
+    bool mEnabledCompressAudioRecording;
     int32_t mVideoWidth, mVideoHeight;
     int32_t mFrameRate;
     int32_t mVideoBitRate;
@@ -128,7 +134,7 @@ private:
     int32_t mAudioChannels;
     int32_t mSampleRate;
     int32_t mInterleaveDurationUs;
-    int32_t mIFramesIntervalSec;
+    float   mIFramesIntervalSec;
     int32_t mCameraId;
     int32_t mVideoEncoderProfile;
     int32_t mVideoEncoderLevel;
@@ -155,6 +161,7 @@ private:
     int32_t mRTPSockDscp;
     int64_t mRTPSockNetwork;
     uint32_t mLastSeqNo;
+    int32_t mEntropyMode; // Add by xiaomi
 
     int64_t mDurationRecordedUs;
     int64_t mStartedRecordingUs;
@@ -165,7 +172,7 @@ private:
     double mCaptureFps;
     int64_t mTimeBetweenCaptureUs;
     sp<CameraSourceTimeLapse> mCameraSourceTimeLapse;
-
+    sp<CameraSource> mCameraSource;
     String8 mParams;
 
     MetadataBufferType mMetaDataStoredInVideoBuffers;
@@ -192,8 +199,9 @@ private:
     float mSelectedMicFieldDimension;
 
     static const int kMaxHighSpeedFps = 1000;
+    static const uint32_t kDspSupportedBitRate = 36000;
 
-    status_t prepareInternal();
+    virtual status_t prepareInternal();
     status_t setupMPEG4orWEBMRecording();
     void setupMPEG4orWEBMMetaData(sp<MetaData> *meta);
     status_t setupAMRRecording();
@@ -210,8 +218,10 @@ private:
     // depending on the videosource type
     status_t setupMediaSource(sp<MediaSource> *mediaSource);
     status_t setupCameraSource(sp<CameraSource> *cameraSource);
-    status_t setupAudioEncoder(const sp<MediaWriter>& writer);
+    status_t setupAudioEncoder();
     status_t setupVideoEncoder(const sp<MediaSource>& cameraSource, sp<MediaCodecSource> *source);
+    virtual void setupCustomVideoEncoderParams(sp<MediaSource> /*cameraSource*/,
+            sp<AMessage> &/*format*/) {}
 
     // Encoding parameter handling utilities
     status_t setParameter(const String8 &key, const String8 &value);
@@ -223,7 +233,7 @@ private:
     status_t setParamCaptureFps(double fps);
     status_t setParamVideoEncodingBitRate(int32_t bitRate);
     status_t setParamVideoBitRateMode(int32_t bitRateMode);
-    status_t setParamVideoIFramesInterval(int32_t seconds);
+    status_t setParamVideoIFramesInterval(float seconds);
     status_t setParamVideoEncoderProfile(int32_t profile);
     status_t setParamVideoEncoderLevel(int32_t level);
     status_t setParamVideoCameraId(int32_t cameraId);
@@ -249,6 +259,7 @@ private:
     status_t setParamRtpDscp(int32_t dscp);
     status_t setSocketNetwork(int64_t networkHandle);
     status_t requestIDRFrame();
+    status_t setParamEntropyMode(int32_t mode);   // Add by xiaomi
     void clipVideoBitRate();
     void clipVideoFrameRate();
     void clipVideoFrameWidth();
@@ -258,10 +269,28 @@ private:
     void clipNumberOfAudioChannels();
     void setDefaultProfileIfNecessary();
     void setDefaultVideoEncoderIfNecessary();
-
+    virtual status_t handleCustomOutputFormats() {return UNKNOWN_ERROR;}
+    virtual status_t handleCustomRecording() {return UNKNOWN_ERROR;}
+    virtual status_t handleCustomAudioSource(sp<AMessage> /*format*/) {return UNKNOWN_ERROR;}
+    virtual status_t handleCustomAudioEncoder() {return UNKNOWN_ERROR;}
+    virtual sp<MediaSource> setPCMRecording() {return NULL;}
+    virtual bool isCompressAudioRecordingSupported() { return false; }
+    virtual sp<AudioSource> setCompressAudioRecording() { return nullptr; }
 
     StagefrightRecorder(const StagefrightRecorder &);
     StagefrightRecorder &operator=(const StagefrightRecorder &);
+//#ifdef MIAUDIO_OZO
+public:
+    virtual status_t setOzoRunTimeParameters(const String8 &params);
+    virtual status_t setOzoAudioTuneFile(int fd);
+
+private:
+    void* mOzoAudioParams = NULL;
+    bool mOzoFileSourceEnable;
+    bool mOzoBrandEnabled;
+    IMediaCodecEventListener *mCodecEventListener;
+    IMediaCodecEventListener *mOzoTuneWriter;
+//#endif
 };
 
 }  // namespace android

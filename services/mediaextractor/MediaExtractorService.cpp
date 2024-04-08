@@ -50,7 +50,7 @@ MediaExtractorService::~MediaExtractorService() {
             localSource,
             mime ? mime->c_str() : nullptr);
 
-    ALOGV("extractor service created %p (%s)",
+    ALOGD("extractor service created %p (%s)",
             extractor.get(),
             extractor == nullptr ? "" : extractor->name());
 

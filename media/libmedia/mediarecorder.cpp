@@ -30,6 +30,9 @@
 #include <media/mediaplayer.h>  // for MEDIA_ERROR_SERVER_DIED
 #include <media/stagefright/PersistentSurface.h>
 #include <gui/IGraphicBufferProducer.h>
+//MIUI ADD: start MIAUDIO_OZO
+#include <MediaStub.h>
+//MIUI ADD: end
 
 namespace android {
 
@@ -385,6 +388,13 @@ status_t MediaRecorder::setNextOutputFile(int fd)
     return ret;
 }
 
+//MIUI ADD: start MIAUDIO_OZO
+status_t MediaRecorder::setOzoAudioTuneFile(int fd)
+{
+    return MediaStub::setOzoAudioTuneFile(mMediaRecorder, mCurrentState,fd);
+}
+//MIUI ADD: end
+
 status_t MediaRecorder::setVideoSize(int width, int height)
 {
     ALOGV("setVideoSize(%d, %d)", width, height);
@@ -504,6 +514,12 @@ status_t MediaRecorder::setParameters(const String8& params) {
 
     return ret;
 }
+
+//MIUI ADD: start MIAUDIO_OZO
+status_t MediaRecorder::setOzoRunTimeParameters(const String8& params) {
+    return MediaStub::setOzoRunTimeParametersMedia(mMediaRecorder, mCurrentState,params);
+}
+//MIUI ADD: end
 
 status_t MediaRecorder::prepare()
 {

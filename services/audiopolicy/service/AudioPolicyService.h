@@ -222,8 +222,17 @@ public:
     binder::Status setCurrentImeUid(int32_t uid) override;
     binder::Status isHapticPlaybackSupported(bool* _aidl_return) override;
     binder::Status isUltrasoundSupported(bool* _aidl_return) override;
+
+//MIUI ADD: MIAUDIO_MULTI_ROUTE
+    binder::Status setProParameters(const std::string& keyValuePairs) override;
+
+//MIUI ADD: input reuse
+    binder::Status isReuseInput(int32_t uid, int32_t session, bool* _aidl_return) override;
+
+          status_t doStartOutput(audio_port_handle_t portId);
     binder::Status listAudioProductStrategies(
             std::vector<media::AudioProductStrategy>* _aidl_return) override;
+    binder::Status setIsCERegion(bool isCERegion, bool* _aidl_return) override;
     binder::Status getProductStrategyFromAudioAttributes(const media::AudioAttributesEx& aa,
                                                          bool fallbackOnDefault,
                                                          int32_t* _aidl_return) override;
@@ -518,6 +527,7 @@ private:
             SET_VOLUME,
             SET_PARAMETERS,
             SET_VOICE_VOLUME,
+            START_OUTPUT,
             STOP_OUTPUT,
             RELEASE_OUTPUT,
             CREATE_AUDIO_PATCH,
@@ -552,6 +562,7 @@ private:
                     status_t    parametersCommand(audio_io_handle_t ioHandle,
                                             const char *keyValuePairs, int delayMs = 0);
                     status_t    voiceVolumeCommand(float volume, int delayMs = 0);
+                    status_t    startOutputCommand(audio_port_handle_t portId);
                     void        stopOutputCommand(audio_port_handle_t portId);
                     void        releaseOutputCommand(audio_port_handle_t portId);
                     status_t    sendCommand(sp<AudioCommand>& command, int delayMs = 0);
@@ -632,6 +643,11 @@ private:
         class VoiceVolumeData : public AudioCommandData {
         public:
             float mVolume;
+        };
+
+        class StartOutputData : public AudioCommandData {
+        public:
+            audio_port_handle_t mPortId;
         };
 
         class StopOutputData : public AudioCommandData {
@@ -955,6 +971,14 @@ private:
                                 OpRecordAudioMonitor::createIfNeeded(attributionSource,
                                 attributes, commandThread)) {}
                 ~AudioRecordClient() override = default;
+                /* store app type here: start */
+                void setAppMask(audio_app_type_f mask) {
+                    mAppMask = mask;
+                }
+                audio_app_type_f getAppMask() {
+                    return mAppMask;
+                }
+                /* store app type here: end */
 
         bool hasOp() const {
             return mOpRecordAudioMonitor ? mOpRecordAudioMonitor->hasOp() : true;
@@ -968,6 +992,9 @@ private:
 
     private:
         sp<OpRecordAudioMonitor>           mOpRecordAudioMonitor;
+        /* store app type here: start */
+        audio_app_type_f mAppMask = APP_TYPE_NULL;
+        /* store app type here: end */
     };
 
 
@@ -1056,10 +1083,13 @@ private:
     DefaultKeyedVector<audio_port_handle_t, sp<AudioPlaybackClient>> mAudioPlaybackClients
         GUARDED_BY(mLock);
 
+    int allowConcurrentApp(const sp<AudioRecordClient> &current, audio_app_type_f appType);
+
     MediaPackageManager mPackageManager; // To check allowPlaybackCapture
 
     CaptureStateNotifier mCaptureStateNotifier;
 
+    // created in onFirstRef() and never cleared: does not need to be guarded by mLock
     sp<Spatializer> mSpatializer;
 
     void *mLibraryHandle = nullptr;

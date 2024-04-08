@@ -43,6 +43,7 @@
 #include <media/stagefright/MediaExtractorFactory.h>
 #include <media/stagefright/MetaData.h>
 #include <media/stagefright/Utils.h>
+#include "mediaplayerservice/AVNuExtensions.h"
 #include <mpeg2ts/AnotherPacketSource.h>
 
 namespace android {
@@ -316,7 +317,6 @@ status_t NuPlayer::GenericSource::startSources() {
         ALOGE("failed to start audio track!");
         return UNKNOWN_ERROR;
     }
-
     if (mVideoTrack.mSource != NULL && mVideoTrack.mSource->start() != OK) {
         ALOGE("failed to start video track!");
         return UNKNOWN_ERROR;
@@ -1274,6 +1274,14 @@ sp<ABuffer> NuPlayer::GenericSource::mediaBufferToABuffer(
             kKeyMpegUserData, &dataType, &mpegUserDataPointer, &mpegUserDataLength)) {
         sp<ABuffer> mpegUserData = ABuffer::CreateAsCopy(mpegUserDataPointer, mpegUserDataLength);
         meta->setBuffer("mpeg-user-data", mpegUserData);
+    }
+
+    const void *hdr10PlusInfo;
+    size_t hdr10PlusInfoLength;
+    if (mb->meta_data().findData(
+            kKeyHdr10PlusInfo, &dataType, &hdr10PlusInfo, &hdr10PlusInfoLength)) {
+        sp<ABuffer> hdr10PlusData = ABuffer::CreateAsCopy(hdr10PlusInfo, hdr10PlusInfoLength);
+        meta->setBuffer("hdr10-plus-info", hdr10PlusData);
     }
 
     mb->release();

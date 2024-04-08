@@ -52,6 +52,9 @@ using android::hardware::camera::common::V1_0::Status;
 using namespace camera3::SessionConfigurationUtils;
 using std::literals::chrono_literals::operator""s;
 using hardware::camera2::utils::CameraIdAndSessionConfiguration;
+#ifdef __XIAOMI_CAMERA__
+uint64_t android::CameraProviderManager::gCameraFoldState;
+#endif
 
 namespace {
 const bool kEnableLazyHal(property_get_bool("ro.camera.enableLazyHal", false));
@@ -578,6 +581,11 @@ status_t CameraProviderManager::usbDeviceDetached(const std::string &usbDeviceId
 status_t CameraProviderManager::notifyDeviceStateChange(int64_t newState) {
     std::lock_guard<std::mutex> lock(mInterfaceMutex);
     mDeviceState = newState;
+#ifdef __XIAOMI_CAMERA__
+    gCameraFoldState = mDeviceState;
+    ALOGI("%s: Current device state 0x%" PRIx64,
+                __FUNCTION__, gCameraFoldState);
+#endif
     status_t res = OK;
     for (auto& provider : mProviders) {
         ALOGV("%s: Notifying %s for new state 0x%" PRIx64,
@@ -2351,12 +2359,30 @@ status_t CameraProviderManager::ProviderInfo::DeviceInfo3::getCameraCharacterist
         bool overrideForPerfClass, CameraMetadata *characteristics) const {
     if (characteristics == nullptr) return BAD_VALUE;
 
+#ifdef __XIAOMI_CAMERA__
+    bool useNoPCOverride = false;
+    if (!overrideForPerfClass && mCameraCharNoPCOverride != nullptr) {
+        useNoPCOverride = true;
+    } else {
+        useNoPCOverride = false;
+    }
+
+    if (mLockStatus == false) {
+        *characteristics = useNoPCOverride? *mCameraCharNoPCOverride : mCameraCharacteristics;
+    } else {
+        ALOGD("%s: mRWLock start locking, overrideForPerfClass:%d,useNoPCOverride:%d",__FUNCTION__,overrideForPerfClass,useNoPCOverride);
+        pthread_rwlock_rdlock(&mRWLock);
+        *characteristics = useNoPCOverride? *mCameraCharNoPCOverride : mCameraCharacteristics;
+        pthread_rwlock_unlock(&mRWLock);
+        ALOGD("%s: mRWLock complete unlock, overrideForPerfClass:%d ,useNoPCOverride:%d",__FUNCTION__,overrideForPerfClass,useNoPCOverride);
+    }
+#else
     if (!overrideForPerfClass && mCameraCharNoPCOverride != nullptr) {
         *characteristics = *mCameraCharNoPCOverride;
     } else {
         *characteristics = mCameraCharacteristics;
     }
-
+#endif
     return OK;
 }
 
@@ -2630,6 +2656,12 @@ CameraProviderManager::ProviderInfo::~ProviderInfo() {
     // Destruction of ProviderInfo is only supposed to happen when the respective
     // CameraProvider interface dies, so do not unregister callbacks.
 }
+
+#ifdef __XIAOMI_CAMERA__
+uint64_t CameraProviderManager::getCameraFoldState() {
+    return gCameraFoldState;
+}
+#endif
 
 // Expects to have mInterfaceMutex locked
 std::vector<std::unordered_set<std::string>>

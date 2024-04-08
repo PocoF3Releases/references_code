@@ -85,6 +85,9 @@ enum output_format {
     /* Opus data in a OGG container */
     OUTPUT_FORMAT_OGG = 11,
 
+    OUTPUT_FORMAT_QCP = 20,
+    OUTPUT_FORMAT_WAVE = 21,
+
     OUTPUT_FORMAT_LIST_END // must be last - used to validate format type
 };
 
@@ -97,7 +100,11 @@ enum audio_encoder {
     AUDIO_ENCODER_AAC_ELD = 5,
     AUDIO_ENCODER_VORBIS = 6,
     AUDIO_ENCODER_OPUS = 7,
-
+    AUDIO_ENCODER_EVRC = 10,
+    AUDIO_ENCODER_QCELP = 11,
+    AUDIO_ENCODER_LPCM = 12,
+    AUDIO_ENCODER_MPEGH = 13,
+    AUDIO_ENCODER_FLAC = 14,
     AUDIO_ENCODER_LIST_END // must be the last - used to validate the audio encoder type
 };
 
@@ -274,6 +281,10 @@ public:
 
     status_t    getPortId(audio_port_handle_t *portId) const;
     status_t    getRtpDataUsage(uint64_t *bytes);
+//#ifdef MIAUDIO_OZO
+    status_t    setOzoRunTimeParameters(const String8 &params);
+    status_t    setOzoAudioTuneFile(int fd);
+//#endif
 
 private:
     void                    doCleanUp();

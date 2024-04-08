@@ -166,6 +166,11 @@ void processOneCaptureResultLockedT(
         return;
     }
     r.result = reinterpret_cast<const camera_metadata_t*>(resultMetadata.data());
+#ifdef __XIAOMI_CAMERA__
+    if (states.privacyCamera != nullptr) {
+        states.privacyCamera->saveFacesData(r.result);
+    }
+#endif
 
     // Read and validate physical camera metadata
     size_t physResultCount = physicalCameraMetadata.size();

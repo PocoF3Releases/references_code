@@ -15,7 +15,7 @@
  */
 
 #define LOG_TAG "AudioPolicyEffects"
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -32,6 +32,10 @@
 #include <cutils/config_utils.h>
 #include <binder/IPCThreadState.h>
 #include "AudioPolicyEffects.h"
+
+//MIUI ADD: start MIAUDIO_GLOBAL_AUDIO_EFFECT
+#include "AudioPolicyServiceStub.h"
+//MIUI ADD: end
 
 namespace android {
 
@@ -764,7 +768,7 @@ error:
     return NULL;
 }
 
-void AudioPolicyEffects::loadEffectParameters(cnode *root, Vector <effect_param_t *>& params)
+void EXPORT_API AudioPolicyEffects::loadEffectParameters(cnode *root, Vector <effect_param_t *>& params)
 {
     cnode *node = root->first_child;
     while (node) {
@@ -911,6 +915,10 @@ status_t AudioPolicyEffects::loadAudioEffectXmlConfig() {
         return -ENOENT;
     }
 
+//MIUI ADD: start  MIAUDIO_GLOBAL_AUDIO_EFFECT
+    AudioPolicyServiceStub::loadGlobalAudioEffectXmlConfig(mGlobalEffectDescs, result);
+//MIUI ADD: end
+
     auto loadProcessingChain = [](auto& processingChain, auto& streams) {
         for (auto& stream : processingChain) {
             auto effectDescs = std::make_unique<EffectDescVector>();
@@ -960,6 +968,9 @@ status_t AudioPolicyEffects::loadAudioEffectConfig(const char *path)
 
     Vector <EffectDesc *> effects;
     loadEffects(root, effects);
+//MIUI ADD: start MIAUDIO_GLOBAL_AUDIO_EFFECT
+    AudioPolicyServiceStub::loadGlobalEffects(this, root, effects);
+//MIUI ADD: end
     loadInputEffectConfigurations(root, effects);
     loadStreamEffectConfigurations(root, effects);
 

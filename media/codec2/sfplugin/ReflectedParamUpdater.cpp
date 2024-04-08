@@ -242,7 +242,8 @@ void ReflectedParamUpdater::getParamIndicesFromMessage(
     parseMessageAndDoWork(
             params,
             [&indices](const std::string &, const FieldDesc &desc, const void *, size_t) {
-                indices.insert(desc.paramDesc->index());
+                if (desc.paramDesc != nullptr)
+                    indices.insert(desc.paramDesc->index());
             });
     for (const C2Param::Index &index : indices) {
         vec->push_back(index);

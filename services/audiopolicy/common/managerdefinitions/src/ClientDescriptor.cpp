@@ -15,7 +15,7 @@
  */
 
 #define LOG_TAG "APM_ClientDescriptor"
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
 
 #include <sstream>
 

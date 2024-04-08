@@ -15,7 +15,7 @@
  */
 
 #define LOG_TAG "APM::EffectDescriptor"
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
 
 #include <android-base/stringprintf.h>
 #include "EffectDescriptor.h"

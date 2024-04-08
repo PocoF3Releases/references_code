@@ -63,11 +63,14 @@ public:
     // parameters are input|output, returned value is the best match.
     status_t checkCompatibleAudioProfile(uint32_t &samplingRate,
                                          audio_channel_mask_t &channelMask,
-                                         audio_format_t &format) const
+                                         audio_format_t &format,
+                                         bool checkExactFormat,
+                                         bool checkExactChannelMask) const
     {
         return checkCompatibleProfile(
                 asAudioPort()->getAudioProfiles(), samplingRate, channelMask, format,
-                asAudioPort()->getType(), asAudioPort()->getRole());
+                asAudioPort()->getType(), asAudioPort()->getRole(),
+                checkExactFormat, checkExactChannelMask);
     }
 
     void pickAudioProfile(uint32_t &samplingRate,

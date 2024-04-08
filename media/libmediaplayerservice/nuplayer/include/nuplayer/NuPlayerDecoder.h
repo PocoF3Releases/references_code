@@ -24,6 +24,9 @@
 namespace android {
 
 class MediaCodecBuffer;
+//#ifdef MIAUDIO_OZO
+class OzoPlaybackController;
+//#endif
 
 struct NuPlayer::Decoder : public DecoderBase {
     Decoder(const sp<AMessage> &notify,
@@ -54,7 +57,6 @@ protected:
     virtual void onShutdown(bool notifyComplete);
     virtual bool doRequestBuffers();
 
-private:
     enum {
         kWhatCodecNotify         = 'cdcN',
         kWhatRenderBuffer        = 'rndr',
@@ -113,6 +115,11 @@ private:
     bool mResumePending;
     AString mComponentName;
 
+    float mVideoRenderFps;
+//#ifdef MIAUDIO_OZO
+    void* mOzoPlayCtrl = NULL;
+//#endif
+
     void handleError(int32_t err);
     bool handleAnInputBuffer(size_t index);
     bool handleAnOutputBuffer(
@@ -121,7 +128,7 @@ private:
             size_t size,
             int64_t timeUs,
             int32_t flags);
-    void handleOutputFormatChange(const sp<AMessage> &format);
+    virtual void handleOutputFormatChange(const sp<AMessage> &format);
 
     void releaseAndResetMediaBuffers();
     void requestCodecNotification();
@@ -140,6 +147,7 @@ private:
 
     void notifyResumeCompleteIfNecessary();
 
+    void dolbyVisionDecoderOnConfigure(const AString &mime, const sp<AMessage> &format);
     void onReleaseCrypto(const sp<AMessage>& msg);
 
     DISALLOW_EVIL_CONSTRUCTORS(Decoder);

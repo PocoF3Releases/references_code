@@ -27,6 +27,21 @@
 #include "IOProfile.h"
 #include "PolicyAudioPort.h"
 
+#include <vector>
+//#ifdef MIAUDIO_INPUT_REUSE
+struct audio_reuse_input {
+    uid_t uid_base;
+    std::vector<uid_t> uid_reuse;
+    audio_session_t session_base;
+    std::vector<audio_session_t> session_reuse;
+    uint32_t sample_rate_base;
+    std::vector<uint32_t> sample_rate_reuse;
+    audio_channel_mask_t channel_mask_base;
+    std::vector<audio_channel_mask_t> channel_mask_reuse;
+};
+typedef struct audio_reuse_input audio_reuse_input_t;
+//#endif
+
 namespace android {
 
 class AudioPolicyMix;
@@ -100,6 +115,31 @@ public:
         }
         return false;
     }
+    /* store app type here: start */
+    /* one more apps can use same AudioInputDescriptor,
+     * So this mAppMask contains more app mask.
+     */
+    void setAppMask(audio_app_type_f mask) {
+        mAppMask |= mask;
+    }
+    int32_t getAppMask() {
+        return mAppMask;
+    }
+    /* store app type here: end */
+
+    //MIUI ADD:input reuse
+    void setReuseInputInfo(struct audio_reuse_input &reuseInputInfo) {
+        mReuseInputInfo.uid_base = reuseInputInfo.uid_base;
+        mReuseInputInfo.session_base = reuseInputInfo.session_base;
+        mReuseInputInfo.uid_reuse.assign(reuseInputInfo.uid_reuse.begin(), reuseInputInfo.uid_reuse.end());
+        mReuseInputInfo.session_reuse.assign(reuseInputInfo.session_reuse.begin(), reuseInputInfo.session_reuse.end());
+    }
+    void getReuseInputInfo(struct audio_reuse_input &reuseInputInfo) {
+        reuseInputInfo.uid_base = mReuseInputInfo.uid_base;
+        reuseInputInfo.session_base = mReuseInputInfo.session_base;
+        reuseInputInfo.uid_reuse.assign(mReuseInputInfo.uid_reuse.begin(), mReuseInputInfo.uid_reuse.end());
+        reuseInputInfo.session_reuse.assign(mReuseInputInfo.session_reuse.begin(), mReuseInputInfo.session_reuse.end());
+    }
 
     status_t open(const audio_config_t *config,
                   const sp<DeviceDescriptor> &device,
@@ -144,7 +184,12 @@ public:
     AudioPolicyClientInterface * const mClientInterface;
     int32_t mGlobalActiveCount = 0;  // non-client-specific activity ref count
     EffectDescriptorCollection mEnabledEffects;
+    /* store app type here: start */
+    int32_t mAppMask = (int32_t)APP_TYPE_NULL;
+    /* store app type here: end */
     audio_input_flags_t& mFlags = AudioPortConfig::mFlags.input;
+    //MIUI ADD:input reuse
+    struct audio_reuse_input mReuseInputInfo;
 };
 
 class AudioInputCollection :

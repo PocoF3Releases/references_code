@@ -50,6 +50,7 @@
 #include "utils/IPCTransport.h"
 #include "utils/LatencyHistogram.h"
 #include <camera_metadata_hidden.h>
+#include <sensorprivacy/SensorPrivacyManager.h>
 
 using android::camera3::camera_capture_request_t;
 using android::camera3::camera_request_template;
@@ -68,6 +69,14 @@ class Camera3ZslStream;
 class Camera3StreamInterface;
 
 } // namespace camera3
+
+#ifdef __XIAOMI_CAMERA__
+enum class ScreenFoldState {
+    Undefined,
+    Fold,
+    UnFold,
+};
+#endif
 
 /**
  * CameraDevice for HAL devices with version CAMERA_DEVICE_API_VERSION_3_0 or higher.
@@ -107,6 +116,20 @@ class Camera3Device :
     // Transitions to idle state on success.
     virtual status_t initialize(sp<CameraProviderManager> /*manager*/,
             const String8& /*monitorTags*/) = 0;
+
+#ifdef __XIAOMI_CAMERA__
+camera3::InFlightRequestMap getmInFlightMap(){
+    return mInFlightMap;
+}
+
+std::mutex* getmInFlightLock(){
+    return &mInFlightLock;
+}
+
+void executesetErrorState(const char *fmt){
+    this->setErrorState(fmt);
+}
+#endif
 
     status_t disconnect() override;
     status_t dump(int fd, const Vector<String16> &args) override;
@@ -178,6 +201,13 @@ class Camera3Device :
     status_t configureStreams(const CameraMetadata& sessionParams,
             int operatingMode =
             camera_stream_configuration_mode_t::CAMERA_STREAM_CONFIGURATION_NORMAL_MODE) override;
+
+#ifdef __XIAOMI_CAMERA__
+    ScreenFoldState getScreenFoldStatus();
+    ScreenFoldState getPreviousFoldStatus();
+    void setFoldStatus(ScreenFoldState status);
+#endif
+
     status_t getInputBufferProducer(
             sp<IGraphicBufferProducer> *producer) override;
 
@@ -347,6 +377,10 @@ class Camera3Device :
     // Flag indicating is the current active stream configuration is constrained high speed.
     bool                       mIsConstrainedHighSpeedConfiguration;
 
+#ifdef __XIAOMI_CAMERA__
+    ScreenFoldState mFoldStatus;
+#endif
+
     /**** Scope for mLock ****/
 
     class HalInterface : public camera3::Camera3StreamBufferFreedListener,
@@ -489,6 +523,11 @@ class Camera3Device :
     std::unordered_map<std::string, CameraMetadata> mPhysicalDeviceInfoMap;
 
     CameraMetadata             mRequestTemplateCache[CAMERA_TEMPLATE_COUNT];
+
+#ifdef __XIAOMI_CAMERA__
+    IPrivacyCamera             *mPricacyCamera = nullptr;
+    bool                       mEnableJank;
+#endif
 
     struct Size {
         uint32_t width;
@@ -668,6 +707,21 @@ class Camera3Device :
      */
     status_t waitUntilDrainedLocked(nsecs_t maxExpectedDuration);
 
+#ifdef __XIAOMI_CAMERA__
+    sp<CaptureRequest> setUpRequestLocked(const PhysicalCameraSettingsList &request,
+            const SurfaceMap &surfaceMap, sp<Camera3Device::CaptureRequest>  preRequest);
+
+    sp<CaptureRequest> createCaptureRequest(const PhysicalCameraSettingsList &request,
+            const SurfaceMap &surfaceMap, sp<Camera3Device::CaptureRequest>  preRequest);
+
+    bool                   mIsPluginBurstRequest;
+
+    bool                   getPluginBurstRequestStatus() { return mIsPluginBurstRequest;}
+
+    virtual bool initJankStub(wp<Camera3Device> parent, const CameraMetadata& sessionParams) {return false;}
+
+    virtual void cloneRequestStub(sp<Camera3Device::CaptureRequest> dstRequest, sp<Camera3Device::CaptureRequest> srcRequest) {return ;}
+#else
     /**
      * Do common work for setting up a streaming or single capture request.
      * On success, will transition to ACTIVE if in IDLE.
@@ -681,6 +735,7 @@ class Camera3Device :
      */
     sp<CaptureRequest> createCaptureRequest(const PhysicalCameraSettingsList &request,
                                             const SurfaceMap &surfaceMap);
+#endif
 
     /**
      * Internally re-configure camera device using new session parameters.
@@ -1055,6 +1110,9 @@ class Camera3Device :
 
         const bool         mUseHalBufManager;
         const bool         mSupportCameraMute;
+#ifdef __XIAOMI_CAMERA__
+        bool               mIsFoldStatusChanged;
+#endif
     };
 
     virtual sp<RequestThread> createNewRequestThread(wp<Camera3Device> /*parent*/,
@@ -1084,9 +1142,11 @@ class Camera3Device :
             bool callback, nsecs_t minExpectedDuration, nsecs_t maxExpectedDuration,
             const std::set<std::set<String8>>& physicalCameraIds,
             bool isStillCapture, bool isZslCapture, bool rotateAndCropAuto,
-            const std::set<std::string>& cameraIdsWithZoom, const SurfaceMap& outputSurfaces,
-            nsecs_t requestTimeNs);
-
+            const std::set<std::string>& cameraIdsWithZoom,
+#ifdef __XIAOMI_CAMERA__
+            bool isPluginBurstReq,
+#endif
+            const SurfaceMap& outputSurfaces, nsecs_t requestTimeNs);
     /**
      * Tracking for idle detection
      */

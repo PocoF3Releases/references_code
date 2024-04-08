@@ -45,6 +45,8 @@
 #include <media/stagefright/Utils.h>
 #include <media/stagefright/FoundationUtils.h>
 
+#include <mediaplayerservice/AVMediaServiceExtensions.h>
+
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netdb.h>
@@ -124,6 +126,7 @@ struct MyHandler : public AHandler {
         kWhatEOS                        = 'eos!',
         kWhatSeekDiscontinuity          = 'seeD',
         kWhatNormalPlayTimeMapping      = 'nptM',
+        kWhatByeReceived                = 'byeR',
     };
 
     MyHandler(
@@ -134,8 +137,6 @@ struct MyHandler : public AHandler {
           mUIDValid(uidValid),
           mUID(uid),
           mNetLooper(new ALooper),
-          mConn(new ARTSPConnection(mUIDValid, mUID)),
-          mRTPConn(new ARTPConnection),
           mOriginalSessionURL(url),
           mSessionURL(url),
           mSetupTracksSuccessful(false),
@@ -159,6 +160,14 @@ struct MyHandler : public AHandler {
           mPausing(false),
           mPauseGeneration(0),
           mPlayResponseParsed(false) {
+#ifndef __NO_AVEXTENSIONS__
+        mConn = AVMediaServiceFactory::get()->createARTSPConnection(
+                mUIDValid, uid);
+        mRTPConn = AVMediaServiceFactory::get()->createARTPConnection();
+#else
+        mConn = new ARTSPConnection(mUIDValid, mUID);
+        mRTPConn = new ARTPConnection();
+#endif
         mNetLooper->setName("rtsp net");
         mNetLooper->start(false /* runOnCallingThread */,
                           false /* canCallJava */,
@@ -727,6 +736,9 @@ struct MyHandler : public AHandler {
                                      timeoutSecs);
                             }
                         }
+#ifndef __NO_AVEXTENSIONS__
+                        AVMediaServiceUtils::get()->setServerTimeoutUs(mKeepAliveTimeoutUs);
+#endif
 
                         i = mSessionID.find(";");
                         if (i >= 0) {
@@ -746,16 +758,26 @@ struct MyHandler : public AHandler {
 
                                 // We are going to continue even if we were
                                 // unable to poke a hole into the firewall...
+#ifndef __NO_AVEXTENSIONS__
+                                AVMediaServiceUtils::get()->pokeAHole(
+                                        this,
+                                        track->mRTPSocket,
+                                        track->mRTCPSocket,
+                                        transport,
+                                        mSessionHost);
+#else
                                 pokeAHole(
                                         track->mRTPSocket,
                                         track->mRTCPSocket,
                                         transport);
+#endif
                             }
 
                             mRTPConn->addStream(
                                     track->mRTPSocket, track->mRTCPSocket,
                                     mSessionDesc, index,
-                                    notify, track->mUsingInterleavedTCP);
+                                    notify, track->mUsingInterleavedTCP,
+                                    mConn->isIPV6());
 
                             mSetupTracksSuccessful = true;
                         } else {
@@ -797,7 +819,9 @@ struct MyHandler : public AHandler {
                     request.append("Session: ");
                     request.append(mSessionID);
                     request.append("\r\n");
-
+#ifndef __NO_AVEXTENSIONS__
+                    AVMediaServiceUtils::get()->appendRange(&request);
+#endif
                     request.append("\r\n");
 
                     sp<AMessage> reply = new AMessage('play', this);
@@ -1058,6 +1082,13 @@ struct MyHandler : public AHandler {
                 int32_t eos;
                 if (msg->findInt32("eos", &eos)) {
                     ALOGI("received BYE on track index %zu", trackIndex);
+                    char value[PROPERTY_VALUE_MAX] = {0};
+                    if (property_get("rtcp.bye.notify", value, "false")
+                            && !strcasecmp(value, "true")) {
+                        sp<AMessage> msg = mNotify->dup();
+                        msg->setInt32("what", kWhatByeReceived);
+                        msg->post();
+                    }
                     if (!mAllTracksHaveTime && dataReceivedOnAllChannels()) {
                         ALOGI("No time established => fake existing data");
 
@@ -1508,7 +1539,12 @@ struct MyHandler : public AHandler {
 
             size_t trackIndex = 0;
             while (trackIndex < mTracks.size()
-                    && !(val == mTracks.editItemAt(trackIndex).mURL)) {
+                    && !(
+#ifndef __NO_AVEXTENSIONS__
+                    AVMediaServiceUtils::get()->parseTrackURL(
+                    mTracks.editItemAt(trackIndex).mURL, val) ||
+#endif
+                    val == mTracks.editItemAt(trackIndex).mURL)) {
                 ++trackIndex;
             }
             CHECK_LT(trackIndex, mTracks.size());
@@ -1690,9 +1726,14 @@ private:
             request.append(interleaveIndex + 1);
         } else {
             unsigned rtpPort;
+#ifndef __NO_AVEXTENSIONS__
+            AVMediaServiceUtils::get()->makePortPair(
+                    &info->mRTPSocket, &info->mRTCPSocket, &rtpPort,
+                    mConn->isIPV6());
+#else
             ARTPConnection::MakePortPair(
                     &info->mRTPSocket, &info->mRTCPSocket, &rtpPort);
-
+#endif
             if (mUIDValid) {
                 NetworkUtils::RegisterSocketUserTag(info->mRTPSocket, mUID,
                         (uint32_t)*(uint32_t*) "RTP_");

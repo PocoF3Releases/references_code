@@ -16,6 +16,7 @@
 
 //#define LOG_NDEBUG 0
 #define LOG_TAG "SoftOMXPlugin"
+#include <cutils/properties.h>
 #include <utils/Log.h>
 
 #include <media/stagefright/omx/SoftOMXPlugin.h>
@@ -25,15 +26,11 @@
 #include <media/stagefright/foundation/AString.h>
 
 #include <dlfcn.h>
+#define QTI_FLAC_DECODER
 
 namespace android {
 
-static const struct {
-    const char *mName;
-    const char *mLibNameSuffix;
-    const char *mRole;
-
-} kComponents[] = {
+static const kComponent kComponents[] = {
     { "OMX.google.aac.decoder", "aacdec", "audio_decoder.aac" },
     { "OMX.google.aac.encoder", "aacenc", "audio_encoder.aac" },
     { "OMX.google.amrnb.decoder", "amrdec", "audio_decoder.amrnb" },
@@ -63,8 +60,17 @@ static const struct {
     { "OMX.google.gsm.decoder", "gsmdec", "audio_decoder.gsm" },
 };
 
+static const kComponent kVendorComponents[] = {
+#ifdef QTI_FLAC_DECODER
+    { "OMX.qti.audio.decoder.flac", "qtiflacdec", "audio_decoder.flac" },
+#endif
+};
+
 static const size_t kNumComponents =
     sizeof(kComponents) / sizeof(kComponents[0]);
+
+static const size_t kNumVendorComponents =
+    sizeof(kVendorComponents) / sizeof(kVendorComponents[0]);
 
 extern "C" OMXPluginBase* createOMXPlugin() {
     ALOGI("createOMXPlugin");
@@ -77,6 +83,16 @@ extern "C" void destroyOMXPlugin(OMXPluginBase* plugin) {
 }
 
 SoftOMXPlugin::SoftOMXPlugin() {
+    auto addComponents = [&](const kComponent* components, size_t size) {
+        for (size_t idx = 0; idx < size; ++idx) {
+             mComponents.push_back(components[idx]);
+        }
+    };
+    addComponents(kComponents, kNumComponents);
+    bool preferC2AudioCodecs = property_get_bool("vendor.audio.c2.preferred", false);
+    if (!preferC2AudioCodecs) {
+        addComponents(kVendorComponents, kNumVendorComponents);
+    }
 }
 
 OMX_ERRORTYPE SoftOMXPlugin::makeComponentInstance(
@@ -86,13 +102,13 @@ OMX_ERRORTYPE SoftOMXPlugin::makeComponentInstance(
         OMX_COMPONENTTYPE **component) {
     ALOGV("makeComponentInstance '%s'", name);
 
-    for (size_t i = 0; i < kNumComponents; ++i) {
-        if (strcmp(name, kComponents[i].mName)) {
+    for (auto comp : mComponents) {
+        if (strcmp(name, comp.mName)) {
             continue;
         }
 
         AString libName = "libstagefright_soft_";
-        libName.append(kComponents[i].mLibNameSuffix);
+        libName.append(comp.mLibNameSuffix);
         libName.append(".so");
 
         // RTLD_NODELETE means we keep the shared library around forever.
@@ -185,11 +201,11 @@ OMX_ERRORTYPE SoftOMXPlugin::enumerateComponents(
         OMX_STRING name,
         size_t /* size */,
         OMX_U32 index) {
-    if (index >= kNumComponents) {
+    if (index >= mComponents.size()) {
         return OMX_ErrorNoMore;
     }
 
-    strcpy(name, kComponents[index].mName);
+    strcpy(name, mComponents[index].mName);
 
     return OMX_ErrorNone;
 }
@@ -197,13 +213,13 @@ OMX_ERRORTYPE SoftOMXPlugin::enumerateComponents(
 OMX_ERRORTYPE SoftOMXPlugin::getRolesOfComponent(
         const char *name,
         Vector<String8> *roles) {
-    for (size_t i = 0; i < kNumComponents; ++i) {
-        if (strcmp(name, kComponents[i].mName)) {
+    for (auto component : mComponents) {
+        if (strcmp(name, component.mName)) {
             continue;
         }
 
         roles->clear();
-        roles->push(String8(kComponents[i].mRole));
+        roles->push(String8(component.mRole));
 
         return OMX_ErrorNone;
     }

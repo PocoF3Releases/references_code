@@ -117,7 +117,9 @@ private:
             : mSequence(0), mSeed(1), mShared(shared)
         {
             // exactly one of Mutator and Observer must initialize, currently it is Observer
-            shared->init();
+            if (shared != NULL) {
+                shared->init();
+            }
         }
 
         // return true if value has changed

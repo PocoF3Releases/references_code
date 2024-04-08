@@ -48,7 +48,9 @@ status_t checkCompatibleProfile(const AudioProfileVector &audioProfileVector,
                                 audio_channel_mask_t &channelMask,
                                 audio_format_t &format,
                                 audio_port_type_t portType,
-                                audio_port_role_t portRole);
+                                audio_port_role_t portRole,
+                                bool checkExactFormat = false,
+                                bool checkExactChannelMask = false);
 
 // Assuming that this profile vector contains input profiles,
 // find the best matching config from 'outputProfiles', according to

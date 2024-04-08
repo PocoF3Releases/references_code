@@ -50,18 +50,10 @@ struct AudioSource : public MediaSource,
         audio_microphone_direction_t selectedMicDirection = MIC_DIRECTION_UNSPECIFIED,
         float selectedMicFieldDimension = MIC_FIELD_DIMENSION_NORMAL);
 
-    // Legacy constructor kept for vendor dependencies
-    AudioSource(
-        const audio_attributes_t *attr,
-        const String16 &opPackageName,
-        uint32_t sampleRate,
-        uint32_t channels,
-        uint32_t outSampleRate = 0,
-        uid_t uid = -1,
-        pid_t pid = -1,
-        audio_port_handle_t selectedDeviceId = AUDIO_PORT_HANDLE_NONE,
-        audio_microphone_direction_t selectedMicDirection = MIC_DIRECTION_UNSPECIFIED,
-        float selectedMicFieldDimension = MIC_FIELD_DIMENSION_NORMAL);
+    /* a default constructor for non-pcm format */
+    AudioSource() {}
+
+    virtual int64_t getFirstSampleSystemTimeUs() { return -1LL; }
 
     status_t initCheck() const;
 
@@ -92,7 +84,6 @@ struct AudioSource : public MediaSource,
 protected:
     virtual ~AudioSource();
 
-private:
     enum {
         kMaxBufferSize = 2048,
 
@@ -127,6 +118,7 @@ private:
     int64_t mNumFramesLost;
     int64_t mNumClientOwnedBuffers;
     bool mNoMoreFramesToRead;
+    size_t mMaxBufferSize;
 
     List<MediaBuffer * > mBuffersReceived;
 
@@ -141,7 +133,7 @@ private:
     void queueInputBuffer_l(MediaBuffer *buffer, int64_t timeUs);
     void releaseQueuedFrames_l();
     void waitOutstandingEncodingFrames_l();
-    status_t reset();
+    virtual status_t reset();
 
     // IAudioRecordCallback implementation
     size_t onMoreData(const AudioRecord::Buffer&) override;

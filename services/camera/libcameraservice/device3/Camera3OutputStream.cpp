@@ -35,6 +35,9 @@
 #include "api1/client2/JpegProcessor.h"
 #include "Camera3OutputStream.h"
 #include "utils/TraceHFR.h"
+#ifdef __XIAOMI_CAMERA__
+#include "xm/CameraStub.h"
+#endif
 
 #ifndef container_of
 #define container_of(ptr, type, member) \
@@ -79,7 +82,8 @@ Camera3OutputStream::Camera3OutputStream(int id,
     }
 
     bool needsReleaseNotify = setId > CAMERA3_STREAM_SET_ID_INVALID;
-    mBufferProducerListener = new BufferProducerListener(this, needsReleaseNotify);
+    // MIUI MOD
+    mBufferProducerListener = new BufferProducerDetachListener(this, needsReleaseNotify);
 }
 
 Camera3OutputStream::Camera3OutputStream(int id,
@@ -299,6 +303,11 @@ status_t Camera3OutputStream::returnBufferLocked(
         int32_t transform, const std::vector<size_t>& surface_ids) {
     ATRACE_HFR_CALL();
 
+#ifdef __XIAOMI_CAMERA__
+    // write time diff to systrace to find frame drop
+    CameraStub::dumpDropInfo(isVideoStream(), camera_stream::format, readoutTimestamp, mLastTimestamp);
+#endif
+
     if (mHandoutTotalBufferCount == 1) {
         returnPrefetchedBuffersLocked();
     }
@@ -415,6 +424,7 @@ status_t Camera3OutputStream::returnBufferCheckedLocked(
     mLock.unlock();
 
     ANativeWindowBuffer *anwBuffer = container_of(buffer.buffer, ANativeWindowBuffer, handle);
+    bool bufferDeferred = false;
     /**
      * Return buffer back to ANativeWindow
      */
@@ -470,6 +480,7 @@ status_t Camera3OutputStream::returnBufferCheckedLocked(
                         __FUNCTION__, mId, strerror(-res), res);
                 return res;
             }
+            bufferDeferred = true;
         } else {
             nsecs_t captureTime = (mSyncToDisplay ? readoutTimestamp : timestamp)
                     - mTimestampOffset;
@@ -491,18 +502,24 @@ status_t Camera3OutputStream::returnBufferCheckedLocked(
                 ALOGE("%s: Stream %d: Error queueing buffer to native window:"
                       " %s (%d)", __FUNCTION__, mId, strerror(-res), res);
             }
+#ifdef __XIAOMI_CAMERA__
+            bool isPreview = (isConsumedByHWTexture() && !isVideoStream());
+            if (isPreview) {
+                CameraStub::calVariance();
+            }
+#endif
         }
     }
     mLock.lock();
+
+    if (bufferDeferred) {
+        mCachedOutputBufferCount++;
+    }
 
     // Once a valid buffer has been returned to the queue, can no longer
     // dequeue all buffers for preallocation.
     if (buffer.status != CAMERA_BUFFER_STATUS_ERROR) {
         mStreamUnpreparable = true;
-    }
-
-    if (res != OK) {
-        close(anwReleaseFence);
     }
 
     *releaseFenceOut = releaseFence;
@@ -564,8 +581,11 @@ status_t Camera3OutputStream::configureQueueLocked() {
     if ((res = Camera3IOStreamBase::configureQueueLocked()) != OK) {
         return res;
     }
-
+#ifdef __XIAOMI_CAMERA__
+    if ((res = configureConsumerQueueLocked(CameraStub::isAllowPreviewRespace() /*allowPreviewRespace*/)) != OK) {
+#else
     if ((res = configureConsumerQueueLocked(true /*allowPreviewRespace*/)) != OK) {
+#endif
         return res;
     }
 
@@ -690,10 +710,15 @@ status_t Camera3OutputStream::configureConsumerQueueLocked(bool allowPreviewResp
                 !isVideoStream());
         if (forceChoreographer || defaultToChoreographer) {
             mSyncToDisplay = true;
+            // For choreographer synced stream, extra buffers aren't kept by
+            // camera service. So no need to update mMaxCachedBufferCount.
             mTotalBufferCount += kDisplaySyncExtraBuffer;
         } else if (defaultToSpacer) {
             mPreviewFrameSpacer = new PreviewFrameSpacer(this, mConsumer);
-            mTotalBufferCount ++;
+            // For preview frame spacer, the extra buffer is kept by camera
+            // service. So update mMaxCachedBufferCount.
+            mMaxCachedBufferCount = 1;
+            mTotalBufferCount += mMaxCachedBufferCount;
             res = mPreviewFrameSpacer->run(String8::format("PreviewSpacer-%d", mId).string());
             if (res != OK) {
                 ALOGE("%s: Unable to start preview spacer", __FUNCTION__);
@@ -958,6 +983,14 @@ bool Camera3OutputStream::shouldLogError(status_t res, StreamState state) {
     return true;
 }
 
+void Camera3OutputStream::onCachedBufferQueued() {
+    Mutex::Autolock l(mLock);
+    mCachedOutputBufferCount--;
+    // Signal whoever is waiting for the buffer to be returned to the buffer
+    // queue.
+    mOutputBufferReturnedSignal.signal();
+}
+
 status_t Camera3OutputStream::disconnectLocked() {
     status_t res;
 
@@ -1131,6 +1164,26 @@ void Camera3OutputStream::BufferProducerListener::onBufferReleased() {
         }
     }
 }
+
+// MIUI ADD: START
+void Camera3OutputStream::BufferProducerDetachListener::onBufferDetached(int slot) {
+    sp<Camera3OutputStream> stream = mParent.promote();
+    if (mNeedsReleaseNotify) {
+        ALOGE("%s: could not call detach callback for release notify", __FUNCTION__);
+        return;
+    }
+    if (stream == nullptr) {
+        ALOGV("%s: Parent camera3 output stream was destroyed", __FUNCTION__);
+        return;
+    }
+
+    if (stream->mConsumer != nullptr) {
+        ALOGE("OutputStream onBufferDetached %d",slot);
+        stream->mConsumer->releaseSlot(slot);
+        stream->checkRemovedBuffersLocked(/*notifyBufferManager*/true);
+    }
+}
+// MIUI ADD: END
 
 void Camera3OutputStream::BufferProducerListener::onBuffersDiscarded(
         const std::vector<sp<GraphicBuffer>>& buffers) {

@@ -77,6 +77,14 @@ public:
     virtual audio_mode_t getPhoneState() const = 0;
 
     /**
+     * Set whether display-port is connected and is allowed to be used
+     * for voice usecases
+     *
+     * @param[in] connAndAllowed: if display-port is connected and can be used
+     */
+    virtual void setDpConnAndAllowedForVoice(bool connAndAllowed) = 0;
+
+    /**
      * Set Force Use config for a given usage.
      *
      * @param[in] usage for which a configuration shall be forced.
@@ -118,6 +126,12 @@ public:
      */
     virtual product_strategy_t getProductStrategyForAttributes(
             const audio_attributes_t &attr, bool fallbackOnDefault = true) const = 0;
+
+    //MIUI ADD: MIAUDIO_MULTI_ROUTE
+    /**
+     * add interface setForceSkipDevice
+    **/
+    virtual bool setForceSkipDevice(audio_skip_device_t skipDevive) = 0;
 
     /**
      * @brief getOutputDevicesForAttributes retrieves the devices to be used for given

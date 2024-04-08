@@ -45,6 +45,8 @@
 #include <algorithm>
 #include <regex>
 
+#include <stagefright/AVExtensions.h>
+
 namespace android {
 
 namespace {

@@ -15,6 +15,7 @@
  */
 
 //#define LOG_NDEBUG 0
+#define PROP_VALUE_MAX 92
 #define LOG_TAG "MediaCodecsXmlParser"
 
 #include <media/stagefright/xmlparser/MediaCodecsXmlParser.h>
@@ -36,6 +37,7 @@
 #include <algorithm>
 #include <cctype>
 #include <string>
+#include <cutils/properties.h>
 
 namespace android {
 
@@ -115,6 +117,66 @@ status_t combineStatus(status_t a, status_t b) {
         // prefer the first error result
         return a ? : b;
     }
+}
+
+std::string getVendorXmlPath(const std::string &path) {
+    std::string vendorPath;
+    std::string result = path;
+
+    if (!strncmp(path.c_str(), "/vendor/etc/media_codecs.xml",
+                    strlen("/vendor/etc/media_codecs.xml"))) {
+        vendorPath = "/vendor/etc/media_codecs_vendor";
+    } else if (!strncmp(path.c_str(), "/vendor/etc/media_codecs_performance.xml",
+                    strlen("/vendor/etc/media_codecs_performance.xml"))) {
+        vendorPath = "/vendor/etc/media_codecs_performance";
+    }
+
+    if (!vendorPath.empty()) {
+        if (fileExists(vendorPath + std::string(".xml"))) {
+            char version[PROP_VALUE_MAX] = {0};
+            result = vendorPath + std::string(".xml");
+#ifdef __ANDROID_VNDK__
+            property_get("vendor.media.target.version", version, "0");
+#else
+            property_get("vendor.sys.media.target.version", version, "0");
+#endif
+            if (atoi(version) > 0) {
+                std::string versionedXml = vendorPath + std::string("_v") +
+                                 std::string(version) + std::string(".xml");
+                if(fileExists(versionedXml)) {
+                    result = versionedXml;
+                }
+            }
+        }
+        ALOGI("getVendorXmlPath (%s)", result.c_str());
+    }
+
+    std::string xml_supportdolbycapture = "/vendor/etc/media_codecs_kalama_vendor.xml";
+    std::string xml_nosupportdolbycapture = "/vendor/etc/media_codecs_no_dolbyencoder_vendor.xml";
+    bool supportdolbycapture = property_get_bool("debug.config.media.video.dolby_capture_supports",0);
+    // Choose different xmls based on system (if needed)
+    if (!android::base::GetProperty("ro.media.xml_variant.codecs", "").empty()){
+        const std::vector<std::string> &xmlFiles = MediaCodecsXmlParser::getDefaultXmlNames();
+        for (const std::string &xmlName : xmlFiles) {
+            vendorPath = "/vendor/etc/" + xmlName;
+            if (!strncmp(path.c_str(), vendorPath.c_str(), vendorPath.size())) {
+                vendorPath = vendorPath.substr(0,vendorPath.size()-4) + "_vendor.xml";
+                if (fileExists(vendorPath)) {
+                    result = vendorPath;
+                }
+                if (!supportdolbycapture) {
+                    ALOGD("debug.config.media.video.dolby_capture_supports == false");
+                    if(!strncmp(result.c_str(), xml_supportdolbycapture.c_str(), xml_supportdolbycapture.size())){
+                        result = xml_nosupportdolbycapture;
+                    }
+                }
+                ALOGI("getVendorXmlPath %s", result.c_str());
+                break;
+            }
+        }
+    }
+
+    return result;
 }
 
 MediaCodecsXmlParser::StringSet parseCommaSeparatedStringSet(const char *s) {
@@ -442,20 +504,22 @@ status_t MediaCodecsXmlParser::Impl::parseXmlFilesInSearchDirs(
 
 status_t MediaCodecsXmlParser::Impl::parseXmlPath(const std::string &path) {
     std::lock_guard<std::mutex> guard(mLock);
-    if (!fileExists(path)) {
-        ALOGV("Cannot find %s", path.c_str());
+    std::string vendorPath = getVendorXmlPath(path);
+
+    if (!fileExists(vendorPath)) {
+        ALOGV("Cannot find %s", vendorPath.c_str());
         mParsingStatus = combineStatus(mParsingStatus, NAME_NOT_FOUND);
         return NAME_NOT_FOUND;
     }
 
     // save state (even though we should always be at toplevel here)
     State::RestorePoint rp = mState.createRestorePoint();
-    Parser parser(&mState, path);
+    Parser parser(&mState, vendorPath);
     parser.parseXmlFile();
     mState.restore(rp);
 
     if (parser.getStatus() != OK) {
-        ALOGD("parseXmlPath(%s) failed with %s", path.c_str(), asString(parser.getStatus()));
+        ALOGD("parseXmlPath(%s) failed with %s", vendorPath.c_str(), asString(parser.getStatus()));
     }
     mParsingStatus = combineStatus(mParsingStatus, parser.getStatus());
     return parser.getStatus();

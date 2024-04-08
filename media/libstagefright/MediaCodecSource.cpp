@@ -39,6 +39,14 @@
 #include <media/stagefright/MediaErrors.h>
 #include <media/stagefright/MetaData.h>
 #include <media/stagefright/Utils.h>
+#include <stagefright/AVExtensions.h>
+#include <OMX_Core.h>
+//MIUI ADD: start MIAUDIO_OZO
+#include <media/stagefright/IMediaCodecEvent.h>
+//MIUI ADD: end
+#include <cutils/properties.h>
+
+static const bool kSupportOZO = property_get_bool("ro.vendor.audio.zoom.support", false );
 
 namespace android {
 
@@ -346,6 +354,7 @@ sp<MediaCodecSource> MediaCodecSource::Create(
         uint32_t flags) {
     sp<MediaCodecSource> mediaSource = new MediaCodecSource(
             looper, format, source, persistentSurface, flags);
+    AVUtils::get()->getHFRParams(&mediaSource->mIsHFR, &mediaSource->mBatchSize, format);
 
     if (mediaSource->init() == OK) {
         return mediaSource;
@@ -388,6 +397,15 @@ status_t MediaCodecSource::setStopTimeUs(int64_t stopTimeUs) {
     return postSynchronouslyAndReturnError(msg);
 }
 
+//MIUI ADD: start MIAUDIO_OZO
+status_t MediaCodecSource::setRuntimeParameters(const sp<AMessage> &msg) {
+    sp<AMessage> dst = msg->dup();
+    dst->setWhat(kWhatSetRuntimeParams);
+    dst->setTarget(mReflector);
+    return postSynchronouslyAndReturnError(dst);
+}
+//MIUI ADD: end
+
 status_t MediaCodecSource::pause(MetaData* params) {
     sp<AMessage> msg = new AMessage(kWhatPause, mReflector);
     msg->setObject("meta", params);
@@ -415,6 +433,16 @@ status_t MediaCodecSource::read(
     }
     if (!output->mEncoderReachedEOS) {
         *buffer = *output->mBufferQueue.begin();
+//MIUI ADD: start MIAUDIO_OZO
+        if(kSupportOZO){
+            // Handle codec buffer notifications
+            if (this->mCodecBufferPacketizer)
+                mCodecBufferPacketizer->notify(*buffer);
+            // Handle event notifications
+            if (this->mCodecEventListener)
+                mCodecEventListener->notify(*buffer);
+        }
+//MIUI ADD: end
         output->mBufferQueue.erase(output->mBufferQueue.begin());
         return OK;
     }
@@ -472,7 +500,14 @@ MediaCodecSource::MediaCodecSource(
       mFirstSampleSystemTimeUs(-1LL),
       mPausePending(false),
       mFirstSampleTimeUs(-1LL),
-      mGeneration(0) {
+      mGeneration(0),
+      mPrevBufferTimestampUs(0),
+      mIsHFR(false),
+//MIUI ADD: start MIAUDIO_OZO
+      mCodecEventListener(0),
+      mCodecBufferPacketizer(0),
+//MIUI ADD: end
+      mBatchSize(0){
     CHECK(mLooper != NULL);
 
     if (!(mFlags & FLAG_USE_SURFACE_INPUT)) {
@@ -529,11 +564,13 @@ status_t MediaCodecSource::initEncoder() {
                     MediaCodec::CONFIGURE_FLAG_ENCODE);
     } else {
         Vector<AString> matchingCodecs;
-        MediaCodecList::findMatchingCodecs(
-                outputMIME.c_str(), true /* encoder */,
-                ((mFlags & FLAG_PREFER_SOFTWARE_CODEC) ? MediaCodecList::kPreferSoftwareCodecs : 0),
-                &matchingCodecs);
-
+        bool useQcHwEnc = AVUtils::get()->useQCHWEncoder(mOutputFormat, &matchingCodecs);
+        if (!useQcHwEnc) {
+            MediaCodecList::findMatchingCodecs(
+                    outputMIME.c_str(), true /* encoder */,
+                    ((mFlags & FLAG_PREFER_SOFTWARE_CODEC) ? MediaCodecList::kPreferSoftwareCodecs : 0),
+                    &matchingCodecs);
+        }
         for (size_t ix = 0; ix < matchingCodecs.size(); ++ix) {
             mEncoder = MediaCodec::CreateByComponentName(
                     mCodecLooper, matchingCodecs[ix]);
@@ -547,11 +584,15 @@ status_t MediaCodecSource::initEncoder() {
             mEncoderActivityNotify = new AMessage(kWhatEncoderActivity, mReflector);
             mEncoder->setCallback(mEncoderActivityNotify);
 
+            AString codecName = matchingCodecs[ix];
+            bool isHWEnc = codecName.startsWith("c2.qti");
+
             err = mEncoder->configure(
                         mOutputFormat,
                         NULL /* nativeWindow */,
                         NULL /* crypto */,
-                        MediaCodec::CONFIGURE_FLAG_ENCODE);
+                        MediaCodec::CONFIGURE_FLAG_ENCODE |
+                        ((mIsVideo && isHWEnc) ? MediaCodec::CONFIGURE_FLAG_USE_BLOCK_MODEL : 0));
 
             if (err == OK) {
                 break;
@@ -584,6 +625,10 @@ status_t MediaCodecSource::initEncoder() {
 
         if (err != OK) {
             return err;
+        }
+        if (mEncoder == NULL) {
+            ALOGE("initEncoder : mEncoder is null");
+            return BAD_VALUE;
         }
     }
 
@@ -660,6 +705,9 @@ void MediaCodecSource::signalEOS(status_t err) {
             output->mBufferQueue.clear();
             output->mEncoderReachedEOS = true;
             output->mErrorCode = err;
+            if (err != ERROR_END_OF_STREAM) {
+                output->mErrorCode = ERROR_IO;
+            }
             if (!(mFlags & FLAG_USE_SURFACE_INPUT)) {
                 mStopping = true;
                 mPuller->stop();
@@ -727,12 +775,16 @@ status_t MediaCodecSource::feedEncoderInputBuffers() {
                     return OK;
                 }
             }
-
+            mInputBufferTimeOffsetUs = AVUtils::get()->overwriteTimeOffset(mIsHFR,
+                mInputBufferTimeOffsetUs, &mPrevBufferTimestampUs, timeUs, mBatchSize);
             timeUs += mInputBufferTimeOffsetUs;
 
             // push decoding time for video, or drift time for audio
             if (mIsVideo) {
                 mDecodingTimeQueue.push_back(timeUs);
+                if (!(mFlags & FLAG_USE_SURFACE_INPUT)) {
+                    AVUtils::get()->addDecodingTimesFromBatch(mbuf, mDecodingTimeQueue, mInputBufferTimeOffsetUs);
+                }
             } else {
 #if DEBUG_DRIFT_TIME
                 if (mFirstSampleTimeUs < 0ll) {
@@ -753,7 +805,7 @@ status_t MediaCodecSource::feedEncoderInputBuffers() {
             if (err != OK || inbuf == NULL || inbuf->data() == NULL
                     || mbuf->data() == NULL || mbuf->size() == 0) {
                 mbuf->release();
-                signalEOS();
+                signalEOS(err);
                 break;
             }
 
@@ -944,7 +996,7 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
             sp<MediaCodecBuffer> outbuf;
             status_t err = mEncoder->getOutputBuffer(index, &outbuf);
             if (err != OK || outbuf == NULL || outbuf->data() == NULL) {
-                signalEOS();
+                signalEOS(err);
                 break;
             } else if (outbuf->size() == 0) {
                 // Zero length CSD buffers are not treated as an error
@@ -956,7 +1008,10 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
                 break;
             }
 
-            MediaBufferBase *mbuf = new MediaBuffer(outbuf->size());
+            MediaBuffer *mbuf = new MediaBuffer(outbuf->size());
+            sp<MetaData> meta = new MetaData(mbuf->meta_data());
+            AVUtils::get()->setDeferRelease(meta);
+
             mbuf->setObserver(this);
             mbuf->add_ref();
 
@@ -1003,6 +1058,16 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
                             timeUs, timeUs / 1E6, driftTimeUs);
                 }
                 mbuf->meta_data().setInt64(kKeyTime, timeUs);
+//MIUI ADD: start MIAUDIO_OZO
+                if(kSupportOZO){
+                    // Handle codec buffer packetization
+                    // Call only once even if both handles are present
+                    if (this->mCodecBufferPacketizer)
+                        this->mCodecBufferPacketizer->notify(outbuf, mbuf);
+                    else if (this->mCodecEventListener)
+                        this->mCodecEventListener->notify(outbuf, mbuf);
+                }
+//MIUI ADD: end
             } else {
                 mbuf->meta_data().setInt64(kKeyTime, 0LL);
                 mbuf->meta_data().setInt32(kKeyIsCodecConfig, true);
@@ -1028,7 +1093,7 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
                 mStopping = true;
                 mPuller->stop();
             }
-            signalEOS();
+            signalEOS(err);
        }
        break;
     }
@@ -1111,6 +1176,9 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
         if (generation != mGeneration) {
              break;
         }
+
+        releaseEncoder();
+
         ALOGD("source (%s) stopping stalled", mIsVideo ? "video" : "audio");
         signalEOS();
         break;
@@ -1183,9 +1251,48 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
         response->postReply(replyID);
         break;
     }
+//MIUI ADD: start MIAUDIO_OZO
+    case kWhatSetRuntimeParams:
+    {
+        if(kSupportOZO){
+            sp<AReplyToken> replyID;
+            CHECK(msg->senderAwaitsResponse(&replyID));
+            msg->setObject("replyID", replyID);
+
+            status_t err = mEncoder->setParameters(msg);
+
+            sp<AMessage> response = new AMessage;
+            response->setInt32("err", err);
+            response->postReply(replyID);
+        }
+        break;
+    }
+//MIUI ADD: end
     default:
         TRESPASS();
     }
 }
+
+void MediaCodecSource::notifyPerformanceMode() {
+    if (mIsVideo && mEncoder != NULL) {
+        sp<AMessage> params = new AMessage;
+        params->setInt32("qti.request.perf", true);
+        mEncoder->setParameters(params);
+    }
+}
+
+//MIUI ADD: start MIAUDIO_OZO
+void
+MediaCodecSource::setCodecEventListener(IMediaCodecEventListener *listener)
+{
+    this->mCodecEventListener = listener;
+}
+
+void
+MediaCodecSource::setCodecBufferPacketizer(IMediaCodecEventListener *packetizer)
+{
+    this->mCodecBufferPacketizer = packetizer;
+}
+//MIUI ADD: end
 
 } // namespace android

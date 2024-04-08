@@ -22,6 +22,10 @@
 #include <media/audiohal/StreamHalInterface.h>
 #include <media/nbaio/AudioStreamOutSink.h>
 
+//MIUI ADD; start MIAUDIO_DUMP_PCM
+#include "AudioClientStub.h"
+//MIUI ADD: end
+
 namespace android {
 
 AudioStreamOutSink::AudioStreamOutSink(sp<StreamOutHalInterface> stream) :
@@ -61,6 +65,12 @@ ssize_t AudioStreamOutSink::write(const void *buffer, size_t count)
     }
     ALOG_ASSERT(Format_isValid(mFormat));
     size_t written;
+
+//MIUI ADD; start MIAUDIO_DUMP_PCM
+    AudioClientStub::dumpAudioDataToFile((void*)buffer, count * mFrameSize, AUDIO_FORMAT_DEFAULT,
+                                         0, 0, 2, 0, -1, "", mStream);
+//MIUI ADD: end
+
     status_t ret = mStream->write(buffer, count * mFrameSize, &written);
     if (ret == OK && written > 0) {
         written /= mFrameSize;

@@ -22,6 +22,9 @@
 
 #include "PreviewFrameSpacer.h"
 #include "Camera3OutputStream.h"
+#ifdef __XIAOMI_CAMERA__
+#include "xm/CameraStub.h"
+#endif
 
 namespace android {
 
@@ -121,6 +124,12 @@ void PreviewFrameSpacer::queueBufferToClientLocked(
                     strerror(-res), res);
         }
     }
+
+    parent->onCachedBufferQueued();
+
+#ifdef __XIAOMI_CAMERA__
+    CameraStub::calVariance();
+#endif
 
     mLastCameraPresentTime = currentTime;
     mLastCameraReadoutTime = bufferHolder.readoutTimestamp;

@@ -15,7 +15,8 @@
  */
 
 #define LOG_TAG "FastThread"
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
+#define LOG_NDEBUG_ASSERT 0
 
 #define ATRACE_TAG ATRACE_TAG_AUDIO
 
@@ -98,7 +99,9 @@ bool FastThread::threadLoop()
         // either nanosleep, sched_yield, or busy wait
         if (mSleepNs >= 0) {
             if (mSleepNs > 0) {
+#if LOG_NDEBUG_ASSERT
                 ALOG_ASSERT(mSleepNs < 1000000000);
+#endif
                 const struct timespec req = {0, mSleepNs};
                 nanosleep(&req, NULL);
             } else {
@@ -167,7 +170,9 @@ bool FastThread::threadLoop()
             // FIXME consider checking previous state and only perform if previous != COLD_IDLE
             if (mCurrent->mColdGen != mColdGen) {
                 int32_t *coldFutexAddr = mCurrent->mColdFutexAddr;
+#if LOG_NDEBUG_ASSERT
                 ALOG_ASSERT(coldFutexAddr != NULL);
+#endif
                 int32_t old = android_atomic_dec(coldFutexAddr);
                 if (old <= 0) {
                     syscall(__NR_futex, coldFutexAddr, FUTEX_WAIT_PRIVATE, old - 1, NULL);

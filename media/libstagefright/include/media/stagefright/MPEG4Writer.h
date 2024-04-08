@@ -77,6 +77,9 @@ public:
     virtual void setStartTimeOffsetMs(int ms) { mStartTimeOffsetMs = ms; }
     virtual int32_t getStartTimeOffsetMs() const { return mStartTimeOffsetMs; }
     virtual status_t setNextFd(int fd);
+//#ifdef MIAUDIO_OZO
+    void setOzoBranding() { mOzoBranding = true; }
+//#endif
 
 protected:
     virtual ~MPEG4Writer();
@@ -98,6 +101,7 @@ private:
     status_t mInitCheck;
     bool mIsRealTimeRecording;
     bool mIsBackgroundMode;
+protected:
     bool mUse4ByteNalLength;
     bool mIsFileSizeLimitExplicitlyRequested;
     bool mPaused;
@@ -151,9 +155,10 @@ private:
 
     sp<AMessage> mMetaKeys;
 
-    void setStartTimestampUs(int64_t timeUs);
+    void setStartTimestampUs(int64_t timeUs, int64_t *trackStartTime);
     int64_t getStartTimestampUs();  // Not const
     int32_t getStartTimeOffsetBFramesUs();
+    int64_t getStartTimeOffsetTimeUs(int64_t startTime);
     status_t startTracks(MetaData *params);
     size_t numTracks();
     int64_t estimateMoovBoxSize(int32_t bitRate);
@@ -225,11 +230,17 @@ private:
         int32_t height;
         int32_t rotation;
         sp<ABuffer> hvcc;
+        //MIUI ADD: HEIF ICC SUPPORT
+        sp<ABuffer> iccprofile;
+        //MIUI ADD: end
     } ItemProperty;
 
     bool mHasFileLevelMeta;
     uint64_t mFileLevelMetaDataSize;
     bool mHasMoovBox;
+//#ifdef MIAUDIO_OZO
+    bool mOzoBranding;                      // Include OZO Audio brand
+//#endif
     uint32_t mPrimaryItemId;
     uint32_t mAssociationEntryCount;
     uint32_t mNumGrids;
@@ -237,6 +248,8 @@ private:
     bool mHasRefs;
     std::map<uint32_t, ItemInfo> mItems;
     Vector<ItemProperty> mProperties;
+
+    String16 mClientName;
 
     // Writer thread handling
     status_t startWriterThread();
@@ -292,12 +305,16 @@ private:
     off64_t addSample_l(
             MediaBuffer *buffer, bool usePrefix,
             uint32_t tiffHdrOffset, size_t *bytesWritten);
-    void addLengthPrefixedSample_l(MediaBuffer *buffer);
+    static void StripStartcode(MediaBuffer *buffer);
+    virtual void addLengthPrefixedSample_l(MediaBuffer *buffer);
     void addMultipleLengthPrefixedSamples_l(MediaBuffer *buffer);
     uint16_t addProperty_l(const ItemProperty &);
     status_t reserveItemId_l(size_t numItems, uint16_t *itemIdBase);
     uint16_t addItem_l(const ItemInfo &);
     void addRefs_l(uint16_t itemId, const ItemRefs &);
+    //MIUI ADD: HEIF ICC SUPPORT
+    void addPropertyForItem(uint16_t itemId, uint16_t propIdx);
+    //MIUI ADD: end
 
     bool exceedsFileSizeLimit();
     bool exceedsFileDurationLimit();

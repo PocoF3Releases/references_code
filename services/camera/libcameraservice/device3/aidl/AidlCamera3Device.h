@@ -17,6 +17,9 @@
 #ifndef ANDROID_SERVERS_AIDLCAMERA3DEVICE_H
 #define ANDROID_SERVERS_AIDLCAMERA3DEVICE_H
 
+#ifdef __XIAOMI_CAMERA__
+#include <android/hardware/camera/device/3.7/ICameraDeviceSession.h>
+#endif
 #include "../Camera3Device.h"
 #include "AidlCamera3OutputUtils.h"
 #include <fmq/AidlMessageQueue.h>
@@ -69,7 +72,14 @@ class AidlCamera3Device :
     virtual status_t switchToOffline(const std::vector<int32_t>& /*streamsToKeep*/,
             /*out*/ sp<CameraOfflineSessionBase>* /*session*/) override;
 
+
     status_t initialize(sp<CameraProviderManager> manager, const String8& monitorTags) override;
+
+#ifdef __XIAOMI_CAMERA__
+    camera3::AidlCaptureOutputStates getCaptureOutputStates(bool enableJank, sp<AidlCamera3Device> parent);
+    using Camera3Device::CaptureRequest;
+#endif
+
     class AidlHalInterface : public Camera3Device::HalInterface {
      public:
         AidlHalInterface(std::shared_ptr<
@@ -259,6 +269,11 @@ class AidlCamera3Device :
 
     virtual sp<Camera3DeviceInjectionMethods>
             createCamera3DeviceInjectionMethods(wp<Camera3Device>) override;
+
+#ifdef __XIAOMI_CAMERA__
+    virtual bool initJankStub(wp<Camera3Device> parent ,const CameraMetadata& sessionParams) override;
+    virtual void cloneRequestStub(sp<CaptureRequest> dstReq, sp<CaptureRequest> srcReq) override;
+#endif
 
     // FMQ to write result on. Must be guarded by mProcessCaptureResultLock.
     std::unique_ptr<AidlResultMetadataQueue> mResultMetadataQueue = nullptr;

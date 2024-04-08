@@ -72,6 +72,9 @@
 #include <algorithm>
 
 #include "AidlCamera3Device.h"
+#ifdef __XIAOMI_CAMERA__
+#include "xm/CameraStub.h"
+#endif
 
 using namespace android::camera3;
 using namespace aidl::android::hardware;
@@ -198,6 +201,10 @@ status_t AidlCamera3Device::initialize(sp<CameraProviderManager> manager,
         session->close();
         return res;
     }
+
+#ifdef __XIAOMI_CAMERA__
+    mPricacyCamera = CameraStub::createPrivacyCamera(mDeviceInfo);
+#endif
     mSupportNativeZoomRatio = manager->supportNativeZoomRatio(mId.string());
 
     std::vector<std::string> physicalCameraIds;
@@ -371,7 +378,12 @@ status_t AidlCamera3Device::initialize(sp<CameraProviderManager> manager,
         mNumPartialResults, mVendorTagId, mDeviceInfo, mPhysicalDeviceInfoMap,
         mDistortionMappers, mZoomRatioMappers, mRotateAndCropMappers,
         mTagMonitor, mInputStream, mOutputStreams, mSessionStatsBuilder, listener, *this,
-        *this, *(mInterface), mLegacyClient, mMinExpectedDuration}, mResultMetadataQueue
+        *this, *(mInterface), mLegacyClient, mMinExpectedDuration
+#ifdef __XIAOMI_CAMERA__
+        , mPricacyCamera
+        , mEnableJank
+#endif
+       }, mResultMetadataQueue
     };
 
     for (const auto& result : results) {
@@ -412,7 +424,12 @@ status_t AidlCamera3Device::initialize(sp<CameraProviderManager> manager,
         mNumPartialResults, mVendorTagId, mDeviceInfo, mPhysicalDeviceInfoMap,
         mDistortionMappers, mZoomRatioMappers, mRotateAndCropMappers,
         mTagMonitor, mInputStream, mOutputStreams, mSessionStatsBuilder, listener, *this,
-        *this, *(mInterface), mLegacyClient, mMinExpectedDuration}, mResultMetadataQueue
+        *this, *(mInterface), mLegacyClient, mMinExpectedDuration
+#ifdef __XIAOMI_CAMERA__
+        , mPricacyCamera
+        , mEnableJank
+#endif
+      }, mResultMetadataQueue
     };
     for (const auto& msg : msgs) {
         camera3::notify(states, msg);
@@ -1558,6 +1575,12 @@ status_t AidlCamera3Device::AidlCamera3DeviceInjectionMethods::replaceHalInterfa
     return OK;
 }
 
+#ifdef __XIAOMI_CAMERA__
+bool AidlCamera3Device::initJankStub(wp<Camera3Device> parent,const CameraMetadata& sessionParams ) {
+   return CameraStub::initJank(parent, NULL, this, sessionParams);
+}
+#endif
+
 status_t AidlCamera3Device::injectionCameraInitialize(const String8 &injectedCamId,
             sp<CameraProviderManager> manager) {
         return (static_cast<AidlCamera3DeviceInjectionMethods *>
@@ -1579,5 +1602,42 @@ sp<Camera3Device::Camera3DeviceInjectionMethods>
 AidlCamera3Device::createCamera3DeviceInjectionMethods(wp<Camera3Device> parent) {
     return new AidlCamera3DeviceInjectionMethods(parent);
 }
+#ifdef __XIAOMI_CAMERA__
+AidlCaptureOutputStates AidlCamera3Device::getCaptureOutputStates(bool enableJank, sp<AidlCamera3Device> parent) {
+    sp<NotificationListener> listener;
+    {
+        std::lock_guard<std::mutex> l(parent->mOutputLock);
+        listener = parent->mListener.promote();
+    }
+    AidlCaptureOutputStates states {
+    {
+        parent->mId,
+        parent->mInFlightLock, parent->mLastCompletedRegularFrameNumber,
+        parent->mLastCompletedReprocessFrameNumber, parent->mLastCompletedZslFrameNumber,
+        parent->mInFlightMap, parent->mOutputLock,  parent->mResultQueue, parent->mResultSignal,
+        parent->mNextShutterFrameNumber,
+        parent->mNextReprocessShutterFrameNumber, parent->mNextZslStillShutterFrameNumber,
+        parent->mNextResultFrameNumber,
+        parent->mNextReprocessResultFrameNumber, parent->mNextZslStillResultFrameNumber,
+        parent->mUseHalBufManager, parent->mUsePartialResult, parent->mNeedFixupMonochromeTags,
+        parent->mNumPartialResults, parent->mVendorTagId, parent->mDeviceInfo, parent->mPhysicalDeviceInfoMap,
+        parent->mDistortionMappers, parent->mZoomRatioMappers, parent->mRotateAndCropMappers,
+        parent->mTagMonitor, parent->mInputStream, parent->mOutputStreams, parent->mSessionStatsBuilder, listener, *parent, *parent,
+        *(parent->mInterface),
+        /*legacyClient*/ false,
+        mMinExpectedDuration,
+        parent->mPricacyCamera,
+        enableJank}, mResultMetadataQueue
+    };
 
+    return states;
+}
+
+void AidlCamera3Device::cloneRequestStub(sp<CaptureRequest> dstReq, sp<CaptureRequest> srcReq) {
+    if (NULL == dstReq || NULL == srcReq) {
+        return ;
+    }
+    return CameraStub::cloneRequest(dstReq, srcReq, true);
+}
+#endif
 }; // namespace android

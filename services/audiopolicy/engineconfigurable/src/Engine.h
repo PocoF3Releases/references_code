@@ -68,6 +68,11 @@ public:
 
     void updateDeviceSelectionCache() override;
 
+    //MIUI ADD: MIAUDIO_MULTI_ROUTE
+    bool mForceSkipProxy = false;
+    bool mForceSkipRemoteSubmix = false;
+    bool mForceSkipA2DP = false;
+
     ///
     /// from AudioPolicyPluginInterface
     ///

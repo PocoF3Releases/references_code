@@ -328,7 +328,9 @@ status_t checkCompatibleProfile(const AudioProfileVector &audioProfileVector,
                                 audio_channel_mask_t &channelMask,
                                 audio_format_t &format,
                                 audio_port_type_t portType,
-                                audio_port_role_t portRole)
+                                audio_port_role_t portRole,
+                                bool checkExactFormat,
+                                bool checkExactChannelMask)
 {
     if (audioProfileVector.empty()) {
         return NO_ERROR;
@@ -350,12 +352,23 @@ status_t checkCompatibleProfile(const AudioProfileVector &audioProfileVector,
             // rate and channels as well
             audio_channel_mask_t updatedChannels;
             uint32_t updatedRate;
-            if (checkCompatibleChannelMask(profile, channelMask, updatedChannels,
-                                           portType, portRole) == NO_ERROR &&
-                    checkCompatibleSamplingRate(profile, samplingRate, updatedRate) == NO_ERROR) {
+
+            if ((checkExactFormat) && (formatToCompare != format))
+                continue;
+            if (checkExactChannelMask) {
+                if (!profile->supportsChannels(channelMask))
+                    continue;
+            } else {
+                if (checkCompatibleChannelMask(profile, channelMask, updatedChannels,
+                                                        portType, portRole) == NO_ERROR) {
+                    channelMask = updatedChannels;
+                } else {
+                    return BAD_VALUE;
+                }
+            }
+            if (checkCompatibleSamplingRate(profile, samplingRate, updatedRate) == NO_ERROR) {
                 // for inexact checks we take the first linear pcm format due to sorting.
                 format = formatToCompare;
-                channelMask = updatedChannels;
                 samplingRate = updatedRate;
                 return NO_ERROR;
             }

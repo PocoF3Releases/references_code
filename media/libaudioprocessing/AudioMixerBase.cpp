@@ -52,6 +52,9 @@
 // TODO: remove BLOCKSIZE unit of processing - it isn't needed anymore.
 static constexpr int BLOCKSIZE = 16;
 
+#ifdef QTI_RESAMPLER
+#define QTI_RESAMPLER_MAX_SAMPLERATE 192000
+#endif
 namespace android {
 
 // ----------------------------------------------------------------------------
@@ -81,7 +84,8 @@ std::shared_ptr<AudioMixerBase::TrackBase> AudioMixerBase::preCreateTrack()
 }
 
 status_t AudioMixerBase::create(
-        int name, audio_channel_mask_t channelMask, audio_format_t format, int sessionId)
+        int name, audio_channel_mask_t channelMask, audio_format_t format, int sessionId, 
+        uint32_t outDevice /* DOLBY_ENABLE */)
 {
     LOG_ALWAYS_FATAL_IF(exists(name), "name %d already exists", name);
 
@@ -150,6 +154,7 @@ status_t AudioMixerBase::create(
         t->mMixerChannelMask = audio_channel_mask_from_representation_and_bits(
                 AUDIO_CHANNEL_REPRESENTATION_POSITION, AUDIO_CHANNEL_OUT_STEREO);
         t->mMixerChannelCount = audio_channel_count_from_out_mask(t->mMixerChannelMask);
+        t->mOutDevice = outDevice; /* DOLBY_ENABLE && DOLBY_ATMOS_GAME*/
         status_t status = postCreateTrack(t.get());
         if (status != OK) return status;
         mTracks[name] = t;
@@ -433,6 +438,9 @@ void AudioMixerBase::setParameter(int name, int target, int param, void *value)
     case RAMP_VOLUME:
     case VOLUME:
         switch (param) {
+        case FRAME_COUNT:{
+            mFrameCount = *reinterpret_cast<size_t*>(value);
+        } break;
         case AUXLEVEL:
             if (setVolumeRampVariables(*reinterpret_cast<float*>(value),
                     target == RAMP_VOLUME ? mFrameCount : 0,
@@ -491,6 +499,14 @@ bool AudioMixerBase::TrackBase::setResampler(uint32_t trackSampleRate, uint32_t 
                 // TODO: Remove MONO_HACK. Resampler sees #channels after the downmixer
                 // but if none exists, it is the channel count (1 for mono).
                 const int resamplerChannelCount = getOutputChannelCount();
+#ifdef QTI_RESAMPLER
+                if ((trackSampleRate <= QTI_RESAMPLER_MAX_SAMPLERATE) &&
+                       (trackSampleRate > devSampleRate * 2) &&
+                       ((devSampleRate == 48000)||(devSampleRate == 44100)) &&
+                       (resamplerChannelCount <= 2)) {
+                    quality = AudioResampler::QTI_QUALITY;
+                }
+#endif
                 ALOGVV("Creating resampler:"
                         " format(%#x) channels(%d) devSampleRate(%u) quality(%d)\n",
                         mMixerInFormat, resamplerChannelCount, devSampleRate, quality);
@@ -1257,6 +1273,9 @@ void AudioMixerBase::process__oneTrack16BitsStereoNoResampling()
                 // Note: In case of later int16_t sink output,
                 // conversion and clamping is done by memcpy_to_i16_from_float().
             } while (--outFrames);
+            //assign fout to out, when no more frames are available, so that 0s
+            //can be filled at the right place
+            out = (int32_t *)fout;
             break;
         case AUDIO_FORMAT_PCM_16_BIT:
             if (CC_UNLIKELY(uint32_t(vl) > UNITY_GAIN_INT || uint32_t(vr) > UNITY_GAIN_INT)) {
