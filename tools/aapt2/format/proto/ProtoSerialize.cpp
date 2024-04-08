@@ -187,6 +187,28 @@ void SerializeConfig(const ConfigDescription& config, pb::Configuration* out_pb_
     case ConfigDescription::UI_MODE_TYPE_VR_HEADSET:
       out_pb_config->set_ui_mode_type(pb::Configuration_UiModeType_UI_MODE_TYPE_VRHEADSET);
       break;
+
+    // MIUI ADD: START
+    case ConfigDescription::UI_MODE_TYPE_SMALLUI:
+      out_pb_config->set_ui_mode_type(pb::Configuration_UiModeType_UI_MODE_TYPE_SMALLUI);
+      break;
+
+    case ConfigDescription::UI_MODE_TYPE_MEDIUMUI:
+      out_pb_config->set_ui_mode_type(pb::Configuration_UiModeType_UI_MODE_TYPE_MEDIUMUI);
+      break;
+
+    case ConfigDescription::UI_MODE_TYPE_LARGEUI:
+      out_pb_config->set_ui_mode_type(pb::Configuration_UiModeType_UI_MODE_TYPE_LARGEUI);
+      break;
+
+    case ConfigDescription::UI_MODE_TYPE_HUGEUI:
+      out_pb_config->set_ui_mode_type(pb::Configuration_UiModeType_UI_MODE_TYPE_HUGEUI);
+      break;
+
+    case ConfigDescription::UI_MODE_TYPE_GODZILLAUI:
+      out_pb_config->set_ui_mode_type(pb::Configuration_UiModeType_UI_MODE_TYPE_GODZILLAUI);
+      break;
+    // END
   }
 
   switch (config.uiMode & ConfigDescription::MASK_UI_MODE_NIGHT) {

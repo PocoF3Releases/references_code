@@ -1325,6 +1325,13 @@ status_t AaptAssets::filter(Bundle* bundle)
         preferredDensity = preferredConfig.density;
     }
 
+    // MIUI ADD: START
+    WeakResourceFilter extraPrefFilter;
+    err = extraPrefFilter.parse(bundle->getExtraPreferredDensities());
+    if (err != NO_ERROR) {
+        return err;
+    }
+    // END
     if (reqFilter->isEmpty() && preferredDensity == 0) {
         return NO_ERROR;
     }
@@ -1338,6 +1345,12 @@ status_t AaptAssets::filter(Bundle* bundle)
             printf("Applying preferred density filter: %s\n",
                     bundle->getPreferredDensity().string());
         }
+        // MIUI ADD: START
+        if (!extraPrefFilter.isEmpty()) {
+            printf("Applying extra preferred densities filter: %s\n",
+                    bundle->getExtraPreferredDensities().string());
+        }
+        // END
     }
 
     const Vector<sp<AaptDir> >& resdirs = mResDirs;
@@ -1393,7 +1406,9 @@ status_t AaptAssets::filter(Bundle* bundle)
             }
 
             // Quick check: no preferred filters, nothing more to do.
-            if (preferredDensity == 0) {
+            // MIUI MOD:
+            // if (preferredDensity == 0) {
+            if (preferredDensity == 0 && extraPrefFilter.isEmpty()) {
                 continue;
             }
 
@@ -1419,7 +1434,9 @@ status_t AaptAssets::filter(Bundle* bundle)
                     continue;
                 }
                 const ResTable_config& config(file->getGroupEntry().toParams());
-                if (config.density != 0 && config.density != preferredDensity) {
+                // MIUI MOD:
+                // if (config.density != 0 && config.density != preferredDensity) {
+                if (config.density != 0 && config.density != preferredDensity && (extraPrefFilter.isEmpty() || !extraPrefFilter.match(config))) {
                     // This is a resource we would prefer not to have.  Check
                     // to see if have a similar variation that we would like
                     // to have and, if so, we can drop it.
@@ -1460,6 +1477,21 @@ status_t AaptAssets::filter(Bundle* bundle)
                     }
                 }
             }
+            // MIUI ADD: START
+            for (size_t k=0; k<grp->getFiles().size(); k++) {
+                sp<AaptFile> file = grp->getFiles().valueAt(k);
+                const ResTable_config& config(file->getGroupEntry().toParams());
+
+                // only warning for non-.9.png and hdpi resource
+                if ( config.density != 0 && config.density != preferredDensity
+                        && file->getPath().getBasePath().getPathExtension() != ".9"
+                        && config.density == ResTable_config::DENSITY_HIGH ) {
+                    fprintf(stdout, "aapt: warning: **** drawable '%s' has no preferred(%s) resource\n",
+                            file->getPrintableSource().string(),
+                            bundle->getPreferredDensity().string());
+                }
+            }
+            // END
         }
     }
 

@@ -81,6 +81,8 @@ public:
     void setLightGeometry(const Vector3& lightCenter, float lightRadius);
     void setOpaque(bool opaque);
     void setColorMode(ColorMode mode);
+    // MIUI ADD:
+    void setDisableWCGFlag(bool disableWCGFlag);
     int64_t* frameInfo();
     void forceDrawNextFrame();
     int syncAndDrawFrame();
@@ -145,6 +147,9 @@ public:
     static void preload();
 
     static void setRtAnimationsEnabled(bool enabled);
+
+    // MIUI ADD:
+    void setFrameDroppedCallback(const std::function<void(int)>& callback);
 
 private:
     RenderThread& mRenderThread;

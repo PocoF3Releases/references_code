@@ -138,6 +138,9 @@ public:
     };
 
     explicit BootAnimation(sp<Callbacks> callbacks);
+// MIUI ADD:START
+    explicit BootAnimation(sp<Callbacks> callbacks, bool isExternalDisplay);
+//END
     virtual ~BootAnimation();
 
     sp<SurfaceComposerClient> session() const;
@@ -207,7 +210,13 @@ private:
 
     void handleViewport(nsecs_t timestep);
     void initDynamicColors();
+//MIUI ADD：START
+    char *getBootRingtoneCustFileName();
+    void sendFCTProfile(int fctmode);
+    void playBackgroundMusic();
 
+    bool        mExternalDisplay = false;
+//END
     sp<SurfaceComposerClient>       mSession;
     AssetManager mAssets;
     Texture     mAndroid[2];

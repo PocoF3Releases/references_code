@@ -59,7 +59,9 @@
 #include <ui/StaticDisplayInfo.h>
 #include <utils/LightRefBase.h>
 #include <utils/Log.h>
-
+#if MI_SCREEN_PROJECTION
+#include <gui/MiuiTransaction.h>
+#endif
 // ----------------------------------------------------------------------------
 
 namespace android {
@@ -788,7 +790,6 @@ static void nativeSetSize(JNIEnv* env, jclass clazz, jlong transactionObj,
 static void nativeSetFlags(JNIEnv* env, jclass clazz, jlong transactionObj,
         jlong nativeObject, jint flags, jint mask) {
     auto transaction = reinterpret_cast<SurfaceComposerClient::Transaction*>(transactionObj);
-
     SurfaceControl* const ctrl = reinterpret_cast<SurfaceControl *>(nativeObject);
     transaction->setFlags(ctrl, flags, mask);
 }
@@ -951,6 +952,72 @@ static void nativeSetColorSpaceAgnostic(JNIEnv* env, jclass clazz, jlong transac
     transaction->setColorSpaceAgnostic(surfaceControl, agnostic);
 }
 
+// MIUI ADD: START
+static void nativeSetScreenProjection(JNIEnv* env, jclass clazz, jlong transactionObj,
+        jlong nativeObject, jint flags) {
+#if MI_SCREEN_PROJECTION
+    auto transaction = reinterpret_cast<SurfaceComposerClient::Transaction*>(transactionObj);
+
+    SurfaceControl* const ctrl = reinterpret_cast<SurfaceControl *>(nativeObject);
+    ALOGD("nativeSetScreenProjection ===> setScreenProjection");
+    transaction->setScreenProjection(ctrl, flags);
+#endif
+}
+
+static void nativeSetDiffScreenProjection(JNIEnv* env, jclass clazz,
+        jlong transactionObj,
+        jobject tokenObj, jint isScreenProjection) {
+#if MI_SCREEN_PROJECTION
+    sp<IBinder> token(ibinderForJavaObject(env, tokenObj));
+    if (token == NULL) return;
+
+    {
+        auto transaction = reinterpret_cast<MiuiTransaction*>(transactionObj);
+        transaction->setDiffScreenProjection(token, isScreenProjection);
+    }
+#endif
+}
+
+static void nativeSetCastMode(JNIEnv* env, jclass clazz, jlong transactionObj,
+        jlong nativeobject, jobject tokenObj, jboolean enable) {
+#if MI_SCREEN_PROJECTION
+    sp<IBinder> token(ibinderForJavaObject(env, tokenObj));
+    if (token == NULL) return;
+    {
+        auto transaction = reinterpret_cast<MiuiTransaction*>(transactionObj);
+        transaction->nativeSetCastMode(token, enable);
+    }
+#endif
+}
+
+static void nativeSetLastFrame(JNIEnv* env, jclass clazz, jlong transactionObj,
+        jlong nativeobject, jobject tokenObj, jboolean enable) {
+#if MI_SCREEN_PROJECTION
+    sp<IBinder> token(ibinderForJavaObject(env, tokenObj));
+    if (token == NULL) return;
+    {
+        auto transaction = reinterpret_cast<MiuiTransaction*>(transactionObj);
+        transaction->nativeSetLastFrame(token, enable);
+    }
+#endif
+}
+
+static jlong nativeCreateMiuiTransaction(JNIEnv* env, jclass clazz) {
+#if MI_SCREEN_PROJECTION
+    return reinterpret_cast<jlong>(new MiuiTransaction);
+#else
+    return 0;
+#endif
+}
+
+static void nativeApplyMiuiTransaction(JNIEnv* env, jclass clazz, jlong transactionObj, jboolean sync) {
+#if MI_SCREEN_PROJECTION
+    auto transaction = reinterpret_cast<MiuiTransaction*>(transactionObj);
+    transaction->apply(sync);
+#endif
+}
+// END
+
 static void nativeSetWindowCrop(JNIEnv* env, jclass clazz, jlong transactionObj,
         jlong nativeObject,
         jint l, jint t, jint r, jint b) {
@@ -992,6 +1059,92 @@ static void nativeSetShadowRadius(JNIEnv* env, jclass clazz, jlong transactionOb
     const auto ctrl = reinterpret_cast<SurfaceControl *>(nativeObject);
     transaction->setShadowRadius(ctrl, shadowRadius);
 }
+
+// MIUI ADD: START
+static void nativeSetShadowSettings(JNIEnv* env, jclass clazz, jlong transactionObj,
+        jlong nativeObject, jint shadowType, jfloat length, jfloatArray jcolor,
+        jfloat offsetX, jfloat offsetY, jfloat outset, jint numOfLayers) {
+#ifdef MI_SF_FEATURE
+    auto transaction = reinterpret_cast<SurfaceComposerClient::Transaction*>(transactionObj);
+
+    float* floatColor = env->GetFloatArrayElements(jcolor, 0);
+    half4 color = half4(floatColor[0], floatColor[1], floatColor[2],
+            floatColor[3]);
+    env->ReleaseFloatArrayElements(jcolor, floatColor, 0);
+
+    const auto ctrl = reinterpret_cast<SurfaceControl *>(nativeObject);
+    transaction->setShadowSettings(ctrl, shadowType, length, color, offsetX, offsetY, outset, numOfLayers);
+#endif
+}
+// END
+
+// MIUI ADD: HDR Dimmer
+static void nativeSetHdrDimmer(JNIEnv* env, jclass clazz, jlong transactionObj,
+         jlong nativeObject, jboolean enable, jobjectArray jbrightRegion, jint jbrightLength,
+         jobjectArray jdimRegion, jint jdimLength) {
+#ifdef MI_SF_FEATURE
+    auto transaction = reinterpret_cast<SurfaceComposerClient::Transaction*>(transactionObj);
+    const auto ctrl = reinterpret_cast<SurfaceControl *>(nativeObject);
+
+    std::vector<std::vector<float>> brightRegions;
+    float tmpBrightRegion[19];
+    for (int i = 0; i < jbrightLength; i++) {
+        jfloatArray regionArray = (jfloatArray)env->GetObjectArrayElement(jbrightRegion, i);
+        env->GetFloatArrayRegion(regionArray, 0, 19, tmpBrightRegion);
+        std::vector<float> region;
+        region.push_back(tmpBrightRegion[0]);
+        region.push_back(tmpBrightRegion[1]);
+        region.push_back(tmpBrightRegion[2]);
+        region.push_back(tmpBrightRegion[3]);
+        region.push_back(tmpBrightRegion[4]);
+        region.push_back(tmpBrightRegion[5]);
+        region.push_back(tmpBrightRegion[6]);
+        region.push_back(tmpBrightRegion[7]);
+        region.push_back(tmpBrightRegion[8]);
+        region.push_back(tmpBrightRegion[9]);
+        region.push_back(tmpBrightRegion[10]);
+        region.push_back(tmpBrightRegion[11]);
+        region.push_back(tmpBrightRegion[12]);
+        region.push_back(tmpBrightRegion[13]);
+        region.push_back(tmpBrightRegion[14]);
+        region.push_back(tmpBrightRegion[15]);
+        region.push_back(tmpBrightRegion[16]);
+        region.push_back(tmpBrightRegion[17]);
+        region.push_back(tmpBrightRegion[18]);
+        brightRegions.push_back(region);
+    }
+
+    std::vector<std::vector<float>> dimRegions;
+    float tmpDimRegion[8];
+    for (int i = 0; i < jdimLength; i++) {
+        jfloatArray regionArray = (jfloatArray)env->GetObjectArrayElement(jdimRegion, i);
+        env->GetFloatArrayRegion(regionArray, 0, 8, tmpDimRegion);
+        std::vector<float> region;
+        region.push_back(tmpDimRegion[0]);
+        region.push_back(tmpDimRegion[1]);
+        region.push_back(tmpDimRegion[2]);
+        region.push_back(tmpDimRegion[3]);
+        region.push_back(tmpDimRegion[4]);
+        region.push_back(tmpDimRegion[5]);
+        region.push_back(tmpDimRegion[6]);
+        region.push_back(tmpDimRegion[7]);
+        dimRegions.push_back(region);
+    }
+
+    transaction->setHdrDimmer(ctrl, enable, brightRegions, dimRegions);
+#endif
+}
+
+static void nativeSetHdrDimmerRatio(JNIEnv* env, jclass clazz, jlong transactionObj,
+        jlong nativeObject, jfloat ratio) {
+#ifdef MI_SF_FEATURE
+    auto transaction = reinterpret_cast<SurfaceComposerClient::Transaction*>(transactionObj);
+    const auto ctrl = reinterpret_cast<SurfaceControl *>(nativeObject);
+
+    transaction->setHdrDimmerRatio(ctrl, ratio);
+#endif
+}
+// END
 
 static void nativeSetTrustedOverlay(JNIEnv* env, jclass clazz, jlong transactionObj,
                                     jlong nativeObject, jboolean isTrustedOverlay) {
@@ -1151,6 +1304,20 @@ static jobject nativeCreateDisplay(JNIEnv* env, jclass clazz, jstring nameObj,
     return javaObjectForIBinder(env, token);
 }
 
+#ifdef MI_SF_FEATURE
+static void nativeSetMiSecurityDisplay(JNIEnv* env, jclass clazz,
+        jlong transactionObj,
+        jobject tokenObj, jboolean isSecurity) {
+    sp<IBinder> token(ibinderForJavaObject(env, tokenObj));
+    if (token == NULL) return;
+
+    {
+        auto transaction = reinterpret_cast<SurfaceComposerClient::Transaction*>(transactionObj);
+        transaction->setMiSecurityDisplay(token, isSecurity);
+    }
+}
+#endif
+
 static void nativeDestroyDisplay(JNIEnv* env, jclass clazz, jobject tokenObj) {
     sp<IBinder> token(ibinderForJavaObject(env, tokenObj));
     if (token == NULL) return;
@@ -1283,6 +1450,22 @@ static jobject convertDeviceProductInfoToJavaObject(
                           manufacturerPnpId, productId, modelYear, manufactureDate,
                           connectionToSinkType);
 }
+
+//MIUI ADD
+static void nativeSetLimitedFrameRate(JNIEnv* env, jclass clazz,
+        jlong transactionObj,
+        jobject tokenObj, jint frameRate) {
+#if MI_VIRTUAL_DISPLAY_FRAMERATE
+    sp<IBinder> token(ibinderForJavaObject(env, tokenObj));
+    if (token == NULL) return;
+
+    {
+        auto transaction = reinterpret_cast<SurfaceComposerClient::Transaction*>(transactionObj);
+        transaction->setLimitedFrameRate(token, frameRate);
+    }
+#endif
+}
+//MIUI END
 
 static jobject nativeGetStaticDisplayInfo(JNIEnv* env, jclass clazz, jobject tokenObj) {
     ui::StaticDisplayInfo info;
@@ -1823,6 +2006,25 @@ static jboolean nativeSetDisplayBrightness(JNIEnv* env, jclass clazz, jobject di
     return error == OK ? JNI_TRUE : JNI_FALSE;
 }
 
+// MIUI ADD: START
+static jboolean nativeSetDisplayBrightnessWithDimLayer(JNIEnv* env, jclass clazz, jobject displayTokenObject,
+                                           jfloat sdrBrightness, jfloat sdrBrightnessNits,
+                                           jfloat displayBrightness, jfloat displayBrightnessNits,
+                                           jboolean hdrBoost, jfloat dimmerFactor) {
+    sp<IBinder> displayToken(ibinderForJavaObject(env, displayTokenObject));
+    if (displayToken == nullptr) {
+        return JNI_FALSE;
+    }
+    gui::DisplayBrightness brightness;
+    brightness.sdrWhitePoint = sdrBrightness;
+    brightness.sdrWhitePointNits = sdrBrightnessNits;
+    brightness.displayBrightness = displayBrightness;
+    brightness.displayBrightnessNits = displayBrightnessNits;
+    status_t error = SurfaceComposerClient::setDisplayBrightnessWithDimLayer(displayToken, brightness, hdrBoost, dimmerFactor);
+    return error == OK ? JNI_TRUE : JNI_FALSE;
+}
+// END
+
 static void nativeWriteTransactionToParcel(JNIEnv* env, jclass clazz, jlong nativeObject,
         jobject parcelObj) {
     Parcel* parcel = parcelForJavaObject(env, parcelObj);
@@ -1883,6 +2085,20 @@ static void nativeSetGlobalShadowSettings(JNIEnv* env, jclass clazz, jfloatArray
     client->setGlobalShadowSettings(ambientColor, spotColor, lightPosY, lightPosZ, lightRadius);
 }
 
+static void nativeEnableCurtainAnim(JNIEnv* env, jclass clazz, jboolean isEnable) {
+#ifdef CURTAIN_ANIM
+    sp<SurfaceComposerClient> client = SurfaceComposerClient::getDefault();
+    client->enableCurtainAnim(isEnable);
+#endif
+}
+
+static void nativeSetCurtainAnimRate(JNIEnv* env, jclass clazz, jfloat rate) {
+#ifdef CURTAIN_ANIM
+    sp<SurfaceComposerClient> client = SurfaceComposerClient::getDefault();
+    client->setCurtainAnimRate(rate);
+#endif
+}
+
 static jobject nativeGetDisplayDecorationSupport(JNIEnv* env, jclass clazz,
                                                  jobject displayTokenObject) {
     sp<IBinder> displayToken(ibinderForJavaObject(env, displayTokenObject));
@@ -1912,6 +2128,15 @@ static jobject nativeGetDisplayDecorationSupport(JNIEnv* env, jclass clazz,
                      static_cast<jint>(support.value().alphaInterpretation));
     return jDisplayDecorationSupport;
 }
+
+// MIUI ADD: HDR Dimmer
+static void nativeEnableHdrDimmer(JNIEnv* env, jclass clazz, jboolean enable, jfloat factor) {
+#ifdef MI_SF_FEATURE
+    sp<SurfaceComposerClient> client = SurfaceComposerClient::getDefault();
+    client->enableHdrDimmer(enable, factor);
+#endif
+}
+// END
 
 static jlong nativeGetHandle(JNIEnv* env, jclass clazz, jlong nativeObject) {
     SurfaceControl *surfaceControl = reinterpret_cast<SurfaceControl*>(nativeObject);
@@ -2071,12 +2296,33 @@ static jint nativeGetLayerId(JNIEnv* env, jclass clazz, jlong nativeSurfaceContr
     return surface->getLayerId();
 }
 
+// MIUI ADD: START
+static jboolean nativeCheckLayerNum(JNIEnv* env, jclass) {
+    return static_cast<jboolean>(SurfaceComposerClient::checkLayerNum());
+}
+// END
+
+// MIUI ADD: START
+static void nativeDeferAnimation(JNIEnv* env, jclass clazz, jlong transactionObj,
+                jlong nativeObject, jint num) {
+#if MI_DEFER_GESTURE_ANIM
+    auto transaction = reinterpret_cast<SurfaceComposerClient::Transaction*>(transactionObj);
+    sp<SurfaceControl> ctrl = reinterpret_cast<SurfaceControl*>(nativeObject);
+    transaction->deferAnimation(ctrl, num);
+#endif
+}
+// END
+
 // ----------------------------------------------------------------------------
 
 static const JNINativeMethod sSurfaceControlMethods[] = {
         // clang-format off
     {"nativeCreate", "(Landroid/view/SurfaceSession;Ljava/lang/String;IIIIJLandroid/os/Parcel;)J",
             (void*)nativeCreate },
+    //MIUI ADD
+    {"nativeSetLimitedFrameRate", "(JLandroid/os/IBinder;I)V",
+            (void*)nativeSetLimitedFrameRate },
+    //MIUI END
     {"nativeReadFromParcel", "(Landroid/os/Parcel;)J",
             (void*)nativeReadFromParcel },
     {"nativeCopyFromSurfaceControl", "(J)J" ,
@@ -2128,6 +2374,20 @@ static const JNINativeMethod sSurfaceControlMethods[] = {
             (void*)nativeSetColorTransform },
     {"nativeSetColorSpaceAgnostic", "(JJZ)V",
             (void*)nativeSetColorSpaceAgnostic },
+    // MIUI ADD: START
+    {"nativeSetScreenProjection", "(JJI)V",
+                (void*)nativeSetScreenProjection },
+    {"nativeSetDiffScreenProjection", "(JLandroid/os/IBinder;I)V",
+                (void*)nativeSetDiffScreenProjection },
+    {"nativeSetCastMode", "(JJLandroid/os/IBinder;Z)V",
+                (void*)nativeSetCastMode },
+    {"nativeSetLastFrame", "(JJLandroid/os/IBinder;Z)V",
+                (void*)nativeSetLastFrame },
+    {"nativeCreateMiuiTransaction", "()J",
+            (void*)nativeCreateMiuiTransaction },
+    {"nativeApplyMiuiTransaction", "(JZ)V",
+            (void*)nativeApplyMiuiTransaction },
+    // END
     {"nativeSetFlags", "(JJII)V",
             (void*)nativeSetFlags },
     {"nativeSetFrameRateSelectionPriority", "(JJI)V",
@@ -2244,6 +2504,10 @@ static const JNINativeMethod sSurfaceControlMethods[] = {
             (void*)nativeGetDisplayBrightnessSupport },
     {"nativeSetDisplayBrightness", "(Landroid/os/IBinder;FFFF)Z",
             (void*)nativeSetDisplayBrightness },
+    // MIUI ADD: START HDR Dimmer
+    {"nativeSetDisplayBrightnessWithDimLayer", "(Landroid/os/IBinder;FFFFZF)Z",
+            (void*)nativeSetDisplayBrightnessWithDimLayer },
+    // END
     {"nativeReadTransactionFromParcel", "(Landroid/os/Parcel;)J",
             (void*)nativeReadTransactionFromParcel },
     {"nativeWriteTransactionToParcel", "(JLandroid/os/Parcel;)V",
@@ -2292,6 +2556,29 @@ static const JNINativeMethod sSurfaceControlMethods[] = {
     {"nativeSetDestinationFrame", "(JJIIII)V",
                 (void*)nativeSetDestinationFrame },
         // clang-format on
+    // MIUI ADD: START
+    {"nativeCheckLayerNum", "()Z",
+            (void*)nativeCheckLayerNum },
+    {"nativeSetMiSecurityDisplay", "(JLandroid/os/IBinder;Z)V",
+        (void*)nativeSetMiSecurityDisplay },
+    {"nativeEnableCurtainAnim", "(Z)V",
+            (void*)nativeEnableCurtainAnim },
+    {"nativeSetCurtainAnimRate", "(F)V",
+        (void*)nativeSetCurtainAnimRate },
+    {"nativeSetShadowSettings", "(JJIF[FFFFI)V",
+            (void*)nativeSetShadowSettings },
+    // END
+    // MIUI ADD: START
+    {"nativeDeferAnimation", "(JJI)V",
+            (void*)nativeDeferAnimation },
+    // MIUI ADD: HDR Dimmer
+    {"nativeSetHdrDimmer", "(JJZ[[FI[[FI)V",
+                (void*)nativeSetHdrDimmer },
+    {"nativeSetHdrDimmerRatio", "(JJF)V",
+                (void*)nativeSetHdrDimmerRatio},
+    {"nativeEnableHdrDimmer", "(ZF)V",
+            (void*)nativeEnableHdrDimmer },
+    // END
 };
 
 int register_android_view_SurfaceControl(JNIEnv* env)

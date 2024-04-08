@@ -42,6 +42,8 @@ struct CompileOptions {
   // See comments on aapt::ResourceParserOptions.
   bool preserve_visibility_of_styleables = false;
   bool verbose = false;
+  // MIUI ADD:
+  std::vector<std::string> wlan_replace;
 };
 
 /** Parses flags and compiles resources to be used in linking.  */
@@ -76,6 +78,8 @@ class CompileCommand : public Command {
     AddOptionalFlag("--source-path",
                       "Sets the compiled resource file source file path to the given string.",
                       &options_.source_path);
+    //MIUI ADD:
+    AddOptionalFlagList("--wlan-replace", "String need to be replaced by Wlan", &options_.wlan_replace);
   }
 
   int Action(const std::vector<std::string>& args) override;

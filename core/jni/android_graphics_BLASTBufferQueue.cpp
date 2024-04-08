@@ -104,6 +104,18 @@ static jobject nativeGetSurface(JNIEnv* env, jclass clazz, jlong ptr,
                                                   queue->getSurface(includeSurfaceControlHandle));
 }
 
+static void nativeSetUndequeuedBufferCount(JNIEnv* env, jclass clazz, jlong ptr, jint count) {
+    sp<BLASTBufferQueue> queue = reinterpret_cast<BLASTBufferQueue*>(ptr);
+    if (queue == nullptr) return;
+    queue->setUndequeuedBufferCount(count);
+}
+
+static jint nativeGetUndequeuedBufferCount(JNIEnv* env, jclass clazz, jlong ptr) {
+    sp<BLASTBufferQueue> queue = reinterpret_cast<BLASTBufferQueue*>(ptr);
+    if (queue == nullptr) return -1;
+    return queue->getUndequeuedBufferCount();
+}
+
 class JGlobalRefHolder {
 public:
     JGlobalRefHolder(JavaVM* vm, jobject object) : mVm(vm), mObject(object) {}
@@ -201,11 +213,29 @@ static jobject nativeGatherPendingTransactions(JNIEnv* env, jclass clazz, jlong 
                           reinterpret_cast<jlong>(transaction));
 }
 
+// MIUI ADD: START
+static jboolean nativeAdjustMaxDequeuedBufferCount(JNIEnv* env, jclass clazz,
+                                                   jlong ptr, jint count) {
+    sp<BLASTBufferQueue> queue = reinterpret_cast<BLASTBufferQueue*>(ptr);
+    return queue->adjustMaxDequeuedBufferCountForProducer(count);
+}
+// END
+
+// MIUI ADD: dynamic ViewRootImpl and BlastBufferQueue Log
+static jboolean nativeSetDynamicLog(JNIEnv* env, jclass clazz,
+                                                   jlong ptr, jint dynamic) {
+    sp<BLASTBufferQueue> queue = reinterpret_cast<BLASTBufferQueue*>(ptr);
+    return queue->setDynamicLog(dynamic);
+}
+// END
+
 static const JNINativeMethod gMethods[] = {
         /* name, signature, funcPtr */
         // clang-format off
         {"nativeCreate", "(Ljava/lang/String;Z)J", (void*)nativeCreate},
         {"nativeGetSurface", "(JZ)Landroid/view/Surface;", (void*)nativeGetSurface},
+        {"nativeSetUndequeuedBufferCount", "(JI)V", (void*)nativeSetUndequeuedBufferCount},
+        {"nativeGetUndequeuedBufferCount", "(J)I", (void*)nativeGetUndequeuedBufferCount},
         {"nativeDestroy", "(J)V", (void*)nativeDestroy},
         {"nativeSyncNextTransaction", "(JLjava/util/function/Consumer;Z)V", (void*)nativeSyncNextTransaction},
         {"nativeStopContinuousSyncTransaction", "(J)V", (void*)nativeStopContinuousSyncTransaction},
@@ -218,6 +248,10 @@ static const JNINativeMethod gMethods[] = {
         {"nativeSetTransactionHangCallback",
          "(JLandroid/graphics/BLASTBufferQueue$TransactionHangCallback;)V",
          (void*)nativeSetTransactionHangCallback},
+        // MIUI ADD:
+        {"nativeAdjustMaxDequeuedBufferCount", "(JI)Z", (void*)nativeAdjustMaxDequeuedBufferCount},
+        // MIUI ADD: dynamic ViewRootImpl and BlastBufferQueue Log
+        {"nativeSetDynamicLog", "(JI)Z", (void*)nativeSetDynamicLog},
         // clang-format on
 };
 

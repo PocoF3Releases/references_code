@@ -22,6 +22,7 @@
 #include <utils/Log.h>
 #include <binder/IPCThreadState.h>
 #include <binder/IServiceManager.h>
+#include <cutils/properties.h>
 #include <utils/String8.h>
 #include <utils/Vector.h>
 #include <meminfo/procmeminfo.h>
@@ -211,10 +212,18 @@ void android_os_Process_setThreadGroup(JNIEnv* env, jobject clazz, int tid, jint
         return;
     }
 
+    SchedPolicy sp = (SchedPolicy) grp;
     int res = SetTaskProfiles(tid, {get_sched_policy_profile_name((SchedPolicy)grp)}, true) ? 0 : -1;
 
     if (res != NO_ERROR) {
         signalExceptionForGroupError(env, -res, tid);
+    }
+
+    if ((grp == SP_AUDIO_APP) || (grp == SP_AUDIO_SYS)) {
+        res = set_cpuset_policy(tid, sp);
+        if (res != NO_ERROR) {
+            signalExceptionForGroupError(env, -res, tid);
+        }
     }
 }
 
@@ -277,6 +286,81 @@ void android_os_Process_setProcessGroup(JNIEnv* env, jobject clazz, int pid, jin
 
     if (!SetProcessProfilesCached(0, pid, {get_cpuset_policy_profile_name((SchedPolicy)grp)}))
         signalExceptionForGroupError(env, errno ? errno : EPERM, pid);
+}
+
+void android_os_Process_setCgroupProcsProcessGroup(JNIEnv* env, jobject clazz, int uid, int pid, jint grp, jboolean dex2oat_only)
+{
+    int fd;
+    char pathV1[255], pathV2[255];
+    static bool isCgroupV2 = false;
+    if ((grp == SP_FOREGROUND) || (grp > SP_MAX)) {
+        signalExceptionForGroupError(env, EINVAL, pid);
+        return;
+    }
+
+    //set process group for current process
+    android_os_Process_setProcessGroup(env, clazz, pid, grp);
+
+    //find processes in the same cgroup.procs of current uid and pid
+    snprintf(pathV1, sizeof(pathV1), "/acct/uid_%d/pid_%d/cgroup.procs", uid, pid);
+    snprintf(pathV2, sizeof(pathV2), "/sys/fs/cgroup/uid_%d/pid_%d/cgroup.procs", uid, pid);
+    if (isCgroupV2) {
+        // read from V2 only
+        fd = open(pathV2, O_RDONLY);
+    } else {
+        // first try V1
+        fd = open(pathV1, O_RDONLY);
+        if (fd < 0) {
+            fd = open(pathV2, O_RDONLY);
+            if (fd >= 0) {
+                isCgroupV2 = true;
+            }
+        }
+    }
+    if (fd >= 0) {
+        char buffer[256];
+        char ch;
+        int numRead;
+        size_t len=0;
+        for (;;) {
+            numRead=read(fd, &ch, 1);
+            if (numRead <= 0)
+                break;
+            if (ch != '\n') {
+                buffer[len++] = ch;
+            } else {
+                int temp_pid = atoi(buffer);
+                len=0;
+                if (temp_pid == pid)
+                    continue;
+                if (dex2oat_only) {
+                    // check if cmdline of temp_pid is dex2oat
+                    char cmdline[64];
+                    snprintf(cmdline, sizeof(cmdline), "/proc/%d/cmdline", temp_pid);
+                    int cmdline_fd = open(cmdline, O_RDONLY);
+                    if (cmdline_fd >= 0) {
+                        size_t read_size = read(cmdline_fd, buffer, 255);
+                        close(cmdline_fd);
+                        buffer[read_size]='\0';
+                        const char *dex2oat_name1 = "dex2oat"; //for plugins compiler
+                        const char *dex2oat_name2 = "/system/bin/dex2oat"; //for installer
+                        const char *dex2oat_name3 = "/apex/com.android.runtime/bin/dex2oat"; //for installer
+                        if (strncmp(buffer, dex2oat_name1, strlen(dex2oat_name1)) != 0
+                                && strncmp(buffer, dex2oat_name2, strlen(dex2oat_name2)) != 0
+                                && strncmp(buffer, dex2oat_name3, strlen(dex2oat_name3)) != 0) {
+                            continue;
+                        }
+                    } else {
+                        //ALOGE("read %s failed", cmdline);
+                        continue;
+                    }
+                }
+                //set cgroup of temp_pid follow pid
+                android_os_Process_setProcessGroup(env, clazz, temp_pid, grp);
+            }
+        }
+        close(fd);
+    }
 }
 
 void android_os_Process_setProcessFrozen(
@@ -356,8 +440,21 @@ static void get_cpuset_cores_for_policy(SchedPolicy policy, cpu_set_t *cpu_set)
             }
             break;
         case SP_FOREGROUND:
+            if (!CgroupGetAttributePath("HighCapacityCPUs", &filename)) {
+                return;
+            }
+            break;
         case SP_AUDIO_APP:
         case SP_AUDIO_SYS:
+            if (!CgroupGetAttributePath("AudioAppCapacityCPUs", &filename)) {
+                return;
+            }
+            if (access(filename.c_str(), F_OK) != 0) {
+                if (!CgroupGetAttributePath("HighCapacityCPUs", &filename)) {
+                    return;
+                }
+            }
+            break;
         case SP_RT_APP:
             if (!CgroupGetAttributePath("HighCapacityCPUs", &filename)) {
                 return;
@@ -1252,6 +1349,61 @@ static jint android_os_Process_nativePidFdOpen(JNIEnv* env, jobject, jint pid, j
     return fd;
 }
 
+// MIUI ADD: START
+void android_os_Process_setSchedAffinity(JNIEnv* env, jobject clazz, jint tid, jintArray cpus)
+{
+    if (cpus == nullptr || tid <= 0) {
+        return;
+    }
+
+    const jsize NC = env->GetArrayLength(cpus);
+    if (NC == 0) {
+        return;
+    }
+    jint* affinityCpus = env->GetIntArrayElements(cpus, 0);
+
+    cpu_set_t cpuSet;
+    CPU_ZERO(&cpuSet);
+    if (affinityCpus != NULL) {
+        for (int i = 0; i < NC; i++) {
+            CPU_SET(affinityCpus[i], &cpuSet);
+        }
+        sched_setaffinity(tid, sizeof(cpuSet), &cpuSet);
+    }
+    env->ReleaseIntArrayElements(cpus, affinityCpus, 0);
+}
+// END
+
+// MIUI ADD: START
+jint android_os_Process_getCpusetThreadGroup(JNIEnv* env, jobject clazz, jint tid)
+{
+    SchedPolicy sp;
+    if (get_cpuset_policy(tid, &sp) != 0) {
+        signalExceptionForGroupError(env, errno, tid);
+    }
+    return (int) sp;
+}
+
+void android_os_Process_setCameraBackgroundCpusetGroup(JNIEnv* env, jobject clazz, int pid, int grp = 0)
+{
+    ALOGD("set  pid =%d grp=%d  to camera-background cpuset group", pid, grp);
+
+    if (grp == 0) {
+        if (!SetProcessProfilesCached(0,pid, {"CPUSET_SP_CAMERA_BACKGROUND"})) {
+            signalExceptionForGroupError(env, errno ? errno : EPERM, pid);
+        }
+    } else if (grp == 1) {
+        if (!SetProcessProfilesCached(0,pid, {"CPUSET_SP_CAMERA_LOWER_BACKGROUND"})) {
+            signalExceptionForGroupError(env, errno ? errno : EPERM, pid);
+        }
+    } else {
+        if (!SetProcessProfilesCached(0,pid, {"CPUSET_SP_CAMERA_LIMIT_BACKGROUND"})) {
+            signalExceptionForGroupError(env, errno ? errno : EPERM, pid);
+        }
+    }
+}
+// END
+
 static const JNINativeMethod methods[] = {
         {"getUidForName", "(Ljava/lang/String;)I", (void*)android_os_Process_getUidForName},
         {"getGidForName", "(Ljava/lang/String;)I", (void*)android_os_Process_getGidForName},
@@ -1264,6 +1416,7 @@ static const JNINativeMethod methods[] = {
         {"setThreadGroup", "(II)V", (void*)android_os_Process_setThreadGroup},
         {"setThreadGroupAndCpuset", "(II)V", (void*)android_os_Process_setThreadGroupAndCpuset},
         {"setProcessGroup", "(II)V", (void*)android_os_Process_setProcessGroup},
+        {"setCgroupProcsProcessGroup", "(IIIZ)V", (void*)android_os_Process_setCgroupProcsProcessGroup},
         {"getProcessGroup", "(I)I", (void*)android_os_Process_getProcessGroup},
         {"createProcessGroup", "(II)I", (void*)android_os_Process_createProcessGroup},
         {"getExclusiveCores", "()[I", (void*)android_os_Process_getExclusiveCores},
@@ -1293,6 +1446,11 @@ static const JNINativeMethod methods[] = {
         {"killProcessGroup", "(II)I", (void*)android_os_Process_killProcessGroup},
         {"removeAllProcessGroups", "()V", (void*)android_os_Process_removeAllProcessGroups},
         {"nativePidFdOpen", "(II)I", (void*)android_os_Process_nativePidFdOpen},
+        // MIUI ADD: START
+        {"setSchedAffinity", "(I[I)V", (void*)android_os_Process_setSchedAffinity},
+        {"setCameraBackgroundCpusetGroup",  "(II)V", (void*)android_os_Process_setCameraBackgroundCpusetGroup},
+        {"getCpusetThreadGroup",  "(I)I", (void*)android_os_Process_getCpusetThreadGroup},
+        //END
 };
 
 int register_android_os_Process(JNIEnv* env)

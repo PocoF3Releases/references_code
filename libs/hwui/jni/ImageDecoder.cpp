@@ -102,7 +102,7 @@ static jobject throw_exception(JNIEnv* env, Error error, const char* msg,
 }
 
 static jobject native_create(JNIEnv* env, std::unique_ptr<SkStream> stream,
-        jobject source, jboolean preferAnimation) {
+        jobject source, jboolean preferAnimation,/* MIUI ADD */ bool isAsset) {
     if (!stream.get()) {
         return throw_exception(env, kSourceMalformedData, "Failed to create a stream",
                                nullptr, source);
@@ -143,6 +143,8 @@ static jobject native_create(JNIEnv* env, std::unique_ptr<SkStream> stream,
     const bool isNinePatch = peeker->mPatch != nullptr;
     ImageDecoder* decoder = new ImageDecoder(std::move(androidCodec), std::move(peeker),
                                              SkCodec::kYes_ZeroInitialized);
+    // MIUI ADD:
+    decoder->setAsset(isAsset);
     return env->NewObject(gImageDecoder_class, gImageDecoder_constructorMethodID,
                           reinterpret_cast<jlong>(decoder), decoder->width(), decoder->height(),
                           animated, isNinePatch);
@@ -177,7 +179,7 @@ static jobject ImageDecoder_nCreateFd(JNIEnv* env, jobject /*clazz*/,
     } else {
         fileStream.reset(new SkFILEStream(file, length));
     }
-    return native_create(env, std::move(fileStream), source, preferAnimation);
+    return native_create(env, std::move(fileStream), source, preferAnimation,/* MIUI ADD */ false);
 #endif
 }
 
@@ -192,14 +194,14 @@ static jobject ImageDecoder_nCreateInputStream(JNIEnv* env, jobject /*clazz*/,
 
     std::unique_ptr<SkStream> bufferedStream(
             skia::FrontBufferedStream::Make(std::move(stream), SkCodec::MinBufferedBytesNeeded()));
-    return native_create(env, std::move(bufferedStream), source, preferAnimation);
+    return native_create(env, std::move(bufferedStream), source, preferAnimation,/* MIUI ADD */ false);
 }
 
 static jobject ImageDecoder_nCreateAsset(JNIEnv* env, jobject /*clazz*/,
         jlong assetPtr, jboolean preferAnimation, jobject source) {
     Asset* asset = reinterpret_cast<Asset*>(assetPtr);
     std::unique_ptr<SkStream> stream(new AssetStreamAdaptor(asset));
-    return native_create(env, std::move(stream), source, preferAnimation);
+    return native_create(env, std::move(stream), source, preferAnimation,/* MIUI ADD */ true);
 }
 
 static jobject ImageDecoder_nCreateByteBuffer(JNIEnv* env, jobject /*clazz*/,
@@ -211,14 +213,14 @@ static jobject ImageDecoder_nCreateByteBuffer(JNIEnv* env, jobject /*clazz*/,
         return throw_exception(env, kSourceMalformedData, "Failed to read ByteBuffer",
                                nullptr, source);
     }
-    return native_create(env, std::move(stream), source, preferAnimation);
+    return native_create(env, std::move(stream), source, preferAnimation,/* MIUI ADD */ false);
 }
 
 static jobject ImageDecoder_nCreateByteArray(JNIEnv* env, jobject /*clazz*/,
         jbyteArray byteArray, jint offset, jint length,
         jboolean preferAnimation, jobject source) {
     std::unique_ptr<SkStream> stream(CreateByteArrayStreamAdaptor(env, byteArray, offset, length));
-    return native_create(env, std::move(stream), source, preferAnimation);
+    return native_create(env, std::move(stream), source, preferAnimation,/* MIUI ADD */ false);
 }
 
 jint postProcessAndRelease(JNIEnv* env, jobject jimageDecoder, std::unique_ptr<Canvas> canvas) {
@@ -446,8 +448,14 @@ static jobject ImageDecoder_nDecodeBitmap(JNIEnv* env, jobject /*clazz*/, jlong 
             sk_sp<Bitmap> hwBitmap = Bitmap::allocateHardwareBitmap(bm);
             if (hwBitmap) {
                 hwBitmap->setImmutable();
-                return bitmap::createBitmap(env, hwBitmap.release(), bitmapCreateFlags,
+                // MIUI MODE: START
+                // return bitmap::createBitmap(env, hwBitmap.release(), bitmapCreateFlags,
+                //                                            ninePatchChunk, ninePatchInsets);
+                Bitmap* bitmap = hwBitmap.release();
+                bitmap->setAsset(decoder->isAsset());
+                return bitmap::createBitmap(env, bitmap, bitmapCreateFlags,
                                             ninePatchChunk, ninePatchInsets);
+                // END
             }
             if (allocator == kHardware_Allocator) {
                 doThrowOOME(env, "failed to allocate hardware Bitmap!");
@@ -459,8 +467,14 @@ static jobject ImageDecoder_nDecodeBitmap(JNIEnv* env, jobject /*clazz*/, jlong 
 
         nativeBitmap->setImmutable();
     }
-    return bitmap::createBitmap(env, nativeBitmap.release(), bitmapCreateFlags, ninePatchChunk,
+    // MIUI MODE: START
+    // return bitmap::createBitmap(env, nativeBitmap.release(), bitmapCreateFlags, ninePatchChunk,
+    //                            ninePatchInsets);
+    Bitmap* bitmap = nativeBitmap.release();
+    bitmap->setAsset(decoder->isAsset());
+    return bitmap::createBitmap(env, bitmap, bitmapCreateFlags, ninePatchChunk,
                                 ninePatchInsets);
+    // END
 }
 
 static jobject ImageDecoder_nGetSampledSize(JNIEnv* env, jobject /*clazz*/, jlong nativePtr,

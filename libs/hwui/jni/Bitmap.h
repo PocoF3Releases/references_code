@@ -46,6 +46,9 @@ Bitmap& toBitmap(jlong bitmapHandle);
 void reinitBitmap(JNIEnv* env, jobject javaBitmap, const SkImageInfo& info,
         bool isPremultiplied);
 
+// MIUI ADD:
+void setAsset(JNIEnv* env, jobject javaBitmap, bool isAsset);
+
 } // namespace bitmap
 
 } // namespace android

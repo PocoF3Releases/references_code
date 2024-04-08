@@ -692,6 +692,15 @@ static void punchHole(JNIEnv* env, jobject, jlong canvasPtr, jfloat left, jfloat
     canvas->punchHole(SkRRect::MakeRectXY(SkRect::MakeLTRB(left, top, right, bottom), rx, ry));
 }
 
+// MIUI ADD START:
+static void setForceDark(jlong canvasHandle, jboolean forceDark) {
+    get_canvas(canvasHandle)->setForceDark(forceDark);
+}
+static jboolean isForceDark(jlong canvasHandle) {
+    return get_canvas(canvasHandle)->getForceDark() ? JNI_TRUE : JNI_FALSE;
+}
+// END
+
 }; // namespace CanvasJNI
 
 static const JNINativeMethod gMethods[] = {
@@ -706,6 +715,10 @@ static const JNINativeMethod gMethods[] = {
     {"nGetClipBounds","(JLandroid/graphics/Rect;)Z", (void*) CanvasJNI::getClipBounds},
 
     // ------------ @CriticalNative ----------------
+    // MIUI ADD: START
+    {"nSetForceDark","(JZ)V", (void*) CanvasJNI::setForceDark},
+    {"nIsForceDark","(J)Z", (void*) CanvasJNI::isForceDark},
+    // END
     {"nIsOpaque","(J)Z", (void*) CanvasJNI::isOpaque},
     {"nGetWidth","(J)I", (void*) CanvasJNI::getWidth},
     {"nGetHeight","(J)I", (void*) CanvasJNI::getHeight},

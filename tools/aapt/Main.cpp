@@ -237,6 +237,10 @@ void usage(void)
         "       localization\n"
         "   --no-version-vectors\n"
         "       Do not automatically generate versioned copies of vector XML resources.\n"
+        // MIUI MOD: START
+        "   --wlan-replace\n"
+        "       String need to be replaced by Wlan.\n"
+        // END
         "   --no-version-transitions\n"
         "       Do not automatically generate versioned copies of transition XML resources.\n"
         "   --private-symbols\n"
@@ -626,6 +630,17 @@ int main(int argc, char* const argv[])
                         goto bail;
                     }
                     bundle.setPreferredDensity(argv[0]);
+                // MIUI ADD: START
+                } else if (strcmp(cp, "-extra-preferred-densities") == 0) {
+                    argc--;
+                    argv++;
+                    if (!argc) {
+                        fprintf(stderr, "ERROR: No argument supplied for '-extra-preferred-densities' option\n");
+                        wantUsage = true;
+                        goto bail;
+                    }
+                    bundle.addExtraPreferredDensities(argv[0]);
+                // END
                 } else if (strcmp(cp, "-split") == 0) {
                     argc--;
                     argv++;
@@ -722,7 +737,18 @@ int main(int argc, char* const argv[])
                     bundle.setNoVersionVectors(true);
                 } else if (strcmp(cp, "-no-version-transitions") == 0) {
                     bundle.setNoVersionTransitions(true);
-                } else if (strcmp(cp, "-private-symbols") == 0) {
+                // MIUI ADD: START
+                } else if (strcmp(cp, "-wlan-replace") == 0) {
+                    argc--;
+                    argv++;
+                    if (!argc) {
+                        fprintf(stderr, "ERROR: No argument supplied for '--wlan-replace' option\n");
+                        wantUsage = true;
+                        goto bail;
+                    }
+                    bundle.addWlanReplacement(argv[0]);
+                // END
+				} else if (strcmp(cp, "-private-symbols") == 0) {
                     argc--;
                     argv++;
                     if (!argc) {
@@ -732,6 +758,12 @@ int main(int argc, char* const argv[])
                         goto bail;
                     }
                     bundle.setPrivateSymbolsPackage(String8(argv[0]));
+                // MIUI WORKAROUND: Start
+                } else if (strcmp(cp, "-package-id") == 0) {
+                    argc--;
+                    argv++;
+                    bundle.setPackageId(strtol(argv[0], NULL, 0));
+                // MIUI WORKAROUND: End
                 } else {
                     fprintf(stderr, "ERROR: Unknown option '-%s'\n", cp);
                     wantUsage = true;

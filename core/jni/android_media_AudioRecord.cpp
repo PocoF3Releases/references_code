@@ -823,6 +823,44 @@ static jint android_media_AudioRecord_get_port_id(JNIEnv *env,  jobject thiz) {
     return (jint)lpRecorder->getPortId();
 }
 
+// MIUI ADD START
+static int android_media_AudioRecord_setParameters(JNIEnv *env, jobject thiz, jstring keyValuePairs)
+{
+    sp<AudioRecord> lpRecorder = getAudioRecord(env, thiz);
+    if (lpRecorder == NULL) {
+        jniThrowException(env, "java/lang/IllegalStateException",
+                "Unable to retrieve AudioRecord pointer for setParameters()");
+        return AUDIO_JAVA_ERROR;
+    }
+    const jchar* c_keyValuePairs = env->GetStringCritical(keyValuePairs, 0);
+    String8 c_keyValuePairs8;
+    if (keyValuePairs) {
+        c_keyValuePairs8 = String8(reinterpret_cast<const char16_t*>(c_keyValuePairs),
+                                   env->GetStringLength(keyValuePairs));
+        env->ReleaseStringCritical(keyValuePairs, c_keyValuePairs);
+    }
+    return nativeToJavaStatus(lpRecorder->setParameters(c_keyValuePairs8));
+}
+
+// ----------------------------------------------------------------------------
+static jstring android_media_AudioRecord_getParameters(JNIEnv *env, jobject thiz, jstring keys)
+{
+    sp<AudioRecord> lpRecorder = getAudioRecord(env, thiz);
+    if (lpRecorder == NULL) {
+        jniThrowException(env, "java/lang/IllegalStateException",
+                "Unable to retrieve AudioRecord pointer for getParameters()");
+        return env->NewStringUTF("");
+    }
+    const jchar* c_keys = env->GetStringCritical(keys, 0);
+    String8 c_keys8;
+    if (keys) {
+        c_keys8 = String8(reinterpret_cast<const char16_t*>(c_keys),
+                          env->GetStringLength(keys));
+        env->ReleaseStringCritical(keys, c_keys);
+    }
+    return env->NewStringUTF(lpRecorder->getParameters(c_keys8).string());
+}
+// MIUI ADD END
 
 // ----------------------------------------------------------------------------
 // ----------------------------------------------------------------------------
@@ -873,6 +911,12 @@ static const JNINativeMethod gMethods[] = {
          (void *)android_media_AudioRecord_setLogSessionId},
         {"native_shareAudioHistory", "(Ljava/lang/String;J)I",
          (void *)android_media_AudioRecord_shareAudioHistory},
+        // MIUI ADD START
+        {"setParameters",        "(Ljava/lang/String;)I",
+         (void *)android_media_AudioRecord_setParameters},
+        {"getParameters",        "(Ljava/lang/String;)Ljava/lang/String;",
+         (void *)android_media_AudioRecord_getParameters},
+        // MIUI ADD END
 };
 
 // field names found in android/media/AudioRecord.java

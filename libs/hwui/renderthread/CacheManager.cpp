@@ -26,6 +26,7 @@
 #include "renderstate/RenderState.h"
 #include "thread/CommonPool.h"
 #include <utils/Trace.h>
+#include <cutils/properties.h>
 
 #include <GrContextOptions.h>
 #include <SkExecutor.h>
@@ -47,7 +48,8 @@ namespace renderthread {
 
 CacheManager::CacheManager()
         : mMaxSurfaceArea(DeviceInfo::getWidth() * DeviceInfo::getHeight())
-        , mMaxResourceBytes(mMaxSurfaceArea * SURFACE_SIZE_MULTIPLIER)
+        , mMaxResourceBytes(mMaxSurfaceArea * SURFACE_SIZE_MULTIPLIER *
+                  property_get_int32("persist.sys.resource_cache_limit.multiple", 1))
         , mBackgroundResourceBytes(mMaxResourceBytes * BACKGROUND_RETENTION_PERCENTAGE)
         // This sets the maximum size for a single texture atlas in the GPU font cache. If
         // necessary, the cache can allocate additional textures that are counted against the

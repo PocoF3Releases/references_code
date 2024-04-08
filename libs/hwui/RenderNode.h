@@ -41,6 +41,8 @@
 
 #include <vector>
 #include <pipeline/skia/StretchMask.h>
+// MIUI ADD
+#include "hwui/MiuiForceDarkConfigStub.h"
 
 class SkBitmap;
 class SkPaint;
@@ -154,6 +156,12 @@ public:
 
     int getHeight() const { return properties().getHeight(); }
 
+    // MIUI ADD START:
+    bool isSmallView(){
+        return getWidth() <= 185 && getHeight() <= 185;
+    }
+    // END
+
     virtual void prepareTree(TreeInfo& info);
     void destroyHardwareResources(TreeInfo* info = nullptr);
     void destroyLayers();
@@ -218,13 +226,28 @@ public:
 
     void setUsageHint(UsageHint usageHint) { mUsageHint = usageHint; }
 
+    // MIUI ADD: START
+    void setForceDarkUsageHint(UsageHint usageHint) { mForceDarkUsageHint = usageHint; }
+
+    UsageHint forceDarkUsageHint() const { return mForceDarkUsageHint; }
+
+    bool hasText() const { return mDisplayList && mDisplayList.hasText(); }
+
+    int getBitmapStreams() { return mDisplayList ? mDisplayList.getBitmapStreams() : 0; }
+
+    void setIsForeground(bool isForeground) { mIsForeground = isForeground; }
+
+    bool isForeground() { return mIsForeground; }
+    // END
+
     UsageHint usageHint() const { return mUsageHint; }
 
     int64_t uniqueId() const { return mUniqueId; }
 
     void markDrawStart(SkCanvas& canvas);
     void markDrawEnd(SkCanvas& canvas);
-
+    // MIUI ADD
+    int mDepth;
 private:
     void computeOrderingImpl(RenderNodeOp* opState,
                              std::vector<RenderNodeOp*>* compositedChildrenOfProjectionSurface,
@@ -234,7 +257,11 @@ private:
     void syncDisplayList(TreeObserver& observer, TreeInfo* info);
     void handleForceDark(TreeInfo* info);
 
-    void prepareTreeImpl(TreeObserver& observer, TreeInfo& info, bool functorsNeedLayer);
+    // MIUI ADD:
+    void handleForceDarkByMiui(TreeInfo* info);
+    // MIUI MOD:
+    // void prepareTreeImpl(TreeObserver& observer, TreeInfo& info, bool functorsNeedLayer);
+    void prepareTreeImpl(TreeObserver& observer, TreeInfo& info, bool functorsNeedLayer, int depth);
     void pushStagingPropertiesChanges(TreeInfo& info);
     void pushStagingDisplayListChanges(TreeObserver& observer, TreeInfo& info);
     void prepareLayer(TreeInfo& info, uint32_t dirtyMask);
@@ -287,7 +314,10 @@ private:
     sp<PositionListener> mPositionListener;
 
     UsageHint mUsageHint = UsageHint::Unknown;
-
+    // MIUI ADD: START
+    UsageHint mForceDarkUsageHint = UsageHint::Unknown;
+    bool mIsForeground = false;
+    // END
     bool mHasHolePunches;
     StretchMask mStretchMask;
 

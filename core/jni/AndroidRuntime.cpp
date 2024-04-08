@@ -103,6 +103,7 @@ extern int register_android_media_audio_common_AidlConversion(JNIEnv* env);
 extern int register_android_media_midi(JNIEnv *env);
 
 namespace android {
+extern int register_android_util_SeempLog(JNIEnv* env);
 
 /*
  * JNI-based registration functions.  Note these are properly contained in
@@ -154,6 +155,8 @@ extern int register_android_os_SystemProperties(JNIEnv *env);
 extern int register_android_os_SystemClock(JNIEnv* env);
 extern int register_android_os_Trace(JNIEnv* env);
 extern int register_android_os_FileObserver(JNIEnv *env);
+// MIUI ADD
+extern int register_android_os_FileUtils(JNIEnv* env);
 extern int register_android_os_UEventObserver(JNIEnv* env);
 extern int register_android_os_HidlMemory(JNIEnv* env);
 extern int register_android_os_MemoryFile(JNIEnv* env);
@@ -211,6 +214,7 @@ extern int register_com_android_internal_os_ZygoteInit(JNIEnv *env);
 extern int register_com_android_internal_security_VerityUtils(JNIEnv* env);
 extern int register_com_android_internal_util_VirtualRefBasePtr(JNIEnv *env);
 extern int register_android_window_WindowInfosListener(JNIEnv* env);
+extern int register_com_android_internal_app_ActivityTrigger(JNIEnv *env);
 
 // Namespace for Android Runtime flags applied during boot time.
 static const char* RUNTIME_NATIVE_BOOT_NAMESPACE = "runtime_native_boot";
@@ -661,6 +665,10 @@ int AndroidRuntime::startVm(JavaVM** pJavaVM, JNIEnv** pEnv, bool zygote, bool p
     char finalizerTimeoutMsOptsBuf[sizeof("-XX:FinalizerTimeoutMs=")-1 + PROPERTY_VALUE_MAX];
     char threadSuspendTimeoutOptsBuf[sizeof("-XX:ThreadSuspendTimeout=")-1 + PROPERTY_VALUE_MAX];
     char cachePruneBuf[sizeof("-Xzygote-max-boot-retry=")-1 + PROPERTY_VALUE_MAX];
+    // MIUI ADD:
+    char monitortimeoutOptsBuf[sizeof("-XX:MonitorTimeout=")-1 + PROPERTY_VALUE_MAX];
+    char MonitorTimeoutEnabledOptsBuf[sizeof("-XX:MonitorTimeoutEnable=")-1 + PROPERTY_VALUE_MAX];
+    // END
     char dex2oatXmsImageFlagsBuf[sizeof("-Xms")-1 + PROPERTY_VALUE_MAX];
     char dex2oatXmxImageFlagsBuf[sizeof("-Xmx")-1 + PROPERTY_VALUE_MAX];
     char dex2oatCompilerFilterBuf[sizeof("--compiler-filter=")-1 + PROPERTY_VALUE_MAX];
@@ -832,10 +840,24 @@ int AndroidRuntime::startVm(JavaVM** pJavaVM, JNIEnv** pEnv, bool zygote, bool p
      */
     parseRuntimeOption("dalvik.vm.finalizer-timeout-ms",
                        finalizerTimeoutMsOptsBuf,
-                       "-XX:FinalizerTimeoutMs=");
+                       "-XX:FinalizerTimeoutMs=",
+                       // MIUI ADD:
+                       "60000");
+                       // END
     parseRuntimeOption("dalvik.vm.thread-suspend-timeout-ms",
                        threadSuspendTimeoutOptsBuf,
-                       "-XX:ThreadSuspendTimeout=");
+                       "-XX:ThreadSuspendTimeout=",
+                       // MIUI ADD:
+                       "120000");
+                       // END
+    // MIUI ADD:
+    parseRuntimeOption("dalvik.vm.monitor.timeout",
+                       monitortimeoutOptsBuf,
+                       "-XX:MonitorTimeout=");
+    parseRuntimeOption("dalvik.vm.monitortimeout.enable",
+                       MonitorTimeoutEnabledOptsBuf,
+                       "-XX:MonitorTimeoutEnable=");
+    // END
     /*
      * JIT related options.
      */
@@ -946,9 +968,15 @@ int AndroidRuntime::startVm(JavaVM** pJavaVM, JNIEnv** pEnv, bool zygote, bool p
                         "swapable");
     }
 
-    parseRuntimeOption("dalvik.vm.lockprof.threshold",
+    //MIUI MOD: START
+    //parseRuntimeOption("dalvik.vm.lockprof.threshold",
+    //                   lockProfThresholdBuf,
+    //                   "-Xlockprofthreshold:");
+    parseRuntimeOption("persist.vm.lockprof.threshold",
                        lockProfThresholdBuf,
-                       "-Xlockprofthreshold:");
+                       "-Xlockprofthreshold:",
+                       "500");
+    // END
 
     if (executionMode == kEMIntPortable) {
         addOption("-Xint:portable");
@@ -971,7 +999,12 @@ int AndroidRuntime::startVm(JavaVM** pJavaVM, JNIEnv** pEnv, bool zygote, bool p
         parseCompilerOption("dalvik.vm.dex2oat-filter", dex2oatCompilerFilterBuf,
                             "--compiler-filter=", "-Xcompiler-option");
     }
-    parseCompilerOption("dalvik.vm.dex2oat-threads", dex2oatThreadsBuf, "-j", "-Xcompiler-option");
+    // MIUI MOD: START
+    // parseCompilerOption("dalvik.vm.dex2oat-threads", dex2oatThreadsBuf, "-j", "-Xcompiler-option");
+    if (!parseCompilerOption("persist.dalvik.vm.dex2oat-threads", dex2oatThreadsBuf, "-j", "-Xcompiler-option")) {
+        parseCompilerOption("dalvik.vm.dex2oat-threads", dex2oatThreadsBuf, "-j", "-Xcompiler-option");
+    }
+    // END
     parseCompilerOption("dalvik.vm.dex2oat-cpu-set", dex2oatCpuSetBuf, "--cpu-set=",
                         "-Xcompiler-option");
 
@@ -1198,6 +1231,8 @@ void AndroidRuntime::start(const char* className, const Vector<String8>& options
     static const String8 startSystemServer("start-system-server");
     // Whether this is the primary zygote, meaning the zygote which will fork system server.
     bool primary_zygote = false;
+    // MIUI ADD:
+    long boot_start = 0;
 
     /*
      * 'startSystemServer == true' means runtime is obsolete and not run from
@@ -1208,7 +1243,10 @@ void AndroidRuntime::start(const char* className, const Vector<String8>& options
             primary_zygote = true;
            /* track our progress through the boot sequence */
            const int LOG_BOOT_PROGRESS_START = 3000;
-           LOG_EVENT_LONG(LOG_BOOT_PROGRESS_START,  ns2ms(systemTime(SYSTEM_TIME_MONOTONIC)));
+           // MIUI MOD:
+           // LOG_EVENT_LONG(LOG_BOOT_PROGRESS_START,  ns2ms(systemTime(SYSTEM_TIME_MONOTONIC)));
+           boot_start = ns2ms(systemTime(SYSTEM_TIME_MONOTONIC));
+           LOG_EVENT_LONG(LOG_BOOT_PROGRESS_START, boot_start);
         }
     }
 
@@ -1293,6 +1331,14 @@ void AndroidRuntime::start(const char* className, const Vector<String8>& options
         ALOGE("JavaVM unable to locate class '%s'\n", slashClassName);
         /* keep going */
     } else {
+        // MIUI ADD: START
+        if (boot_start != 0) {
+            jfieldID field = env->GetStaticFieldID(startClass, "BOOT_START_TIME", "J");
+            if (field != NULL) {
+                env->SetStaticLongField(startClass, field, boot_start);
+            }
+        }
+        // END
         jmethodID startMeth = env->GetStaticMethodID(startClass, "main",
             "([Ljava/lang/String;)V");
         if (startMeth == NULL) {
@@ -1507,6 +1553,7 @@ static int register_jni_procs(const RegJNIRec array[], size_t count, JNIEnv* env
 }
 
 static const RegJNIRec gRegJNI[] = {
+        REG_JNI(register_android_util_SeempLog),
         REG_JNI(register_com_android_internal_os_RuntimeInit),
         REG_JNI(register_com_android_internal_os_ZygoteInit_nativeZygoteInit),
         REG_JNI(register_android_os_SystemClock),
@@ -1575,6 +1622,8 @@ static const RegJNIRec gRegJNI[] = {
         REG_JNI(register_android_database_SQLiteDebug),
         REG_JNI(register_android_os_Debug),
         REG_JNI(register_android_os_FileObserver),
+        // MIUI ADD
+        REG_JNI(register_android_os_FileUtils),
         REG_JNI(register_android_os_GraphicsEnvironment),
         REG_JNI(register_android_os_MessageQueue),
         REG_JNI(register_android_os_SELinux),
@@ -1658,10 +1707,11 @@ static const RegJNIRec gRegJNI[] = {
         REG_JNI(register_com_android_internal_os_KernelCpuBpfTracking),
         REG_JNI(register_com_android_internal_os_KernelCpuTotalBpfMapReader),
         REG_JNI(register_com_android_internal_os_KernelCpuUidBpfMapReader),
-        REG_JNI(register_com_android_internal_os_KernelSingleProcessCpuThreadReader),
         REG_JNI(register_com_android_internal_os_KernelSingleUidTimeReader),
 
         REG_JNI(register_android_window_WindowInfosListener),
+        REG_JNI(register_com_android_internal_app_ActivityTrigger),
+        REG_JNI(register_com_android_internal_os_KernelSingleProcessCpuThreadReader),
 };
 
 /*

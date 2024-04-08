@@ -33,7 +33,8 @@
 
 #include <SkRuntimeEffect.h>
 #include <vector>
-
+// MIUI ADD
+#include "hwui/MiuiForceDarkConfigStub.h"
 namespace android {
 namespace uirenderer {
 
@@ -76,6 +77,11 @@ public:
     bool hasText() const { return mHasText; }
     size_t usedSize() const { return fUsed; }
     size_t allocatedSize() const { return fReserved; }
+    // MIUI ADD: START
+    int getBitmapStreams() const { return mBitmapStreams; }
+    void setIsForeground(bool isForeground) { mIsForeground = isForeground; }
+    bool isForeground() const { return mIsForeground; }
+    // END
 
 private:
     friend class RecordingCanvas;
@@ -113,7 +119,9 @@ private:
     void drawDrawable(SkDrawable*, const SkMatrix*);
     void drawPicture(const SkPicture*, const SkMatrix*, const SkPaint*);
 
-    void drawTextBlob(const SkTextBlob*, SkScalar, SkScalar, const SkPaint&);
+    // MIUI MOD
+    // void drawTextBlob(const SkTextBlob*, SkScalar, SkScalar, const SkPaint&);
+    void drawTextBlob(const SkTextBlob*, SkScalar, SkScalar, const SkPaint&, bool forceDark=false);
 
     void drawImage(sk_sp<const SkImage>, SkScalar, SkScalar, const SkSamplingOptions&,
                    const SkPaint*, BitmapPalette palette);
@@ -145,6 +153,10 @@ private:
     size_t fReserved = 0;
 
     bool mHasText : 1;
+    // MIUI ADD: START
+    int mBitmapStreams = 0;
+    bool mIsForeground = false;
+    // END
 };
 
 class RecordingCanvas final : public SkCanvasVirtualEnforcer<SkNoDrawCanvas> {
@@ -214,6 +226,10 @@ public:
 
     void drawVectorDrawable(VectorDrawableRoot* tree);
     void drawWebView(skiapipeline::FunctorDrawable*);
+    // MIUI ADD START:
+    bool forceDark(){ return mForceDark; }
+    void setForceDark(bool forceDark){ mForceDark = forceDark; }
+    // END
 
     /**
      * If "isClipMayBeComplex" returns false, it is guaranteed the current clip is a rectangle.
@@ -238,6 +254,10 @@ private:
      * FunctorDrawable to a layer, if it is clipped by a non-rect.
      */
     bool mClipMayBeComplex = false;
+
+    // MIU ADD: START
+    bool mForceDark = false;
+    // END
 
     /**
      * mSaveCount is the current level of our save tree.

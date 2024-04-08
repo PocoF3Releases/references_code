@@ -191,10 +191,21 @@ void reinitBitmap(JNIEnv* env, jobject javaBitmap, const SkImageInfo& info,
     // The caller needs to have already set the alpha type properly, so the
     // native SkBitmap stays in sync with the Java Bitmap.
     assert_premultiplied(info, isPremultiplied);
-
+    // MIUI ADD:
+    setAsset(env, javaBitmap, false);
     env->CallVoidMethod(javaBitmap, gBitmap_reinitMethodID,
             info.width(), info.height(), isPremultiplied);
 }
+
+// MIUI ADD: START
+void setAsset(JNIEnv* env, jobject javaBitmap, bool isAsset){
+    SkASSERT(env);
+    SkASSERT(javaBitmap);
+    SkASSERT(env->IsInstanceOf(javaBitmap, gBitmap_class));
+    jlong bitmapHandle = env->GetLongField(javaBitmap, gBitmap_nativePtr);
+    toBitmap(bitmapHandle).setAsset(isAsset);
+}
+// END
 
 jobject createBitmap(JNIEnv* env, Bitmap* bitmap,
         int bitmapCreateFlags, jbyteArray ninePatchChunk, jobject ninePatchInsets,
@@ -1251,9 +1262,23 @@ static void Bitmap_setImmutable(JNIEnv* env, jobject, jlong bitmapHandle) {
     return bitmapHolder->bitmap().setImmutable();
 }
 
+// MIUI ADD: START
+static jint Bitmap_palette(JNIEnv* env, jobject,  jlong bitmapHandle){
+    return static_cast<jint>(reinterpret_cast<BitmapWrapper*>(bitmapHandle)->bitmap().palette());
+}
+
+static jboolean Bitmap_isAsset(JNIEnv* env, jobject,  jlong bitmapHandle){
+    return static_cast<jint>(reinterpret_cast<BitmapWrapper*>(bitmapHandle)->bitmap().isAsset());
+}
+// END
+
 ///////////////////////////////////////////////////////////////////////////////
 
 static const JNINativeMethod gBitmapMethods[] = {
+    // MIUI ADD: START
+    {   "nativeGetPalette",         "(J)I", (void*)Bitmap_palette },
+    {   "nativeGetAsset",         "(J)Z", (void*)Bitmap_isAsset },
+    // END
     {   "nativeCreate",             "([IIIIIIZJ)Landroid/graphics/Bitmap;",
         (void*)Bitmap_creator },
     {   "nativeCopy",               "(JIZ)Landroid/graphics/Bitmap;",

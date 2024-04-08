@@ -41,6 +41,7 @@ public:
 
     void registerProximityActiveListener();
     void unregisterProximityActiveListener();
+    void setReversedState(bool reverse);
 
 private:
     sp<SensorService> mService;
@@ -85,6 +86,14 @@ void NativeSensorService::unregisterProximityActiveListener() {
     mService->removeProximityActiveListener(mProximityActiveListenerDelegate);
 }
 
+void NativeSensorService::setReversedState(bool reverse) {
+    if (mService == nullptr) {
+        ALOGD("Dropping setReversedState, sensor service not available.");
+        return;
+    }
+    mService->setReversedState(reverse);
+}
+
 NativeSensorService::ProximityActiveListenerDelegate::ProximityActiveListenerDelegate(
         JNIEnv* env, jobject listener)
       : mListener(env->NewGlobalRef(listener)) {}
@@ -113,6 +122,11 @@ static void unregisterProximityActiveListenerNative(JNIEnv* env, jclass, jlong p
     service->unregisterProximityActiveListener();
 }
 
+static void setReversedStateNative(JNIEnv* env, jclass, jlong ptr, jboolean reverse) {
+    auto* service = reinterpret_cast<NativeSensorService*>(ptr);
+    service->setReversedState(reverse);
+}
+
 static const JNINativeMethod methods[] = {
         {
                 "startSensorServiceNative", "(L" PROXIMITY_ACTIVE_CLASS ";)J",
@@ -125,8 +139,11 @@ static const JNINativeMethod methods[] = {
         {
                 "unregisterProximityActiveListenerNative", "(J)V",
                 reinterpret_cast<void*>(unregisterProximityActiveListenerNative)
-         },
-
+        },
+        {
+                "setReversedStateNative", "(JZ)V",
+                reinterpret_cast<void*>(setReversedStateNative)
+        },
 };
 
 int register_android_server_sensor_SensorService(JavaVM* vm, JNIEnv* env) {

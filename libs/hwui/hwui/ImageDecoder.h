@@ -77,6 +77,16 @@ public:
     // Set whether the ImageDecoder should handle RestorePrevious frames.
     void setHandleRestorePrevious(bool handle);
 
+    // MIUI ADD: START
+    bool mIsAsset = false;
+    void setAsset(bool isAsset) {
+        mIsAsset = isAsset;
+    }
+    bool isAsset() {
+        return mIsAsset;
+    }
+    // END
+
 private:
     // State machine for keeping track of how to handle RestorePrevious (RP)
     // frames in decode().

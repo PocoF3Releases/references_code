@@ -69,6 +69,8 @@ public:
           mBuildSharedLibrary(false),
           mBuildAppAsSharedLibrary(false),
           mCompileSdkVersion(0),
+          //MIUI ADD
+          mPackageId(0),
           mArgc(0), mArgv(NULL)
         {}
     ~Bundle(void) {}
@@ -166,6 +168,11 @@ public:
     void addConfigurations(const char* val) { if (mConfigurations.size() > 0) { mConfigurations.append(","); mConfigurations.append(val); } else { mConfigurations = val; } }
     const android::String8& getPreferredDensity() const { return mPreferredDensity; }
     void setPreferredDensity(const char* val) { mPreferredDensity = val; }
+    // MIUI ADD: START
+    const android::String8& getExtraPreferredDensities() const { return mExtraPreferredDensities; }
+    void addExtraPreferredDensities(const char* val) { if (mExtraPreferredDensities.size() > 0)
+{ mExtraPreferredDensities.append(","); mExtraPreferredDensities.append(val); } else { mExtraPreferredDensities = val; } }
+    // END
     void addSplitConfigurations(const char* val) { mPartialConfigurations.add(android::String8(val)); }
     const android::Vector<android::String8>& getSplitConfigurations() const { return mPartialConfigurations; }
     const char* getResourceIntermediatesDir() const { return mResourceIntermediatesDir; }
@@ -225,6 +232,10 @@ public:
     void setBuildAppAsSharedLibrary(bool val) { mBuildAppAsSharedLibrary = val; }
     void setNoVersionVectors(bool val) { mNoVersionVectors = val; }
     bool getNoVersionVectors() const { return mNoVersionVectors; }
+    // MIUI WORKAROUND: Start
+    void setPackageId(int id) { mPackageId = id; }
+    int  getPackageId() { return mPackageId; }
+    // MIUI WORKAROUND: End
     void setNoVersionTransitions(bool val) { mNoVersionTransitions = val; }
     bool getNoVersionTransitions() const { return mNoVersionTransitions; }
 
@@ -315,6 +326,8 @@ private:
     const char* mPublicOutputFile;
     const char* mRClassDir;
     const char* mResourceIntermediatesDir;
+    // MIUI ADD:
+    android::String8 mExtraPreferredDensities;
     android::String8 mConfigurations;
     android::String8 mPreferredDensity;
     android::Vector<android::String8> mPartialConfigurations;
@@ -355,6 +368,8 @@ private:
     android::String8 mPlatformVersionName;
     android::String8 mPrivateSymbolsPackage;
 
+    int         mPackageId; // MIUI WORKAROUND
+
     /* file specification */
     int         mArgc;
     char* const* mArgv;
@@ -364,6 +379,14 @@ private:
     int         mPackageCount;
 #endif
 
+// MIUI ADD: START
+public:
+    const android::Vector<const char*>& getWlanReplacement() const { return mWlanReplacement; }
+    void addWlanReplacement(const char* wlan) { mWlanReplacement.insertAt(wlan,0); }
+
+private:
+    android::Vector<const char*> mWlanReplacement;
+// END
 };
 
 #endif // __BUNDLE_H

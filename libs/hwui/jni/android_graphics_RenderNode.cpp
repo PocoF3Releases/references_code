@@ -734,6 +734,32 @@ static void android_view_RenderNode_requestPositionUpdates(JNIEnv* env, jobject,
     renderNode->setPositionListener(new PositionListenerTrampoline(env, listener));
 }
 
+
+// MIUI ADD: START
+static jint android_view_RenderNode_getUsageHint(CRITICAL_JNI_PARAMS_COMMA jlong renderNodePtr) {
+    RenderNode* renderNode = reinterpret_cast<RenderNode*>(renderNodePtr);
+    return static_cast<jint>(renderNode->usageHint());
+}
+
+static jint android_view_RenderNode_getForceDarkUsageHint(CRITICAL_JNI_PARAMS_COMMA jlong renderNodePtr) {
+    RenderNode* renderNode = reinterpret_cast<RenderNode*>(renderNodePtr);
+    return static_cast<jint>(renderNode->forceDarkUsageHint());
+}
+
+static jboolean android_view_RenderNode_hasText(CRITICAL_JNI_PARAMS_COMMA jlong renderNodePtr) {
+    RenderNode* renderNode = reinterpret_cast<RenderNode*>(renderNodePtr);
+    return renderNode->hasText();
+}
+
+static jint android_view_RenderNode_getBitmapStreams(CRITICAL_JNI_PARAMS_COMMA jlong renderNodePtr) {
+    return reinterpret_cast<RenderNode*>(renderNodePtr)->getBitmapStreams();
+}
+
+static void android_view_RenderNode_setIsForeground(CRITICAL_JNI_PARAMS_COMMA jlong renderNodePtr,  jboolean isForeground) {
+    reinterpret_cast<RenderNode*>(renderNodePtr)->setIsForeground(isForeground);
+}
+// END
+
 // ----------------------------------------------------------------------------
 // JNI Glue
 // ----------------------------------------------------------------------------
@@ -758,6 +784,13 @@ static const JNINativeMethod gMethods[] = {
         // ----------------------------------------------------------------------------
         // Critical JNI via @CriticalNative annotation in RenderNode.java
         // ----------------------------------------------------------------------------
+        // MIUI ADD: START
+        {"nGetUsageHint",    "(J)I", (void*)android_view_RenderNode_getUsageHint},
+        {"nGetForceDarkUsageHint",    "(J)I", (void*)android_view_RenderNode_getForceDarkUsageHint},
+        {"nHasText", "(J)Z", (void*)android_view_RenderNode_hasText},
+        {"nGetBitmapStreams", "(J)I", (void*)android_view_RenderNode_getBitmapStreams},
+        {"nSetIsForeground","(JZ)V", (void*)android_view_RenderNode_setIsForeground},
+        // END
         {"nDiscardDisplayList", "(J)V", (void*)android_view_RenderNode_discardDisplayList},
         {"nIsValid", "(J)Z", (void*)android_view_RenderNode_isValid},
         {"nSetLayerType", "(JI)Z", (void*)android_view_RenderNode_setLayerType},

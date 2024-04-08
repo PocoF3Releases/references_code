@@ -84,6 +84,11 @@ void RenderProxy::setSurface(ANativeWindow* window, bool enableTimeout) {
     mRenderThread.queue().post([this, win = window, enableTimeout]() mutable {
         mContext->setSurface(win, enableTimeout);
         if (win) { ANativeWindow_release(win); }
+        // MIUI ADD
+        if (!mContext->mInspector) {
+             mContext->mInspector =
+                     new MiuiRenderInspectorStub(mRenderThread.timeLord().frameIntervalNanos());
+        }
     });
 }
 
@@ -128,6 +133,12 @@ void RenderProxy::setOpaque(bool opaque) {
 void RenderProxy::setColorMode(ColorMode mode) {
     mRenderThread.queue().post([=]() { mContext->setColorMode(mode); });
 }
+
+// MIUI ADD: START
+void RenderProxy::setDisableWCGFlag(bool disableWCGFlag) {
+    mRenderThread.queue().post([=]() { mRenderThread.setDisableWCGFlag(disableWCGFlag); });
+}
+// END
 
 int64_t* RenderProxy::frameInfo() {
     return mDrawFrameTask.frameInfo();
@@ -436,6 +447,13 @@ void RenderProxy::setRtAnimationsEnabled(bool enabled) {
         Properties::enableRTAnimations = enabled;
     }
 }
+
+// MIUI ADD: START
+void RenderProxy::setFrameDroppedCallback(const std::function<void(int)>& callback) {
+    mRenderThread.queue().post(
+            [this, cb = callback]() { mContext->setFrameDroppedCallback(cb); });
+}
+// END
 
 } /* namespace renderthread */
 } /* namespace uirenderer */

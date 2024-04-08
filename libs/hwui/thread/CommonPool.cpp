@@ -19,8 +19,13 @@
 #include <sys/resource.h>
 #include <utils/Trace.h>
 #include "renderthread/RenderThread.h"
+// MIUI ADD:
+#include "androidfw/processmanager/MiuiProcessManagerServiceStub.h"
+// END
 
 #include <array>
+// MIUI ADD
+#define SCHED_MODE_ALWAYS_RT 3
 
 namespace android {
 namespace uirenderer {
@@ -46,7 +51,8 @@ CommonPool::CommonPool() {
                     tids[i] = pthread_gettid_np(self);
                     tidConditionVars[i].notify_one();
                 }
-                setpriority(PRIO_PROCESS, 0, PRIORITY_FOREGROUND);
+                // MIUI DEL
+                // setpriority(PRIO_PROCESS, 0, PRIORITY_FOREGROUND);
                 auto startHook = renderthread::RenderThread::getOnStartHook();
                 if (startHook) {
                     startHook(name.data());
@@ -64,6 +70,11 @@ CommonPool::CommonPool() {
             }
         }
     }
+    // MIUI ADD:
+    if (!MiuiProcessManagerServiceStub::setSchedFifo(tids, -1, getpid(), SCHED_MODE_ALWAYS_RT)) {
+        ALOGD("set SCHED_FIFO for hwui failed");
+    }
+    // END
     mWorkerThreadIds = std::move(tids);
 }
 

@@ -136,6 +136,11 @@ public:
     static JVMAttachHook getOnStartHook();
 
     WorkQueue& queue() { return ThreadBase::queue(); }
+    // MIUI ADD: START
+    bool isDisableWCG() { return mDisableWCG > 0; }
+    bool isWCGWhiteList() { return mDisableWCG != -1; }
+    void setDisableWCGFlag(bool flag) { mDisableWCG = flag ? 1 : 0; }
+    // END
 
     // Mimics android.view.Choreographer
     void postFrameCallback(IFrameCallback* callback);
@@ -223,6 +228,8 @@ private:
     AChoreographer* mChoreographer;
     VsyncSource* mVsyncSource;
     bool mVsyncRequested;
+    // MIUI ADD:
+    int mDisableWCG = -1;
     std::set<IFrameCallback*> mFrameCallbacks;
     // We defer the actual registration of these callbacks until
     // both mQueue *and* mDisplayEventReceiver have been drained off all

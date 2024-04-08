@@ -44,13 +44,31 @@ int main()
         sp<ProcessState> proc(ProcessState::self());
         ProcessState::self()->startThreadPool();
 
-        // create the boot animation object (may take up to 200ms for 2MB zip)
-        sp<BootAnimation> boot = new BootAnimation(audioplay::createAnimationCallbacks());
+// MIUI MOD： START
 
-        waitForSurfaceFlinger();
+            // create the boot animation object (may take up to 200ms for 2MB zip)
+//        sp<BootAnimation> boot = new BootAnimation(audioplay::createAnimationCallbacks());
 
-        boot->run("BootAnimation", PRIORITY_DISPLAY);
+//        waitForSurfaceFlinger();
 
+//        boot->run("BootAnimation", PRIORITY_DISPLAY);
+
+        char value[PROPERTY_VALUE_MAX] = {'\0'};
+        property_get("persist.sys.muiltdisplay_type", value, "0");
+        int fold_device = atoi(value);
+        //MuiltDisplay type:SINGLE(0),MULTI_NORMAL(1),MULTI_FOLDER(2)
+        if (fold_device == 2) {
+          sp<BootAnimation> boot = new BootAnimation(audioplay::createAnimationCallbacks());
+          sp<BootAnimation> backBoot = new BootAnimation(audioplay::createAnimationCallbacks(), true);
+          waitForSurfaceFlinger();
+          boot->run("BootAnimation", PRIORITY_DISPLAY);
+          backBoot->run("BackBootAnimation", PRIORITY_DISPLAY);
+        } else {
+            sp<BootAnimation> boot = new BootAnimation(audioplay::createAnimationCallbacks());
+            waitForSurfaceFlinger();
+            boot->run("BootAnimation", PRIORITY_DISPLAY);
+        }
+//END
         ALOGV("Boot animation set up. Joining pool.");
 
         IPCThreadState::self()->joinThreadPool();

@@ -50,9 +50,27 @@
 #include <nativehelper/JNIHelp.h>
 #include <nativehelper/ScopedUtfChars.h>
 
+#ifdef __XIAOMI_CAMERA__
+#define ATRACE_TAG ATRACE_TAG_CAMERA
+#include <utils/Trace.h>
+#include <dng_stream.h>
+#include <dng_lossless_jpeg.h>
+#endif
+
 using namespace android;
 using namespace img_utils;
 using android::base::GetProperty;
+
+#ifdef __XIAOMI_CAMERA__
+const int gEnableCompression = std::stoi(GetProperty("persist.sys.dng.compression.enable", "1"));
+
+#define BAIL_IF_INVALID_RET_STATUS(expr, jnienv, tagId, writer) \
+    if ((expr) != OK) { \
+        jniThrowExceptionFmt(jnienv, "java/lang/IllegalArgumentException", \
+                "Invalid metadata for tag %s (%x)", (writer)->getTagName(tagId), (tagId)); \
+        return BAD_VALUE; \
+    }
+#endif
 
 #define BAIL_IF_INVALID_RET_BOOL(expr, jnienv, tagId, writer) \
     if ((expr) != OK) { \
@@ -109,6 +127,15 @@ using android::base::GetProperty;
 
 
 #define ANDROID_DNGCREATOR_CTX_JNI_ID     "mNativeContext"
+
+#ifdef __XIAOMI_CAMERA__
+typedef struct {
+    uint32_t XMin;
+    uint32_t YMin ;
+    uint32_t Width ;
+    uint32_t Height ;
+} gDngActiveSize;
+#endif
 
 static struct {
     jfieldID mNativeContext;
@@ -713,7 +740,7 @@ protected:
     uint32_t mHeight;
     uint32_t mPixStride;
     uint32_t mRowStride;
-    uint16_t mOffset;
+    uint64_t mOffset;
     JNIEnv* mEnv;
     uint32_t mBytesPerSample;
     uint32_t mSamplesPerPixel;
@@ -800,6 +827,54 @@ static int32_t getAppropriateModeTag(int32_t tag, bool maximumResolution) {
     }
 }
 
+#ifdef __XIAOMI_CAMERA__
+static bool getDngActiveSize(const CameraMetadata& characteristics, gDngActiveSize * activesize, JNIEnv* env) {
+    uint32_t tag = 0;
+    sp<VendorTagDescriptor> vTags = VendorTagDescriptor::getGlobalVendorTagDescriptor();
+    sp<VendorTagDescriptorCache> cache = VendorTagDescriptorCache::getGlobalVendorTagCache();
+
+    if (cache) {
+        metadata_vendor_id_t vendorId;
+        status_t res = characteristics.getVendorId(&vendorId);
+        if (res == OK) {
+            cache->getVendorTagDescriptor(vendorId, &vTags);
+        } else {
+            ALOGW("%s: DNG get com.xiaomi.dng.activesize tag id failed.", __FUNCTION__);
+            return false;
+        }
+    }
+    if (vTags != NULL) {
+        const char *section = "com.xiaomi.dng";
+        const char *TagName = "activesize";
+        const String8 sectionName(section);
+        const String8 tagName(TagName);
+        status_t ret = vTags->lookupTag(tagName, sectionName, &tag);
+        if (ret == 0) {
+            camera_metadata_ro_entry entry1 = characteristics.find(tag);
+            if (entry1.count != 0) {
+                activesize->XMin = static_cast<uint32_t>(entry1.data.i32[0]);
+                activesize->YMin = static_cast<uint32_t>(entry1.data.i32[1]);
+                activesize->Width = static_cast<uint32_t>(entry1.data.i32[2]);
+                activesize->Height = static_cast<uint32_t>(entry1.data.i32[3]);
+                ALOGI("%s: DNG get com.xiaomi.dng.activesize [%d,%d,%d,%d]",
+                    __FUNCTION__, activesize->XMin, activesize->YMin, activesize->Width, activesize->Height);
+            } else {
+                ALOGW("%s: get com.xiaomi.dng activesize failed.", __FUNCTION__);
+                return false;
+            }
+        } else {
+            ALOGW("%s: get com.xiaomi.dng activesize tag id failed.", __FUNCTION__);
+            return false;
+        }
+    }else {
+        ALOGW("%s: get com.xiaomi.dng activesize vTags is null.", __FUNCTION__);
+        return false;
+    }
+
+    return true;
+}
+#endif
+
 static bool isMaximumResolutionModeImage(const CameraMetadata& characteristics, uint32_t imageWidth,
                                          uint32_t imageHeight, const sp<TiffWriter> writer,
                                          JNIEnv* env) {
@@ -847,13 +922,33 @@ static bool isMaximumResolutionModeImage(const CameraMetadata& characteristics, 
  */
 static status_t calculateAndSetCrop(JNIEnv* env, const CameraMetadata& characteristics,
                                     sp<TiffWriter> writer, bool maximumResolutionMode) {
+#ifdef __XIAOMI_CAMERA__
+    gDngActiveSize activesize;
+    memset(&activesize, 0, sizeof(activesize));
+    uint32_t width = 0;
+    uint32_t height = 0;
+
+    if (getDngActiveSize(characteristics, &activesize, env) == false) {
+        camera_metadata_ro_entry entry = characteristics.find(
+                getAppropriateModeTag(ANDROID_SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE,
+                                      maximumResolutionMode));
+        BAIL_IF_EMPTY_RET_STATUS(entry, env, TAG_IMAGEWIDTH, writer);
+        width = static_cast<uint32_t>(entry.data.i32[2]);
+        height = static_cast<uint32_t>(entry.data.i32[3]);
+    } else {
+        width = activesize.Width;
+        height = activesize.Height;
+        ALOGI("%s: DNG get xiaomi.dng.activesize 003 [%d_%d_%d_%d]",
+              __FUNCTION__, activesize.XMin, activesize.YMin, activesize.Width, activesize.Height);
+    }
+#else
     camera_metadata_ro_entry entry = characteristics.find(
             getAppropriateModeTag(ANDROID_SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE,
                                   maximumResolutionMode));
     BAIL_IF_EMPTY_RET_STATUS(entry, env, TAG_IMAGEWIDTH, writer);
     uint32_t width = static_cast<uint32_t>(entry.data.i32[2]);
     uint32_t height = static_cast<uint32_t>(entry.data.i32[3]);
-
+#endif
     const uint32_t margin = 8; // Default margin recommended by Adobe for interpolation.
 
     if (width < margin * 2 || height < margin * 2) {
@@ -893,20 +988,46 @@ static bool validateDngHeader(JNIEnv* env, sp<TiffWriter> writer,
             isMaximumResolutionModeImage(characteristics, static_cast<uint32_t>(width),
                                          static_cast<uint32_t>(height), writer, env);
 
+#ifdef __XIAOMI_CAMERA__
+     gDngActiveSize activesize;
+     memset(&activesize, 0, sizeof(activesize));
+     uint32_t preWidth = 0;
+     uint32_t preHeight = 0;
+     if (getDngActiveSize(characteristics, &activesize, env) == false) {
+
+         camera_metadata_ro_entry preCorrectionEntry = characteristics.find(
+                 getAppropriateModeTag(ANDROID_SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE,
+                                       isMaximumResolutionMode));
+         BAIL_IF_EMPTY_RET_BOOL(preCorrectionEntry, env, TAG_IMAGEWIDTH, writer);
+
+         preWidth = static_cast<uint32_t>(preCorrectionEntry.data.i32[2]);
+         preHeight = static_cast<uint32_t>(preCorrectionEntry.data.i32[3]);
+     } else {
+         preWidth = activesize.Width;
+         preHeight = activesize.Height;
+         ALOGI("%s: DNG get xiaomi.dng.activesize 003 [%d_%d_%d_%d]",
+               __FUNCTION__, activesize.XMin, activesize.YMin, activesize.Width, activesize.Height);
+     }
+#else
+
     camera_metadata_ro_entry preCorrectionEntry = characteristics.find(
             getAppropriateModeTag(ANDROID_SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE,
                                   isMaximumResolutionMode));
     BAIL_IF_EMPTY_RET_BOOL(preCorrectionEntry, env, TAG_IMAGEWIDTH, writer);
-
+#endif
     camera_metadata_ro_entry pixelArrayEntry = characteristics.find(
             getAppropriateModeTag(ANDROID_SENSOR_INFO_PIXEL_ARRAY_SIZE, isMaximumResolutionMode));
     BAIL_IF_EMPTY_RET_BOOL(pixelArrayEntry, env, TAG_IMAGEWIDTH, writer);
 
     int pWidth = static_cast<int>(pixelArrayEntry.data.i32[0]);
     int pHeight = static_cast<int>(pixelArrayEntry.data.i32[1]);
+#ifdef __XIAOMI_CAMERA__
+    int cWidth = preWidth;
+    int cHeight = preHeight;
+#else
     int cWidth = static_cast<int>(preCorrectionEntry.data.i32[2]);
     int cHeight = static_cast<int>(preCorrectionEntry.data.i32[3]);
-
+#endif
     bool matchesPixelArray = (pWidth == width && pHeight == height);
     bool matchesPreCorrectionArray = (cWidth == width && cHeight == height);
 
@@ -1287,7 +1408,9 @@ static sp<TiffWriter> DngCreator_setup(JNIEnv* env, jobject thiz, uint32_t image
                 "No native context, must call init before other operations.");
         return nullptr;
     }
-
+#ifdef __XIAOMI_CAMERA__
+    gDngActiveSize activesize;
+#endif
     CameraMetadata characteristics = *(nativeContext->getCharacteristics());
     CameraMetadata results = *(nativeContext->getResult());
 
@@ -1303,6 +1426,27 @@ static sp<TiffWriter> DngCreator_setup(JNIEnv* env, jobject thiz, uint32_t image
             isMaximumResolutionModeImage(characteristics, imageWidth, imageHeight, writer, env);
     {
         // Check dimensions
+#ifdef __XIAOMI_CAMERA__
+        memset(&activesize, 0, sizeof(activesize));
+        if (getDngActiveSize(characteristics, &activesize, env) == false) {
+            camera_metadata_entry entry = characteristics.find(
+                    getAppropriateModeTag(ANDROID_SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE,
+                                          isMaximumResolutionMode));
+            BAIL_IF_EMPTY_RET_NULL_SP(entry, env, TAG_IMAGEWIDTH, writer);
+            preXMin = static_cast<uint32_t>(entry.data.i32[0]);
+            preYMin = static_cast<uint32_t>(entry.data.i32[1]);
+            preWidth = static_cast<uint32_t>(entry.data.i32[2]);
+            preHeight = static_cast<uint32_t>(entry.data.i32[3]);
+
+        } else {
+            preXMin = activesize.XMin;
+            preYMin = activesize.YMin;
+            preWidth = activesize.Width;
+            preHeight = activesize.Height;
+            ALOGI("%s: DNG get xiaomi.dng.activesize 004 [%d_%d_%d_%d]",
+                  __FUNCTION__, activesize.XMin, activesize.YMin, activesize.Width, activesize.Height);
+        }
+#else
         camera_metadata_entry entry = characteristics.find(
                 getAppropriateModeTag(ANDROID_SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE,
                                       isMaximumResolutionMode));
@@ -1311,7 +1455,7 @@ static sp<TiffWriter> DngCreator_setup(JNIEnv* env, jobject thiz, uint32_t image
         preYMin = static_cast<uint32_t>(entry.data.i32[1]);
         preWidth = static_cast<uint32_t>(entry.data.i32[2]);
         preHeight = static_cast<uint32_t>(entry.data.i32[3]);
-
+#endif
         camera_metadata_entry pixelArrayEntry =
                 characteristics.find(getAppropriateModeTag(ANDROID_SENSOR_INFO_PIXEL_ARRAY_SIZE,
                                                            isMaximumResolutionMode));
@@ -1513,6 +1657,19 @@ static sp<TiffWriter> DngCreator_setup(JNIEnv* env, jobject thiz, uint32_t image
                 writer);
     }
 
+    // MIUI ADD START
+    {
+        // market name
+        // Use "" to represent unknown productname as suggested in XiaoMi spec.
+        std::string productname = GetProperty("ro.product.marketname", "");
+        uint32_t count = static_cast<uint32_t>(productname.size()) + 1;
+
+        BAIL_IF_INVALID_RET_NULL_SP(writer->addEntry(TAG_XIAOMI_PRODUCT, count,
+                reinterpret_cast<const uint8_t*>(productname.c_str()), TIFF_IFD_0), env, TAG_XIAOMI_PRODUCT,
+                writer);
+    }
+    // END
+
     {
         // x resolution
         uint32_t xres[] = { 72, 1 }; // default 72 ppi
@@ -1657,6 +1814,40 @@ static sp<TiffWriter> DngCreator_setup(JNIEnv* env, jobject thiz, uint32_t image
                 TIFF_IFD_0), env, TAG_FOCALLENGTH, writer);
     }
 
+#ifdef __XIAOMI_CAMERA__
+    {
+        // FocalLengthIn35mmFilm
+        uint16_t focalLengthIn35mmFilm = 0;
+        uint32_t tag = 0;
+        sp<VendorTagDescriptor> vTags;
+        sp<VendorTagDescriptorCache> cache = VendorTagDescriptorCache::getGlobalVendorTagCache();
+        if (cache) {
+            auto vendorId = results.getVendorId();
+            cache->getVendorTagDescriptor(vendorId, &vTags);
+        }
+
+        if (vTags != NULL) {
+            const char *section = "com.xiaomi.sensor.info";
+            const char *TagName = "focalLength35mm";
+            const String8 sectionName(section);
+            const String8 tagName(TagName);
+            status_t ret = vTags->lookupTag(tagName, sectionName, &tag);
+            if (ret == 0) {
+                camera_metadata_entry entry = results.find(tag);
+                if (entry.count != 0) {
+                    focalLengthIn35mmFilm =static_cast<uint16_t> (entry.data.f[0] + 0.5f);
+                    BAIL_IF_INVALID_RET_NULL_SP(writer->addEntry(TAG_FOCALLLENGTHIN35MMFILM, 1, &focalLengthIn35mmFilm,
+                            TIFF_IFD_0), env, TAG_FOCALLLENGTHIN35MMFILM, writer);
+                } else {
+                    ALOGW("%s: get focalLength35mm failed.", __FUNCTION__);
+                }
+            }
+        } else {
+            ALOGW("%s:com.xiaomi.sensor.info.focalLength35mm vTags is null.", __FUNCTION__);
+        }
+    }
+#endif
+
     {
         // f number
         camera_metadata_entry entry =
@@ -1679,6 +1870,26 @@ static sp<TiffWriter> DngCreator_setup(JNIEnv* env, jobject thiz, uint32_t image
                 TIFF_IFD_0), env, TAG_DNGBACKWARDVERSION, writer);
     }
 
+#ifdef __XIAOMI_CAMERA__
+    {
+        uint32_t whiteLevel;
+
+        // Set whiteLevel tags, using dynamic white level if available
+        camera_metadata_entry entry =
+                results.find(ANDROID_SENSOR_DYNAMIC_WHITE_LEVEL);
+        if (entry.count != 0) {
+            whiteLevel = static_cast<uint32_t>(entry.data.i32[0]);
+        } else {
+            // Fall back to static white level which is guaranteed
+            entry = characteristics.find(ANDROID_SENSOR_INFO_WHITE_LEVEL);
+            BAIL_IF_EMPTY_RET_NULL_SP(entry, env, TAG_WHITELEVEL, writer);
+            whiteLevel = static_cast<uint32_t>(entry.data.i32[0]);
+        }
+
+        BAIL_IF_INVALID_RET_NULL_SP(writer->addEntry(TAG_WHITELEVEL, 1, &whiteLevel, TIFF_IFD_0),
+                env, TAG_WHITELEVEL, writer);
+    }
+#else
     {
         // Set whitelevel
         camera_metadata_entry entry =
@@ -1688,6 +1899,7 @@ static sp<TiffWriter> DngCreator_setup(JNIEnv* env, jobject thiz, uint32_t image
         BAIL_IF_INVALID_RET_NULL_SP(writer->addEntry(TAG_WHITELEVEL, 1, &whiteLevel, TIFF_IFD_0),
                 env, TAG_WHITELEVEL, writer);
     }
+#endif
 
     {
         // Set default scale
@@ -1845,6 +2057,31 @@ static sp<TiffWriter> DngCreator_setup(JNIEnv* env, jobject thiz, uint32_t image
         if (calculateAndSetCrop(env, characteristics, writer, isMaximumResolutionMode) != OK) {
             return nullptr;
         }
+#ifdef __XIAOMI_CAMERA__
+        uint32_t xmin = 0;
+        uint32_t ymin = 0;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        memset(&activesize, 0, sizeof(activesize));
+        if (getDngActiveSize(characteristics, &activesize, env) == false) {
+            camera_metadata_entry entry = characteristics.find(
+                    getAppropriateModeTag(ANDROID_SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE,
+                                          isMaximumResolutionMode));
+            BAIL_IF_EMPTY_RET_NULL_SP(entry, env, TAG_ACTIVEAREA, writer);
+            xmin = static_cast<uint32_t>(entry.data.i32[0]);
+            ymin = static_cast<uint32_t>(entry.data.i32[1]);
+            width = static_cast<uint32_t>(entry.data.i32[2]);
+            height = static_cast<uint32_t>(entry.data.i32[3]);
+
+        } else {
+            xmin = activesize.XMin;
+            ymin = activesize.YMin;
+            width = activesize.Width;
+            height = activesize.Height;
+            ALOGI("%s: DNG get xiaomi.dng.activesize 003 [%d_%d_%d_%d]",
+                  __FUNCTION__, activesize.XMin, activesize.YMin, activesize.Width, activesize.Height);
+        }
+#else
         camera_metadata_entry entry = characteristics.find(
                 getAppropriateModeTag(ANDROID_SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE,
                                       isMaximumResolutionMode));
@@ -1853,7 +2090,7 @@ static sp<TiffWriter> DngCreator_setup(JNIEnv* env, jobject thiz, uint32_t image
         uint32_t ymin = static_cast<uint32_t>(entry.data.i32[1]);
         uint32_t width = static_cast<uint32_t>(entry.data.i32[2]);
         uint32_t height = static_cast<uint32_t>(entry.data.i32[3]);
-
+#endif
         // If we only have a buffer containing the pre-correction rectangle, ignore the offset
         // relative to the pixel array.
         if (imageWidth == width && imageHeight == height) {
@@ -1941,7 +2178,32 @@ static sp<TiffWriter> DngCreator_setup(JNIEnv* env, jobject thiz, uint32_t image
         }
 
         camera_metadata_entry entry2 = results.find(ANDROID_STATISTICS_LENS_SHADING_MAP);
+#ifdef __XIAOMI_CAMERA__
+        uint32_t xmin = 0;
+        uint32_t ymin = 0;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        memset(&activesize, 0, sizeof(activesize));
+        if (getDngActiveSize(characteristics, &activesize, env) == false) {
+            camera_metadata_entry entry = characteristics.find(
+                    getAppropriateModeTag(ANDROID_SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE,
+                                          isMaximumResolutionMode));
+            BAIL_IF_EMPTY_RET_NULL_SP(entry, env, TAG_IMAGEWIDTH, writer);
 
+            xmin = static_cast<uint32_t>(entry.data.i32[0]);
+            ymin = static_cast<uint32_t>(entry.data.i32[1]);
+            width = static_cast<uint32_t>(entry.data.i32[2]);
+            height = static_cast<uint32_t>(entry.data.i32[3]);
+
+        } else {
+            xmin = activesize.XMin;
+            ymin = activesize.YMin;
+            width = activesize.Width;
+            height = activesize.Height;
+            ALOGI("%s: DNG get xiaomi.dng.activesize 003 [%d_%d_%d_%d]",
+                  __FUNCTION__, activesize.XMin, activesize.YMin, activesize.Width, activesize.Height);
+        }
+#else
         camera_metadata_entry entry = characteristics.find(
                 getAppropriateModeTag(ANDROID_SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE,
                                       isMaximumResolutionMode));
@@ -1950,6 +2212,7 @@ static sp<TiffWriter> DngCreator_setup(JNIEnv* env, jobject thiz, uint32_t image
         uint32_t ymin = static_cast<uint32_t>(entry.data.i32[1]);
         uint32_t width = static_cast<uint32_t>(entry.data.i32[2]);
         uint32_t height = static_cast<uint32_t>(entry.data.i32[3]);
+#endif
         if (entry2.count > 0 && entry2.count == lsmWidth * lsmHeight * 4) {
             // GainMap rectangle is relative to the active area origin.
             err = builder.addGainMapsForMetadata(lsmWidth,
@@ -2446,10 +2709,132 @@ static void DngCreator_nativeSetThumbnail(JNIEnv* env, jobject thiz, jobject buf
     }
 }
 
+#ifdef __XIAOMI_CAMERA__
+static status_t writeWithCompression(JNIEnv* env,
+    uint8_t *pInBuf, sp<JniOutputStream> out, sp<TiffWriter> writer,
+    uint32_t width, uint32_t height, uint32_t rowStride, uint32_t pixStride, uint64_t offset,
+    Vector<StripSource*> &sources, uint32_t targetIfd, sp<DirectStripSource> thumbnailSource)
+{
+    ATRACE_CALL(); // Add by Xiaomi
+    size_t uncompressedSize = rowStride * height;
+    std::unique_ptr<uint8_t[]> pCompressedBuf(new uint8_t[uncompressedSize]);
+    dng_stream compressedStream(pCompressedBuf.get(), uncompressedSize);
+    uint32_t fakeChannels = 2, fakeColStep = 2, fakeWidth = width/fakeChannels;
+
+    ATRACE_BEGIN("EncodeLosslessJPEG"); // Add by Xiaomi
+    EncodeLosslessJPEG(reinterpret_cast<const uint16_t *>(pInBuf + offset),
+        height, fakeWidth, fakeChannels, pixStride * 8,
+        fakeWidth * fakeChannels, fakeColStep, compressedStream);
+    ATRACE_END(); // Add by Xiaomi
+
+    // Update compression tag in tiff
+    uint16_t compression = 7; //ccJPEG
+    BAIL_IF_INVALID_RET_STATUS(writer->addEntry(TAG_COMPRESSION, 1, &compression,
+            targetIfd), env, TAG_COMPRESSION, writer);
+
+    // Update strip entries for compressed image: Use one single strip.
+    size_t compressedSize = compressedStream.Position();
+    uint32_t rowsPerStrip = height;
+    constexpr uint32_t numStrips = 1;
+    uint32_t stripByteCounts[numStrips] {static_cast<uint32_t>(compressedSize)};
+    uint32_t stripOffsets[numStrips] {0};
+
+    BAIL_IF_INVALID_RET_STATUS(writer->addEntry(TAG_ROWSPERSTRIP, 1, &rowsPerStrip,
+            targetIfd), env, TAG_ROWSPERSTRIP, writer);
+    BAIL_IF_INVALID_RET_STATUS(writer->addEntry(TAG_STRIPBYTECOUNTS, numStrips, stripByteCounts,
+            targetIfd), env, TAG_STRIPBYTECOUNTS, writer);
+    BAIL_IF_INVALID_RET_STATUS(writer->addEntry(TAG_STRIPOFFSETS, numStrips, stripOffsets,
+            targetIfd), env, TAG_STRIPOFFSETS, writer);
+
+    // write to output stream using direct strip source.
+    DirectStripSource stripSource(env, pCompressedBuf.get(), targetIfd,
+            /*width*/compressedSize, /*height*/1, /*pixelStride*/1, /*rowStride*/compressedSize,
+            /*offset*/0, /*bytesPerSample*/1, /*samplesPerPixel*/1);
+    sources.add(&stripSource);
+    if (thumbnailSource.get() != nullptr) {
+        sources.add(thumbnailSource.get());
+    }
+    ATRACE_BEGIN("WriteDng"); // Add by Xiaomi
+    status_t ret = OK;
+    if ((ret = writer->write(out.get(), sources.editArray(), sources.size())) != OK) {
+        ALOGE("%s: write failed with error %d.", __FUNCTION__, ret);
+        if (!env->ExceptionCheck()) {
+            jniThrowExceptionFmt(env, "java/io/IOException",
+                    "Encountered error %d while writing file.", ret);
+        }
+        return false;
+    }
+    ATRACE_END(); // Add by Xiaomi
+    return true;
+}
+
+static status_t writeWithCompression(JNIEnv* env,
+    Input* in, sp<JniOutputStream> out, sp<TiffWriter> writer,
+    uint32_t width, uint32_t height, uint32_t rowStride, uint32_t pixStride, uint64_t offset,
+    Vector<StripSource*> &sources, uint32_t targetIfd, sp<DirectStripSource> thumbnailSource)
+{
+    ATRACE_CALL(); // Add by Xiaomi
+    size_t uncompressedSize = rowStride * height;
+    std::unique_ptr<uint8_t[]> pInBuf(new uint8_t[uncompressedSize]);
+
+    // Skip offset
+    int64_t iOffset = static_cast<int64_t>(offset);
+    while (iOffset > 0) {
+        ssize_t skipped = in->skip(iOffset);
+        if (skipped <= 0) {
+            if (skipped == NOT_ENOUGH_DATA || skipped == 0) {
+                jniThrowExceptionFmt(env, "java/io/IOException",
+                        "Early EOF encountered in skip, not enough pixel data for image of size %zu",
+                        uncompressedSize);
+                skipped = NOT_ENOUGH_DATA;
+            } else {
+                if (!env->ExceptionCheck()) {
+                    jniThrowException(env, "java/io/IOException",
+                            "Error encountered while skip bytes in input stream.");
+                }
+            }
+
+            return skipped;
+        }
+        iOffset -= skipped;
+    }
+
+    // Readout the entire buffer from input stream
+    size_t fillAmt = 0;
+    while (fillAmt < uncompressedSize) {
+        ssize_t bytesRead = in->read(pInBuf.get(), fillAmt, uncompressedSize - fillAmt);
+        if (bytesRead > 0) {
+            fillAmt += bytesRead;
+        } else {
+            if (bytesRead == NOT_ENOUGH_DATA || bytesRead == 0) {
+                ALOGE("%s: Early EOF, received bytesRead %zd < %zu",
+                        __FUNCTION__, bytesRead, uncompressedSize);
+                jniThrowExceptionFmt(env, "java/io/IOException",
+                        "Early EOF encountered, not enough pixel data for image of size %zu",
+                        uncompressedSize);
+                bytesRead = NOT_ENOUGH_DATA;
+            } else {
+                if (!env->ExceptionCheck()) {
+                    jniThrowException(env, "java/io/IOException",
+                            "Error encountered while reading");
+                }
+            }
+            return bytesRead;
+        }
+    }
+
+    return writeWithCompression(env, pInBuf.get(), out, writer, width, height,
+                            rowStride, pixStride, /*offset*/0, sources, targetIfd, thumbnailSource);
+}
+#endif
+
 // TODO: Refactor out common preamble for the two nativeWrite methods.
 static void DngCreator_nativeWriteImage(JNIEnv* env, jobject thiz, jobject outStream, jint width,
         jint height, jobject inBuffer, jint rowStride, jint pixStride, jlong offset,
         jboolean isDirect) {
+#ifdef __XIAOMI_CAMERA__
+    ATRACE_CALL(); // Add by Xiaomi
+#endif
     ALOGV("%s:", __FUNCTION__);
     ALOGV("%s: nativeWriteImage called with: width=%d, height=%d, "
           "rowStride=%d, pixStride=%d, offset=%" PRId64, __FUNCTION__, width,
@@ -2515,50 +2900,73 @@ static void DngCreator_nativeWriteImage(JNIEnv* env, jobject thiz, jobject outSt
             jniThrowException(env, "java/lang/IllegalArgumentException", "Invalid ByteBuffer");
             return;
         }
-
-        ALOGV("%s: Using direct-type strip source.", __FUNCTION__);
-        DirectStripSource stripSource(env, pixelBytes, targetIfd, uWidth, uHeight, pStride,
-                rStride, uOffset, BYTES_PER_SAMPLE, SAMPLES_PER_RAW_PIXEL);
-        sources.add(&stripSource);
-        if (thumbnailSource.get() != nullptr) {
-            sources.add(thumbnailSource.get());
-        }
-
-        status_t ret = OK;
-        if ((ret = writer->write(out.get(), sources.editArray(), sources.size())) != OK) {
-            ALOGE("%s: write failed with error %d.", __FUNCTION__, ret);
-            if (!env->ExceptionCheck()) {
-                jniThrowExceptionFmt(env, "java/io/IOException",
-                        "Encountered error %d while writing file.", ret);
+ #ifdef __XIAOMI_CAMERA__
+        if (gEnableCompression) { // Changed by Xiaomi
+            ALOGI("%s: compression enabled, isDirect=%d,%dx%d,off=%" PRIu64, __FUNCTION__,
+                  isDirect, uWidth, uHeight, uOffset);
+            writeWithCompression(env, pixelBytes, out, writer, uWidth, uHeight,
+                                 rStride, pStride, uOffset, sources, targetIfd, thumbnailSource);
+        } else {
+#endif
+            ALOGV("%s: Using direct-type strip source.", __FUNCTION__);
+            DirectStripSource stripSource(env, pixelBytes, targetIfd, uWidth, uHeight, pStride,
+                    rStride, uOffset, BYTES_PER_SAMPLE, SAMPLES_PER_RAW_PIXEL);
+            sources.add(&stripSource);
+            if (thumbnailSource.get() != nullptr) {
+                sources.add(thumbnailSource.get());
             }
-            return;
+
+            status_t ret = OK;
+            if ((ret = writer->write(out.get(), sources.editArray(), sources.size())) != OK) {
+                ALOGE("%s: write failed with error %d.", __FUNCTION__, ret);
+                if (!env->ExceptionCheck()) {
+                    jniThrowExceptionFmt(env, "java/io/IOException",
+                            "Encountered error %d while writing file.", ret);
+                }
+                return;
+            }
+#ifdef __XIAOMI_CAMERA__
         }
+#endif
     } else {
         inBuf = new JniInputByteBuffer(env, inBuffer);
-
-        ALOGV("%s: Using input-type strip source.", __FUNCTION__);
-        InputStripSource stripSource(env, *inBuf, targetIfd, uWidth, uHeight, pStride,
-                 rStride, uOffset, BYTES_PER_SAMPLE, SAMPLES_PER_RAW_PIXEL);
-        sources.add(&stripSource);
-        if (thumbnailSource.get() != nullptr) {
-            sources.add(thumbnailSource.get());
-        }
-
-        status_t ret = OK;
-        if ((ret = writer->write(out.get(), sources.editArray(), sources.size())) != OK) {
-            ALOGE("%s: write failed with error %d.", __FUNCTION__, ret);
-            if (!env->ExceptionCheck()) {
-                jniThrowExceptionFmt(env, "java/io/IOException",
-                        "Encountered error %d while writing file.", ret);
+#ifdef __XIAOMI_CAMERA__
+        if (gEnableCompression) { // Changed by Xiaomi
+            ALOGI("%s: compression enabled, isDirect=%d,%dx%d,off=%" PRIu64, __FUNCTION__,
+                  isDirect, uWidth, uHeight, uOffset);
+            writeWithCompression(env, inBuf.get(), out, writer, uWidth, uHeight,
+                                 rowStride, pixStride, uOffset, sources, targetIfd, thumbnailSource);
+        } else {
+#endif
+            ALOGV("%s: Using input-type strip source.", __FUNCTION__);
+            InputStripSource stripSource(env, *inBuf, targetIfd, uWidth, uHeight, pStride,
+                    rStride, uOffset, BYTES_PER_SAMPLE, SAMPLES_PER_RAW_PIXEL);
+            sources.add(&stripSource);
+            if (thumbnailSource.get() != nullptr) {
+                sources.add(thumbnailSource.get());
             }
-            return;
+
+            status_t ret = OK;
+            if ((ret = writer->write(out.get(), sources.editArray(), sources.size())) != OK) {
+                ALOGE("%s: write failed with error %d.", __FUNCTION__, ret);
+                if (!env->ExceptionCheck()) {
+                    jniThrowExceptionFmt(env, "java/io/IOException",
+                            "Encountered error %d while writing file.", ret);
+                }
+                return;
+            }
+#ifdef __XIAOMI_CAMERA__
         }
+#endif
     }
 
 }
 
 static void DngCreator_nativeWriteInputStream(JNIEnv* env, jobject thiz, jobject outStream,
         jobject inStream, jint width, jint height, jlong offset) {
+#ifdef __XIAOMI_CAMERA__
+    ATRACE_CALL(); // Add by Xiaomi
+#endif
     ALOGV("%s:", __FUNCTION__);
 
     uint32_t rowStride = width * BYTES_PER_SAMPLE;
@@ -2599,14 +3007,6 @@ static void DngCreator_nativeWriteInputStream(JNIEnv* env, jobject thiz, jobject
     uint32_t targetIfd = TIFF_IFD_0;
     Vector<StripSource*> sources;
 
-
-    sp<JniInputStream> in = new JniInputStream(env, inStream);
-
-    ALOGV("%s: Using input-type strip source.", __FUNCTION__);
-    InputStripSource stripSource(env, *in, targetIfd, uWidth, uHeight, pixStride,
-             rowStride, uOffset, BYTES_PER_SAMPLE, SAMPLES_PER_RAW_PIXEL);
-    sources.add(&stripSource);
-
     bool hasThumbnail = writer->hasIfd(TIFF_IFD_SUB1);
     if (hasThumbnail) {
         ALOGV("%s: Adding thumbnail strip sources.", __FUNCTION__);
@@ -2616,18 +3016,38 @@ static void DngCreator_nativeWriteInputStream(JNIEnv* env, jobject thiz, jobject
                 width, context->getThumbnailHeight(), bytesPerPixel,
                 bytesPerPixel * width, /*offset*/0, BYTES_PER_RGB_SAMPLE,
                 SAMPLES_PER_RGB_PIXEL);
-        sources.add(thumbnailSource.get());
+        //sources.add(thumbnailSource.get());
     }
-
-    status_t ret = OK;
-    if ((ret = writer->write(out.get(), sources.editArray(), sources.size())) != OK) {
-        ALOGE("%s: write failed with error %d.", __FUNCTION__, ret);
-        if (!env->ExceptionCheck()) {
-            jniThrowExceptionFmt(env, "java/io/IOException",
-                    "Encountered error %d while writing file.", ret);
+    sp<JniInputStream> in = new JniInputStream(env, inStream);
+#ifdef __XIAOMI_CAMERA__
+    if (gEnableCompression) { // Changed by Xiaomi
+        ALOGI("%s: compression enabled, %dx%d,off=%" PRIu64, __FUNCTION__,
+              uWidth, uHeight, uOffset);
+        writeWithCompression(env, in.get(), out.get(), writer, uWidth, uHeight,
+                         rowStride, pixStride, uOffset, sources, targetIfd, thumbnailSource);
+    } else {
+ #endif
+        ALOGV("%s: Using input-type strip source.", __FUNCTION__);
+        InputStripSource stripSource(env, *in, targetIfd, uWidth, uHeight, pixStride,
+                rowStride, uOffset, BYTES_PER_SAMPLE, SAMPLES_PER_RAW_PIXEL);
+        sources.add(&stripSource);
+#ifdef __XIAOMI_CAMERA__
+        if (thumbnailSource.get() != nullptr) {
+            sources.add(thumbnailSource.get());
         }
-        return;
+#endif
+        status_t ret = OK;
+        if ((ret = writer->write(out.get(), sources.editArray(), sources.size())) != OK) {
+            ALOGE("%s: write failed with error %d.", __FUNCTION__, ret);
+            if (!env->ExceptionCheck()) {
+                jniThrowExceptionFmt(env, "java/io/IOException",
+                        "Encountered error %d while writing file.", ret);
+            }
+            return;
+        }
+#ifdef __XIAOMI_CAMERA__
     }
+#endif        
 }
 
 } /*extern "C" */

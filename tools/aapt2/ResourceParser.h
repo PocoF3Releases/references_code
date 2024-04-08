@@ -74,6 +74,8 @@ class ResourceParser {
                  const android::ConfigDescription& config,
                  const ResourceParserOptions& options = {});
   bool Parse(xml::XmlPullParser* parser);
+  // MIUI ADD:
+  std::vector<std::string> wlan_replace;
 
   static std::unique_ptr<Item> ParseXml(const FlattenedXmlSubTree& xmlsub_tree, uint32_t type_mask,
                                         bool allow_raw_value, ResourceTable& table,
@@ -84,6 +86,8 @@ class ResourceParser {
   DISALLOW_COPY_AND_ASSIGN(ResourceParser);
 
   std::optional<FlattenedXmlSubTree> CreateFlattenSubTree(xml::XmlPullParser* parser);
+  // MIUI ADD:
+  void ReplaceWlanString(std::string& raw_string);
 
   // Parses the XML subtree as a StyleString (flattened XML representation for strings with
   // formatting). If parsing fails, false is returned and the out parameters are left in an

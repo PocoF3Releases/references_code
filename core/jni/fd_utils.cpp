@@ -48,6 +48,12 @@ static const char* kPathAllowlist[] = {
         "/dev/dri/renderD129", // Fixes b/31172436
         "/dev/stune/foreground/tasks",
         "/dev/blkio/tasks",
+        // MIUI ADD: START
+        "/system/app/miui/miui.apk",
+        "/system/app/miuisystem/miuisystem.apk",
+        "/system_ext/framework/framework-ext-res/framework-ext-res.apk",
+        "/system/media/theme/default/icons",
+        // END
 };
 
 static const char kFdPath[] = "/proc/self/fd";

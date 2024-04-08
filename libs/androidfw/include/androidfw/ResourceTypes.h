@@ -1148,6 +1148,14 @@ struct ResTable_config
         UI_MODE_TYPE_WATCH = ACONFIGURATION_UI_MODE_TYPE_WATCH,
         UI_MODE_TYPE_VR_HEADSET = ACONFIGURATION_UI_MODE_TYPE_VR_HEADSET,
 
+        //MIUI ADD: START
+        UI_MODE_TYPE_GODZILLAUI = 0x0b, // extra-huge-ui
+        UI_MODE_TYPE_SMALLUI = 0x0c,
+        UI_MODE_TYPE_MEDIUMUI = 0x0d,
+        UI_MODE_TYPE_LARGEUI = 0x0e,
+        UI_MODE_TYPE_HUGEUI = 0x0f,
+        //END
+
         // uiMode bits for the night switch.
         MASK_UI_MODE_NIGHT = 0x30,
         SHIFT_UI_MODE_NIGHT = 4,

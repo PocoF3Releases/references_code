@@ -26,6 +26,9 @@
 #ifdef __ANDROID__ // Layoutlib does not support hardware acceleration
 #include <android/hardware_buffer.h>
 #endif
+// MIUI ADD
+#include "MiuiForceDarkConfigStub.h"
+// END
 
 class SkWStream;
 
@@ -44,6 +47,11 @@ enum class BitmapPalette {
     Unknown,
     Light,
     Dark,
+    // MIUI ADD: START
+    Background,
+    SoftwareRender,
+    NoInvert,
+    // END
 };
 
 namespace uirenderer {
@@ -146,6 +154,19 @@ public:
         }
         return mPalette;
     }
+
+    // MIUI ADD STAR: DEPRECATED
+    static BitmapPalette computePaletteForMiui(const SkImageInfo& info, const void* addr,
+                                                        size_t rowBytes, const char* hint);
+    BitmapPalette palette(int frameWidth, int frameHeight, bool isForeground = false);
+    bool mIsAsset = false;
+    void setAsset(bool isAsset) {
+        mIsAsset = isAsset;
+    }
+    bool isAsset() {
+        return mIsAsset;
+    }
+    // END
 
   // returns true if rowBytes * height can be represented by a positive int32_t value
   // and places that value in size.

@@ -78,6 +78,11 @@ static nsecs_t gLastEventTime[USER_ACTIVITY_EVENT_LAST + 1];
 // Throttling interval for user activity calls.
 static const nsecs_t MIN_TIME_BETWEEN_USERACTIVITIES = 100 * 1000000L; // 100ms
 
+// MIUI ADD: START
+static nsecs_t gLastTouchTime;
+static const nsecs_t MIN_TIME_BETWEEN_USERACTIVITIES_TOUCH = 500 * 1000000L; // 500ms
+// END
+
 // ----------------------------------------------------------------------------
 
 static bool checkAndClearExceptionFromCallback(JNIEnv* env, const char* methodName) {
@@ -124,6 +129,13 @@ void android_server_PowerManagerService_userActivity(nsecs_t eventTime, int32_t 
 
             // Tell the power HAL when user activity occurs.
             setPowerBoost(Boost::INTERACTION, 0);
+            // MIUI ADD: START
+            if (eventType == USER_ACTIVITY_EVENT_TOUCH &&
+                    gLastTouchTime + MIN_TIME_BETWEEN_USERACTIVITIES_TOUCH > eventTime) {
+                return;
+            }
+            gLastTouchTime = eventTime;
+            // END
         }
 
         JNIEnv* env = AndroidRuntime::getJNIEnv();
@@ -292,6 +304,9 @@ int register_android_server_PowerManagerService(JNIEnv* env) {
 
     GET_METHOD_ID(gPowerManagerServiceClassInfo.userActivityFromNative, clazz,
             "userActivityFromNative", "(JIII)V");
+
+    // MIUI ADD:
+    gLastTouchTime = LLONG_MIN;
 
     // Initialize
     for (int i = 0; i <= USER_ACTIVITY_EVENT_LAST; i++) {

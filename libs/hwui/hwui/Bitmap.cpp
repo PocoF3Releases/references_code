@@ -39,6 +39,11 @@
 #include <SkWebpEncoder.h>
 #include <SkHighContrastFilter.h>
 #include <limits>
+// MIUI ADD: START
+#include "CanvasTransform.h"
+#include "renderthread/RenderThread.h"
+#include "DeviceInfo.h"
+// END
 
 namespace android {
 
@@ -406,7 +411,8 @@ BitmapPalette Bitmap::computePalette(const SkImageInfo& info, const void* addr, 
 
     MinMaxAverage hue, saturation, value;
     int sampledCount = 0;
-
+    // MIUI ADD:
+    int whiteSampleCount = 0;
     // Sample a grid of 100 pixels to get an overall estimation of the colors in play
     const int x_step = std::max(1, pixmap.width() / 10);
     const int y_step = std::max(1, pixmap.height() / 10);
@@ -416,7 +422,13 @@ BitmapPalette Bitmap::computePalette(const SkImageInfo& info, const void* addr, 
             if (!info.isOpaque() && SkColorGetA(color) < 75) {
                 continue;
             }
-
+            // MIUI ADD: START
+            // 对偏白色的点采样
+            if (SkColorGetR(color) > 210
+                  && SkColorGetG(color) > 210 && SkColorGetB(color) > 210) {
+                whiteSampleCount++;
+            }
+            // END
             sampledCount++;
             float hsv[3];
             SkColorToHSV(color, hsv);
@@ -434,10 +446,16 @@ BitmapPalette Bitmap::computePalette(const SkImageInfo& info, const void* addr, 
         return BitmapPalette::Unknown;
     }
 
-    ALOGV("samples = %d, hue [min = %f, max = %f, avg = %f]; saturation [min = %f, max = %f, avg = "
+   // MIUI MOD: START
+   /*ALOGV("samples = %d, hue [min = %f, max = %f, avg = %f]; saturation [min = %f, max = %f, avg = "
           "%f]",
           sampledCount, hue.min(), hue.max(), hue.average(), saturation.min(), saturation.max(),
-          saturation.average());
+          saturation.average());*/
+    ALOGV("computePalette, %dx%d, samples = %d, hue [min = %f, max = %f, avg = %f];"\
+          "saturation [min = %f, max = %f, avg = %f]; value [min = %f, max = %f, avg = %f];",
+          pixmap.width(), pixmap.height(), sampledCount, hue.min(), hue.max(), hue.average(),
+          saturation.min(), saturation.max(), saturation.average(), value.min(), value.max(), value.average());
+    // END
 
     if (hue.delta() <= 20 && saturation.delta() <= .1f) {
         if (value.average() >= .5f) {
@@ -446,6 +464,14 @@ BitmapPalette Bitmap::computePalette(const SkImageInfo& info, const void* addr, 
             return BitmapPalette::Dark;
         }
     }
+    // MIUI ADD: START
+    ALOGV("whiteSample %f", (float)whiteSampleCount / (float)sampledCount);
+    if (whiteSampleCount > 0.95f * sampledCount
+        && MiuiForceDarkConfigStub::getMainRule() &
+            MiuiForceDarkConfigStub::RULE_BITMAP_PALETTE_COMPUTION) {
+        return BitmapPalette::Light;
+    }
+    // END
     return BitmapPalette::Unknown;
 }
 
@@ -488,4 +514,94 @@ bool Bitmap::compress(const SkBitmap& bitmap, JavaCompressFormat format,
 
     return SkEncodeImage(stream, bitmap, fm, quality);
 }
+// MIUI ADD: START
+BitmapPalette Bitmap::palette(int frameWidth, int frameHeight, bool isForeground) {
+    if(mPalette == BitmapPalette::SoftwareRender) {
+        return mPalette;
+    }
+    if(isForeground && !isAsset()) {
+        if(MiuiForceDarkConfigStub::getMainRule() & MiuiForceDarkConfigStub::RULE_NONE_ASSET_DRAWABLE_NO_FORCE_DARK){
+            return BitmapPalette::NoInvert;
+        }
+    }
+    if (!isHardware() && mPaletteGenerationId != getGenerationID()) {
+        if(MiuiForceDarkConfigStub::getMainRule() & MiuiForceDarkConfigStub::RULE_DEPRECATED) {
+            if(info().width()<= 160 && info().height() <= 160) {
+                mPalette = computePaletteForMiui(info(), pixels(), rowBytes(), "SmallBitmap");
+            } else if (info().width() == uirenderer::DeviceInfo::get()->getWidth()
+                    && info().height() == uirenderer::DeviceInfo::get()->getHeight()) {
+                mPalette = computePaletteForMiui(info(), pixels(), rowBytes(), "FullBitmap");
+            } else if(info().width() * info().height() >= 800000 ) {
+                mPalette = computePaletteForMiui(info(), pixels(), rowBytes(), "BigBitmap");
+            } else if(info().width() > frameWidth * 0.9 && info().height() > frameHeight * 0.9) {
+                mPalette = computePaletteForMiui(info(), pixels(), rowBytes(), "FullBitmap");
+            } else {
+                mPalette = computePalette(info(), pixels(), rowBytes());
+            }
+        } else {
+            mPalette = computePalette(info(), pixels(), rowBytes());
+        }
+        mPaletteGenerationId = getGenerationID();
+    }
+    return mPalette;
+}
+
+// NOTE: all the digits below are experience.
+BitmapPalette Bitmap::computePaletteForMiui(const SkImageInfo& info, const void* addr,
+                                                    size_t rowBytes, const char* hint) {
+    ATRACE_CALL();
+    if(strcmp(hint,"SoftwareRender") == 0){
+        return BitmapPalette::SoftwareRender;
+    }
+    SkPixmap pixmap{info, addr, rowBytes};
+
+    MinMaxAverage hue, saturation, value;
+    int sampledCount = 0;
+    int secondaryRule = MiuiForceDarkConfigStub::getSecondaryRule();
+    const int x_step = std::max(1, pixmap.width() / 10);
+    const int y_step = std::max(1, pixmap.height() / 10);
+
+    for (int x = 0; x < pixmap.width(); x += x_step) {
+        for (int y = 0; y < pixmap.height(); y += y_step) {
+            SkColor color = pixmap.getColor(x, y);
+            if (!info.isOpaque() && SkColorGetA(color) < 75) {
+                continue;
+            }
+            sampledCount++;
+            float hsv[3];
+            SkColorToHSV(color, hsv);
+            hue.add(hsv[0]);
+            saturation.add(hsv[1]);
+            value.add(hsv[2]);
+        }
+    }
+
+    ALOGV("computePaletteForMiui, %dx%d, hint = %s samples = %d, hue [min = %f, max = %f, avg = %f];"\
+            "saturation [min = %f, max = %f, avg = %f]; value [min = %f, max = %f, avg = %f];",
+            pixmap.width(), pixmap.height(), hint, sampledCount, hue.min(), hue.max(),
+            hue.average(), saturation.min(), saturation.max(), saturation.average(), value.min(),
+            value.max(), value.average());
+
+    // cases that we are only care about value
+    if (strcmp(hint,"BigBitmap") == 0 || strcmp(hint,"FullBitmap") == 0) {
+        if ((value.average() >= .95f && hue.delta() <= 150)
+                || (value.average() >= .9f && hue.delta() <= 60)
+                || (value.average() >= .8f && hue.delta() <= 30)) {
+            return BitmapPalette::Light;
+        } else if (secondaryRule & MiuiForceDarkConfigStub::RULE_ZERO_CHILD_EMPTY_VIEW && sampledCount <= 13
+                    && value.average() <= 1.0f) {
+            return BitmapPalette::Light;
+        }
+    }
+
+    if (hue.delta() <= 20 && saturation.delta() <= .1f && value.delta() <= .5f) {
+        if (value.average() >= .5f) {
+            return BitmapPalette::Light;
+        } else {
+            return BitmapPalette::Dark;
+        }
+    }
+    return BitmapPalette::Unknown;
+}
+// END
 }  // namespace android

@@ -54,6 +54,8 @@ void SkiaRecordingCanvas::initDisplayList(uirenderer::RenderNode* renderNode, in
     mDisplayList->attachRecorder(&mRecorder, SkIRect::MakeWH(width, height));
     SkiaCanvas::reset(&mRecorder);
     mDisplayList->setHasHolePunches(false);
+    // MIUI ADD
+    mDisplayList->setIsForeground(renderNode->isForeground());
 }
 
 void SkiaRecordingCanvas::punchHole(const SkRRect& rect) {
@@ -180,6 +182,13 @@ void SkiaRecordingCanvas::drawVectorDrawable(VectorDrawableRoot* tree) {
     mDisplayList->appendVD(tree, mat);
 }
 
+// MIUI ADD START:
+void SkiaRecordingCanvas::setForceDark(bool forceDark){
+    (*this).Canvas::setForceDark(forceDark);
+    mRecorder.setForceDark(forceDark);
+}
+// END
+
 // ----------------------------------------------------------------------------
 // Recording Canvas draw operations: Bitmaps
 // ----------------------------------------------------------------------------
@@ -198,7 +207,11 @@ void SkiaRecordingCanvas::drawBitmap(Bitmap& bitmap, float left, float top, cons
     applyLooper(
             paint,
             [&](const Paint& p) {
-                mRecorder.drawImage(image, left, top, p.sampling(), &p, bitmap.palette());
+                // MIUI MOD: START
+                // mRecorder.drawImage(image, left, top, p.sampling(), &p, bitmap.palette());
+                mRecorder.drawImage(image, left, top, p.sampling(), &p,
+                                    bitmap.palette(width(), height(), mDisplayList->isForeground()));
+                // END
             },
             FilterForImage);
 
@@ -219,7 +232,11 @@ void SkiaRecordingCanvas::drawBitmap(Bitmap& bitmap, const SkMatrix& matrix, con
     applyLooper(
             paint,
             [&](const Paint& p) {
-                mRecorder.drawImage(image, 0, 0, p.sampling(), &p, bitmap.palette());
+                // MIUI MOD: START
+                // mRecorder.drawImage(image, 0, 0, p.sampling(), &p, bitmap.palette());
+                mRecorder.drawImage(image, 0, 0, p.sampling(), &p,
+                                    bitmap.palette(width(), height(), mDisplayList->isForeground()));
+                // END
             },
             FilterForImage);
 
@@ -239,8 +256,13 @@ void SkiaRecordingCanvas::drawBitmap(Bitmap& bitmap, float srcLeft, float srcTop
     applyLooper(
             paint,
             [&](const Paint& p) {
-                mRecorder.drawImageRect(image, srcRect, dstRect, p.sampling(), &p,
-                                        SkCanvas::kFast_SrcRectConstraint, bitmap.palette());
+               // MIUI MOD: START
+               // mRecorder.drawImageRect(image, srcRect, dstRect, p.sampling(), &p,
+               //                                        SkCanvas::kFast_SrcRectConstraint, bitmap.palette());
+               mRecorder.drawImageRect(image, srcRect, dstRect, p.sampling(), &p,
+                                       SkCanvas::kFast_SrcRectConstraint,
+                                       bitmap.palette(width(), height(), mDisplayList->isForeground()));
+               // END
             },
             FilterForImage);
 
@@ -281,7 +303,12 @@ void SkiaRecordingCanvas::drawNinePatch(Bitmap& bitmap, const Res_png_9patch& ch
     applyLooper(
             paint,
             [&](const SkPaint& p) {
-                mRecorder.drawImageLattice(image, lattice, dst, filter, &p, bitmap.palette());
+                // MIUI MOD: START
+                // mRecorder.drawImageLattice(image, lattice, dst, filter, &p, bitmap.palette());
+                mRecorder.drawImageLattice(image, lattice, dst, filter, &p,
+                                           bitmap.palette((dstRight - dstLeft), (dstBottom - dstTop),
+                                                          mDisplayList->isForeground()));
+                // END
             },
             FilterForImage);
 

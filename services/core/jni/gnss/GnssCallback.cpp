@@ -124,11 +124,13 @@ Status GnssCallbackAidl::gnssLocationCb(const hardware::gnss::GnssLocation& loca
 
 Status GnssCallbackAidl::gnssNmeaCb(const int64_t timestamp, const std::string& nmea) {
     // In AIDL v1, if no listener is registered, do not report nmea to the framework.
-    if (getInterfaceVersion() <= 1) {
+    //MIUI add for remove nema callback condition
+    /*if (getInterfaceVersion() <= 1) {
         if (!isNmeaRegistered) {
             return Status::ok();
         }
-    }
+    }*/
+    //MIUI end
     JNIEnv* env = getJniEnv();
     /*
      * The Java code will call back to read these values.
@@ -337,9 +339,11 @@ Return<void> GnssCallbackHidl::gnssSvStatusCbImpl(const T_list& svStatus) {
 Return<void> GnssCallbackHidl::gnssNmeaCb(int64_t timestamp,
                                           const ::android::hardware::hidl_string& nmea) {
     // In HIDL, if no listener is registered, do not report nmea to the framework.
-    if (!isNmeaRegistered) {
+    //MIUI add for nmea callback remove the condition
+    /*if (!isNmeaRegistered) {
         return Void();
-    }
+    }*/
+    //MIUI end
     JNIEnv* env = getJniEnv();
     /*
      * The Java code will call back to read these values.
