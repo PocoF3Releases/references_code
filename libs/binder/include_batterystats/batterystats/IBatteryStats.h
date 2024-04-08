@@ -43,6 +43,10 @@ public:
     virtual void noteStopCamera(int uid) = 0;
     virtual void noteResetCamera() = 0;
     virtual void noteResetFlashlight() = 0;
+    // MI ADD: START
+    virtual void noteStartSensorWithPkg(int uid, int sensor, const String16& packageName) = 0;
+    virtual void noteStopSensorWithPkg(int uid, int sensor, const String16& packageName) = 0;
+    // END
 
     enum {
         NOTE_START_SENSOR_TRANSACTION = IBinder::FIRST_CALL_TRANSACTION,
@@ -58,7 +62,11 @@ public:
         NOTE_START_CAMERA_TRANSACTION,
         NOTE_STOP_CAMERA_TRANSACTION,
         NOTE_RESET_CAMERA_TRANSACTION,
-        NOTE_RESET_FLASHLIGHT_TRANSACTION
+        NOTE_RESET_FLASHLIGHT_TRANSACTION,
+                // MI ADD: START
+        NOTE_START_SENSOR_PACKAGE_TRANSACTION,
+        NOTE_STOP_SENSOR_PACKAGE_TRANSACTION
+        // END
     };
 };
 

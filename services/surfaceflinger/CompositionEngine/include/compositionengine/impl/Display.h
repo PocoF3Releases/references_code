@@ -91,7 +91,18 @@ public:
 private:
     DisplayId mId;
     bool mIsDisconnected = false;
+    bool mIsColorModeChanged = false;
     Hwc2::PowerAdvisor* mPowerAdvisor = nullptr;
+    bool mHasScreenshot = false;
+    ui::DisplayConnectionType mConnectionType = ui::DisplayConnectionType::Internal;
+    composer::DisplayExtnIntf *mDisplayExtnIntf = nullptr;
+    void beginDraw();
+    void endDraw();
+#if MI_FEATURE_ENABLE
+    bool mHasColorFade{false};
+#endif
+    ColorProfile mColorProfile = {ui::ColorMode::NATIVE, ui::Dataspace::UNKNOWN,
+                                  ui::RenderIntent::COLORIMETRIC, ui::Dataspace::UNKNOWN};
 };
 
 // This template factory function standardizes the implementation details of the

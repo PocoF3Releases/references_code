@@ -60,7 +60,11 @@
 // For older HALs which don't support batching, use a smaller socket buffer size.
 #define SOCKET_BUFFER_SIZE_NON_BATCHED (4 * 1024)
 
+#if MI_SENSORSERVICE_FEATURE_ENABLE
+#define SENSOR_REGISTRATIONS_BUF_SIZE 500
+#else
 #define SENSOR_REGISTRATIONS_BUF_SIZE 200
+#endif
 
 // Apps that targets S+ and do not have HIGH_SAMPLING_RATE_SENSORS permission will be capped
 // at 200 Hz. The cap also applies to all requests when the mic toggle is flipped to on, regardless
@@ -136,6 +140,9 @@ public:
       //     $ adb shell dumpsys sensorservice enable
     };
 
+#ifdef HAS_SENSOR_CONTROL
+    class SensorControl;
+#endif
     class ProximityActiveListener : public virtual RefBase {
     public:
         // Note that the callback is invoked from an async thread and can interact with the
@@ -168,6 +175,11 @@ public:
 
     status_t addProximityActiveListener(const sp<ProximityActiveListener>& callback) ANDROID_API;
     status_t removeProximityActiveListener(const sp<ProximityActiveListener>& callback) ANDROID_API;
+
+    // MIUI ADD: START
+    // set reversed device state for foldable
+    status_t setReversedState(bool reverse) ANDROID_API;
+    // END
 
     // Returns true if a sensor should be throttled according to our rate-throttling rules.
     static bool isSensorInCappedSet(int sensorType);
@@ -342,6 +354,13 @@ private:
 
     // Thread interface
     virtual bool threadLoop();
+
+#if MI_SCREEN_PROJECTION
+    // MIUI ADD: START
+    virtual void setSensorDisableApp(const String8& packageName);
+    virtual void removeSensorDisableApp(const String8& packageName);
+    // END
+#endif
 
     // ISensorServer interface
     virtual Vector<Sensor> getSensorList(const String16& opPackageName);
@@ -521,6 +540,11 @@ private:
     bool mLastReportedProxIsActive;
     // Listeners subscribed to receive updates on the proximity sensor active state.
     std::vector<sp<ProximityActiveListener>> mProximityActiveListeners;
+
+    // MIUI ADD: START
+    // reversed device state for foldable
+    static bool mReversedState;
+    // END
 };
 
 } // namespace android

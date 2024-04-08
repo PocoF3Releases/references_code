@@ -27,6 +27,16 @@
 #include "TouchButtonAccumulator.h"
 #include "TouchCursorInputMapperCommon.h"
 
+// MIUI ADD START:
+#include "../stubs/MiInputReaderStub.h"
+#include "../stubs/MiTouchInputMapperStub.h"
+#ifdef MIUI_BUILD
+#undef ALOGD
+#define ALOGD(...) if (MiInputReaderStub::getInputReaderAll()) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+#endif
+// END
+
+
 namespace android {
 
 // --- Constants ---
@@ -390,6 +400,10 @@ void TouchInputMapper::configure(nsecs_t when, const InputReaderConfiguration* c
     }
 
     if (changes && resetNeeded) {
+        // If device was reset, cancel touch event and update touch spot state.
+        cancelTouch(mCurrentRawState.when, mCurrentRawState.readTime);
+        mCurrentCookedState.clear();
+        updateTouchSpots();
         // Send reset, unless this is the first time the device has been configured,
         // in which case the reader will call reset itself after all mappers are ready.
         NotifyDeviceResetArgs args(getContext()->getNextId(), when, getDeviceId());
@@ -941,6 +955,7 @@ void TouchInputMapper::configureInputDevice(nsecs_t when, bool* outResetNeeded) 
     bool skipViewportUpdate = false;
     if (viewportChanged) {
         const bool viewportOrientationChanged = mViewport.orientation != newViewport->orientation;
+        const bool viewportDisplayIdChanged = mViewport.displayId != newViewport->displayId;
         mViewport = *newViewport;
 
         if (mDeviceMode == DeviceMode::DIRECT || mDeviceMode == DeviceMode::POINTER) {
@@ -948,6 +963,7 @@ void TouchInputMapper::configureInputDevice(nsecs_t when, bool* outResetNeeded) 
             int32_t naturalPhysicalWidth, naturalPhysicalHeight;
             int32_t naturalPhysicalLeft, naturalPhysicalTop;
             int32_t naturalDeviceWidth, naturalDeviceHeight;
+            int32_t naturalLogicalWidth, naturalLogicalHeight;
 
             // Apply the inverse of the input device orientation so that the input device is
             // configured in the same orientation as the viewport. The input device orientation will
@@ -956,6 +972,8 @@ void TouchInputMapper::configureInputDevice(nsecs_t when, bool* outResetNeeded) 
                     (mViewport.orientation - static_cast<int32_t>(mParameters.orientation) + 4) % 4;
             switch (naturalDeviceOrientation) {
                 case DISPLAY_ORIENTATION_90:
+                    naturalLogicalWidth = mViewport.logicalBottom - mViewport.logicalTop;
+                    naturalLogicalHeight = mViewport.logicalRight - mViewport.logicalLeft;
                     naturalPhysicalWidth = mViewport.physicalBottom - mViewport.physicalTop;
                     naturalPhysicalHeight = mViewport.physicalRight - mViewport.physicalLeft;
                     naturalPhysicalLeft = mViewport.deviceHeight - mViewport.physicalBottom;
@@ -964,6 +982,8 @@ void TouchInputMapper::configureInputDevice(nsecs_t when, bool* outResetNeeded) 
                     naturalDeviceHeight = mViewport.deviceWidth;
                     break;
                 case DISPLAY_ORIENTATION_180:
+                    naturalLogicalWidth = mViewport.logicalRight - mViewport.logicalLeft;
+                    naturalLogicalHeight = mViewport.logicalBottom - mViewport.logicalTop;
                     naturalPhysicalWidth = mViewport.physicalRight - mViewport.physicalLeft;
                     naturalPhysicalHeight = mViewport.physicalBottom - mViewport.physicalTop;
                     naturalPhysicalLeft = mViewport.deviceWidth - mViewport.physicalRight;
@@ -972,6 +992,8 @@ void TouchInputMapper::configureInputDevice(nsecs_t when, bool* outResetNeeded) 
                     naturalDeviceHeight = mViewport.deviceHeight;
                     break;
                 case DISPLAY_ORIENTATION_270:
+                    naturalLogicalWidth = mViewport.logicalBottom - mViewport.logicalTop;
+                    naturalLogicalHeight = mViewport.logicalRight - mViewport.logicalLeft;
                     naturalPhysicalWidth = mViewport.physicalBottom - mViewport.physicalTop;
                     naturalPhysicalHeight = mViewport.physicalRight - mViewport.physicalLeft;
                     naturalPhysicalLeft = mViewport.physicalTop;
@@ -981,6 +1003,8 @@ void TouchInputMapper::configureInputDevice(nsecs_t when, bool* outResetNeeded) 
                     break;
                 case DISPLAY_ORIENTATION_0:
                 default:
+                    naturalLogicalWidth = mViewport.logicalRight - mViewport.logicalLeft;
+                    naturalLogicalHeight = mViewport.logicalBottom - mViewport.logicalTop;
                     naturalPhysicalWidth = mViewport.physicalRight - mViewport.physicalLeft;
                     naturalPhysicalHeight = mViewport.physicalBottom - mViewport.physicalTop;
                     naturalPhysicalLeft = mViewport.physicalLeft;
@@ -1003,8 +1027,8 @@ void TouchInputMapper::configureInputDevice(nsecs_t when, bool* outResetNeeded) 
 
             const int32_t oldDisplayWidth = mDisplayWidth;
             const int32_t oldDisplayHeight = mDisplayHeight;
-            mDisplayWidth = naturalDeviceWidth;
-            mDisplayHeight = naturalDeviceHeight;
+            mDisplayWidth = naturalLogicalWidth * naturalDeviceWidth / naturalPhysicalWidth;
+            mDisplayHeight = naturalLogicalHeight * naturalDeviceHeight / naturalPhysicalHeight;
 
             // InputReader works in the un-rotated display coordinate space, so we don't need to do
             // anything if the device is already orientation-aware. If the device is not
@@ -1032,6 +1056,8 @@ void TouchInputMapper::configureInputDevice(nsecs_t when, bool* outResetNeeded) 
             mDisplayHeight = rawHeight;
             mInputDeviceOrientation = DISPLAY_ORIENTATION_0;
         }
+        // If displayId changed, do not skip viewport update.
+        skipViewportUpdate &= !viewportDisplayIdChanged;
     }
 
     // If moving between pointer modes, need to reset some state.
@@ -1053,6 +1079,10 @@ void TouchInputMapper::configureInputDevice(nsecs_t when, bool* outResetNeeded) 
             mPointerController->fade(PointerControllerInterface::Transition::IMMEDIATE);
         }
     } else {
+        if (mPointerController != nullptr && mDeviceMode == DeviceMode::DIRECT &&
+            !mConfig.showTouches) {
+            mPointerController->clearSpots();
+        }
         mPointerController.reset();
     }
 
@@ -1926,6 +1956,10 @@ void TouchInputMapper::dispatchVirtualKey(nsecs_t when, nsecs_t readTime, uint32
 }
 
 void TouchInputMapper::abortTouches(nsecs_t when, nsecs_t readTime, uint32_t policyFlags) {
+    if (mCurrentMotionAborted) {
+        // Current motion event was already aborted.
+        return;
+    }
     BitSet32 currentIdBits = mCurrentCookedState.cookedPointerData.touchingIdBits;
     if (!currentIdBits.isEmpty()) {
         int32_t metaState = getContext()->getGlobalMetaState();
@@ -3706,6 +3740,11 @@ void TouchInputMapper::dispatchMotion(nsecs_t when, nsecs_t readTime, uint32_t p
                           MotionClassification::NONE, edgeFlags, pointerCount, pointerProperties,
                           pointerCoords, xPrecision, yPrecision, xCursorPosition, yCursorPosition,
                           downTime, std::move(frames));
+    // MIUI ADD: START
+    if(MiTouchInputMapperStub::dispatchMotionIntercept(&args, mInputDeviceOrientation)) {
+        return;
+    }
+    // END
     getListener().notifyMotion(&args);
 }
 

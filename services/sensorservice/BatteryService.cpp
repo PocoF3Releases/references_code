@@ -74,6 +74,34 @@ void BatteryService::disableSensorImpl(uid_t uid, int handle) {
     }
 }
 
+/**
+ * MI ADD:
+ * start sensor with package name
+ */
+void BatteryService::enableSensorImpl(uid_t uid, int handle, const String16& packageName) {
+    if (checkService()) {
+        if (addSensor(uid, handle)) {
+            int64_t identity = IPCThreadState::self()->clearCallingIdentity();
+            mBatteryStatService->noteStartSensorWithPkg(uid, handle, packageName);
+            IPCThreadState::self()->restoreCallingIdentity(identity);
+        }
+    }
+}
+/**
+ * MI ADD:
+ * stop sensor with package name
+ */
+void BatteryService::disableSensorImpl(uid_t uid, int handle, const String16& packageName) {
+    if (checkService()) {
+        if (removeSensor(uid, handle)) {
+            int64_t identity = IPCThreadState::self()->clearCallingIdentity();
+            mBatteryStatService->noteStopSensorWithPkg(uid, handle, packageName);
+            IPCThreadState::self()->restoreCallingIdentity(identity);
+        }
+    }
+}
+
+
 bool BatteryService::checkService() {
     if (mBatteryStatService == nullptr) {
         const sp<IServiceManager> sm(defaultServiceManager());

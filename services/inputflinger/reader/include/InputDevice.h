@@ -153,6 +153,11 @@ public:
         return *(reinterpret_cast<T*>(mController.get()));
     }
 
+    // MIUI ADD: START
+    inline int32_t getProduct() const {return mIdentifier.product; }
+    inline int32_t getVendor() const {return mIdentifier.vendor; }
+    //END
+
 private:
     InputReaderContext* mContext;
     int32_t mId;

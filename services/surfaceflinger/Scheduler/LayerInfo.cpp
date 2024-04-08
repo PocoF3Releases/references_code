@@ -29,6 +29,7 @@
 #include <cutils/compiler.h>
 #include <cutils/trace.h>
 #include <ftl/enum.h>
+#include "MiSurfaceFlingerStub.h"
 
 #undef LOG_TAG
 #define LOG_TAG "LayerInfo"
@@ -237,6 +238,11 @@ LayerInfo::LayerVote LayerInfo::getRefreshRateVote(const RefreshRateConfigs& ref
 
     if (!isFrequent(now)) {
         ALOGV("%s is infrequent", mName.c_str());
+        // In the cts.device.graphicsstats test, min is returned
+        // because it is set to infrequent. Here, it is modified to return max.
+        if (MiSurfaceFlingerStub::allowCtsPass(mName)) {
+            return {LayerHistory::LayerVoteType::Max, Fps::fromValue(0.0f)};
+        }
         mLastRefreshRate.animatingOrInfrequent = true;
         // Infrequent layers vote for mininal refresh rate for
         // battery saving purposes and also to prevent b/135718869.

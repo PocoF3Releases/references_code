@@ -40,7 +40,7 @@ public:
 
     void setLayerStack(ui::LayerStack);
     void setViewport(ui::Size);
-    void changeRefreshRate(Fps);
+    void changeRefreshRate(Fps, bool showAuto = 0);
     void animate();
 
 private:
@@ -48,13 +48,16 @@ private:
 
     class SevenSegmentDrawer {
     public:
-        static Buffers draw(int number, SkColor, ui::Transform::RotationFlags, bool showSpinner);
+        static Buffers draw(int number, SkColor, ui::Transform::RotationFlags, bool showSpinner, bool showAuto);
 
     private:
-        enum class Segment { Upper, UpperLeft, UpperRight, Middle, LowerLeft, LowerRight, Bottom };
+        enum class Segment { Upper, UpperLeft, UpperRight, UpperMiddle, Middle, LowerLeft, LowerRight, LowerMiddle, Bottom };
 
         static void drawSegment(Segment, int left, SkColor, SkCanvas&);
         static void drawDigit(int digit, int left, SkColor, SkCanvas&);
+#ifdef MI_FEATURE_ENABLE
+        static void drawAuto(int left, SkColor color, SkCanvas& canvas);
+#endif
     };
 
     const Buffers& getOrCreateBuffers(Fps);
@@ -62,8 +65,9 @@ private:
     struct Key {
         int fps;
         ui::Transform::RotationFlags flags;
+        bool showAuto;
 
-        bool operator==(Key other) const { return fps == other.fps && flags == other.flags; }
+        bool operator==(Key other) const { return fps == other.fps && flags == other.flags && showAuto == other.showAuto; }
     };
 
     using BufferCache = ftl::SmallMap<Key, Buffers, 9>;
@@ -74,6 +78,7 @@ private:
 
     const FpsRange mFpsRange; // For color interpolation.
     const bool mShowSpinner;
+    bool mShowAuto;
 
     const sp<SurfaceControl> mSurfaceControl;
 };

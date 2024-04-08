@@ -91,11 +91,21 @@
 #include "DumpstateInternal.h"
 #include "DumpstateService.h"
 #include "dumpstate.h"
+//MIUI ADD
+// get misys service for accessing files in vendor
+#include <hidl/HidlSupport.h>
+#include <hidl/HidlTransportSupport.h>
+#include <vendor/xiaomi/hardware/misys/1.0/IMiSys.h>
 
 namespace dumpstate_hal_hidl_1_0 = android::hardware::dumpstate::V1_0;
 namespace dumpstate_hal_hidl = android::hardware::dumpstate::V1_1;
 namespace dumpstate_hal_aidl = aidl::android::hardware::dumpstate;
-
+//MIUI ADD
+// get misys service for accessing files in vendor
+using IMiSys_V1_0 = ::vendor::xiaomi::hardware::misys::V1_0::IMiSys;
+using ::vendor::xiaomi::hardware::misys::V1_0::IResultValue;
+using ::vendor::xiaomi::hardware::misys::V1_0::IFileListResult;
+using ::vendor::xiaomi::hardware::misys::V1_0::IReadResult;
 using ::std::literals::chrono_literals::operator""ms;
 using ::std::literals::chrono_literals::operator""s;
 using ::std::placeholders::_1;
@@ -125,6 +135,9 @@ using android::os::dumpstate::WaitForTask;
 // Keep in sync with
 // frameworks/base/services/core/java/com/android/server/am/ActivityManagerService.java
 static const int TRACE_DUMP_TIMEOUT_MS = 10000; // 10 seconds
+//MIUI ADD
+// get misys service for accessing files in vendor
+static android::sp<IMiSys_V1_0> service;
 
 /* Most simple commands have 10 as timeout, so 5 is a good estimate */
 static const int32_t WEIGHT_FILE = 5;
@@ -165,6 +178,7 @@ void add_mountinfo();
 #define BLK_DEV_SYS_DIR "/sys/block"
 
 #define RECOVERY_DIR "/cache/recovery"
+#define RECOVERY_AB_DIR "/mnt/rescue/recovery"
 #define RECOVERY_DATA_DIR "/data/misc/recovery"
 #define UPDATE_ENGINE_LOG_DIR "/data/misc/update_engine_log"
 #define LOGPERSIST_DATA_DIR "/data/misc/logd"
@@ -180,6 +194,7 @@ void add_mountinfo();
 #define PACKAGE_DEX_USE_LIST "/data/system/package-dex-usage.list"
 #define SYSTEM_TRACE_SNAPSHOT "/data/misc/perfetto-traces/bugreport/systrace.pftrace"
 #define CGROUPFS_DIR "/sys/fs/cgroup"
+#define QSEELOG_DIR "/cache/qseelog"
 
 // TODO(narayan): Since this information has to be kept in sync
 // with tombstoned, we should just put it in a common header.
@@ -189,6 +204,9 @@ static const std::string TOMBSTONE_DIR = "/data/tombstones/";
 static const std::string TOMBSTONE_FILE_PREFIX = "tombstone_";
 static const std::string ANR_DIR = "/data/anr/";
 static const std::string ANR_FILE_PREFIX = "anr_";
+
+static int mcrash_history_fd = -1;
+static char mcrash_history_name[50];
 
 // TODO: temporary variables and functions used during C++ refactoring
 
@@ -352,6 +370,25 @@ static void RunDumpsys(const std::string& title, const std::vector<std::string>&
 static int DumpFile(const std::string& title, const std::string& path) {
     return ds.DumpFile(title, path);
 }
+/*MIUI ADD
+ *get misys service for accessing files in vendor
+ */
+static bool getMiSysService() {
+    if (service == nullptr) {
+        service = IMiSys_V1_0::getService();
+        if (service != nullptr) {
+            MYLOGI("Initialize the misysHIDL successful\n");
+        } else {
+            MYLOGE("Initialize the misysHIDL failed\n");
+            return false;
+        }
+    }
+    return true;
+}
+
+static int DumpVendorFile(const std::string& title, const std::string& path) {
+    return ds.DumpVendorFile(title, path);
+}
 
 // Relative directory (inside the zip) for all files copied as-is into the bugreport.
 static const std::string ZIP_ROOT_DIR = "FS";
@@ -474,6 +511,17 @@ void do_mountinfo(int pid, const char* name __attribute__((unused))) {
         } else {
             MYLOGE("Unable to add mountinfo %s to zip file\n", path);
         }
+    }
+}
+
+static void get_mcrash_history_fd(int *fd) {
+    snprintf(mcrash_history_name, sizeof(mcrash_history_name), "%s/modem/mcrash_history", "/data/tombstones/");
+    *fd = TEMP_FAILURE_RETRY(open(mcrash_history_name,
+                                     O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK));
+    if (*fd < 0){
+    int err = errno;
+        printf("------ %s (%s) ------\n", "MODEM CRASH HISTORY", mcrash_history_name);
+        printf("*** %s: %s\n", mcrash_history_name, strerror(err));
     }
 }
 
@@ -1570,6 +1618,9 @@ static Dumpstate::RunStatus dumpstate() {
     dump_dev_files("TRUSTY VERSION", "/sys/bus/platform/drivers/trusty", "trusty_version");
     RunCommand("UPTIME", {"uptime"});
     DumpBlockStatFiles();
+    DumpFile("POWERUP_REASON", "/sys/bootinfo/powerup_reason");
+    DumpFile("POWERUP_REASON_DETAIL", "/sys/bootinfo/powerup_reason_details");
+    DumpFile("POWEROFF_REASON", "/sys/bootinfo/poweroff_reason");
     DumpFile("MEMORY INFO", "/proc/meminfo");
     RunCommand("CPU INFO", {"top", "-b", "-n", "1", "-H", "-s", "6", "-o",
                             "pid,tid,user,pr,ni,%cpu,s,virt,res,pcy,cmd,name"});
@@ -1586,8 +1637,31 @@ static Dumpstate::RunStatus dumpstate() {
     DumpFile("BUDDYINFO", "/proc/buddyinfo");
     DumpExternalFragmentationInfo();
 
-    DumpFile("KERNEL CPUFREQ", "/sys/devices/system/cpu/cpu0/cpufreq/stats/time_in_state");
+    int dpstatus = android::base::GetIntProperty("ro.boot.dp", 0xB);
+    std::string fusestatus = android::base::GetProperty("ro.boot.secureboot", "0");
+    if((strcmp(fusestatus.c_str(), "1") == 0) && (dpstatus == 0x20)) {
+        MYLOGD("dump encrypted qsee log\n");
+        RunCommand("qsee_log", {"cat", "/proc/tzdbg/qsee_log"});
+    }
+    /*for /proc/mv*/
+    DumpFile("UFS mv", "/proc/mv");
 
+    DumpFile("KERNEL CPUFREQ", "/sys/devices/system/cpu/cpu0/cpufreq/stats/time_in_state");
+	DumpFile("LAST TOUCH EVENTS", "/proc/last_touch_events");
+
+    DumpFile("PERFLOCK HISTORY", "/proc/perflock_records");
+    //MIUI ADD: START
+    DumpFile("F2FS STATUS (new)", "/proc/fs/f2fs/status");
+   //END
+
+    // MIUI ADD: START
+    DumpFile("DOWNGRADE STATUS", "/data/mqsas/clean/downgrade_records");
+    // END
+
+    //ADD for M7
+    RunCommand("QSEE_LOG", {"cat", "/proc/tzdbg/qsee_log"});
+    RunCommand("TZ_LOG", {"cat", "/proc/tzdbg/log"});
+    //END
     RunCommand("PROCESSES AND THREADS",
                {"ps", "-A", "-T", "-Z", "-O", "pri,nice,rtprio,sched,pcy,time"});
 
@@ -1621,7 +1695,8 @@ static Dumpstate::RunStatus dumpstate() {
 
     RunCommand("LIST OF OPEN FILES", {"lsof"}, CommandOptions::AS_ROOT);
 
-    RUN_SLOW_FUNCTION_WITH_CONSENT_CHECK(for_each_pid, do_showmap, "SMAPS OF ALL PROCESSES");
+    //MIUI DEL:
+    //RUN_SLOW_FUNCTION_WITH_CONSENT_CHECK(for_each_pid, do_showmap, "SMAPS OF ALL PROCESSES");
 
     for_each_tid(show_wchan, "BLOCKED PROCESS WAIT-CHANNELS");
     for_each_pid(show_showtime, "PROCESS TIMES (pid cmd user system iowait+percentage)");
@@ -1649,6 +1724,12 @@ static Dumpstate::RunStatus dumpstate() {
     DumpPacketStats();
 
     RunDumpsys("EBPF MAP STATS", {"connectivity", "trafficcontroller"});
+
+    if(mcrash_history_fd < 0){
+        printf("*** NO MODEM CRASH HISTORY to dump\n\n");
+    } else {
+        dump_file_from_fd("MODEM CRASH HISTORY", mcrash_history_name, mcrash_history_fd);
+    }
 
     DoKmsg();
 
@@ -1801,7 +1882,38 @@ Dumpstate::RunStatus Dumpstate::DumpstateDefaultAfterCritical() {
         ds.anr_data_ = GetDumpFds(ANR_DIR, ANR_FILE_PREFIX);
     }
 
-    ds.AddDir(RECOVERY_DIR, true);
+    int dpstatus = android::base::GetIntProperty("ro.boot.dp", 0xB);
+    std::string fusestatus = android::base::GetProperty("ro.boot.secureboot", "0");
+    if((strcmp(fusestatus.c_str(), "0") == 0) || ((strcmp(fusestatus.c_str(), "1") == 0) && (dpstatus == 0xB))) {
+        MYLOGD("dump qsee log\n");
+        ds.AddDir(QSEELOG_DIR, true);
+    }
+
+    //MIUI ADD: START
+    if (android::base::GetBoolProperty("ro.build.ab_update", false)) {
+        ds.AddDir(BOOTFAILD_AB_DIR, true);
+        ds.AddDir(RECOVERY_AB_DIR, true);
+    } else {
+        ds.AddDir(BOOTFAILD_DIR, true);
+        ds.AddDir(RECOVERY_DIR, true);
+    }
+    if (android::base::GetBoolProperty("persist.sys.miui_scout_enable", false)) {
+        ds.AddDir(MQSAS_SCOUT_DIR, true);
+        ds.AddDir(ANR_DIR, true);
+    }
+    if (!(android::base::GetBoolProperty("persist.mtbf.test", false)
+                || (android::base::GetIntProperty("persist.omni.test", 0) == 1))) {
+        ds.AddDir(MQSAS_JE_DIR, true);
+        ds.AddDir(MQSAS_NE_DIR, true);
+        ds.AddDir(MQSAS_ANR_DIR, true);
+        ds.AddDir(MQSAS_WATCHDOG_DIR, true);
+        ds.AddDir(MQS_HPROF_DIR, true);
+    }
+    ds.AddDir(MQS_BINDER_DIR, true);
+    ds.AddDir(MQS_FD_DIR, true);
+    ds.AddDir(MQS_LOCAL_RESTART_LOG_DIR, true);
+    ds.AddDir(MQS_HANG_DIR, true);
+    //END
     ds.AddDir(RECOVERY_DATA_DIR, true);
     ds.AddDir(UPDATE_ENGINE_LOG_DIR, true);
     ds.AddDir(LOGPERSIST_DATA_DIR, false);
@@ -1831,6 +1943,9 @@ Dumpstate::RunStatus Dumpstate::DumpstateDefaultAfterCritical() {
     // Gather shared memory buffer info if the product implements it
     RunCommand("Dmabuf dump", {"dmabuf_dump"});
     RunCommand("Dmabuf per-buffer/per-exporter/per-device stats", {"dmabuf_dump", "-b"});
+     // MIUI ADD
+     // Get qrtr info by dump qrtr-lookup
+    DumpVendorFile("QRTR-LOOKUP", "/data/vendor/qrtr/qrtr-lookup.txt");
 
     DumpFile("PSI cpu", "/proc/pressure/cpu");
     DumpFile("PSI memory", "/proc/pressure/memory");
@@ -2045,6 +2160,75 @@ static void DumpstateWifiOnly() {
     printf("== dumpstate: done (id %d)\n", ds.id_);
     printf("========================================================\n");
 }
+
+// MIUI ADD: START
+static void DumpstateLiteOnly() {
+    unsigned long timeout_ms = logcat_timeout({"main", "system", "crash"});
+    RunCommand("SYSTEM LOG",
+            {"logcat", "-v", "threadtime", "-v", "printable", "-v", "uid", "-d", "*:v"},
+            CommandOptions::WithTimeoutInMs(timeout_ms).Build());
+
+    timeout_ms = logcat_timeout({"events"});
+    RunCommand("EVENT_LOG",
+            {"logcat", "-b", "events", "-v", "threadtime", "-v", "printable", "-v", "uid", "-d", "*:v"},
+            CommandOptions::WithTimeoutInMs(timeout_ms).Build(), true);
+
+    RunCommand("LAST LOGCAT", {"logcat", "-L", "-b", "all", "-v", "threadtime",
+            "-v", "printable", "-v", "uid", "-d", "*:v"});
+
+    time_t logcat_ts = time(nullptr);
+
+    // Collect native crash tombstones in 30 min if exists
+    ds.tombstone_data_ = GetDumpFds(TOMBSTONE_DIR, TOMBSTONE_FILE_PREFIX);
+    const bool tombstones_dumped = AddDumps(ds.tombstone_data_.begin(), ds.tombstone_data_.end(),
+                                            "TOMBSTONE", true /* add_to_zip */);
+    if (!tombstones_dumped) {
+        printf("*** NO TOMBSTONES to dump in %s\n\n", TOMBSTONE_DIR.c_str());
+    }
+
+    // Collect java watchdog traces in 30 min if exists
+    // ds.anr_data_ = GetDumpFds(ANR_DIR, "traces_");
+    // const bool wdt_trace_dumped = AddDumps(ds.anr_data_.begin(), ds.anr_data_.end(),
+    //                                        "ANR WATCHDOG TRACES", true /* add_to_zip */);
+    // if (!wdt_trace_dumped) {
+    //     printf("*** NO WATCHDOG TRACES to dump in %s\n\n", ANR_DIR.c_str());
+    // }
+
+
+
+    RunCommand("UPTIME", {"uptime"});
+    DumpFile("POWERUP_REASON", "/sys/bootinfo/powerup_reason");
+    DumpFile("POWERUP_REASON_DETAIL", "/sys/bootinfo/powerup_reason_details");
+    DumpFile("POWEROFF_REASON", "/sys/bootinfo/poweroff_reason");
+
+    RunCommand("PROCESSES AND THREADS",
+            {"ps", "-A", "-T", "-Z", "-O", "pri,nice,rtprio,sched,pcy,time"});
+
+    if (android::base::GetBoolProperty("ro.logd.kernel", false)) {
+        DoKernelLogcat();
+    } else {
+        do_dmesg();
+    }
+
+    DoKmsg();
+
+    RunCommand("SYSTEM PROPERTIES", {"getprop"});
+
+    printf("========================================================\n");
+    printf("== Dropbox crashes\n");
+    printf("========================================================\n");
+    RunDumpsys("DROPBOX SYSTEM SERVER CRASHES", {"dropbox", "-p", "system_server_crash"});
+    RunDumpsys("DROPBOX SYSTEM APP CRASHES", {"dropbox", "-p", "system_app_crash"});
+    RunDumpsys("DROPBOX SYSTEM SERVER WATCHDOG", {"dropbox", "-p", "system_server_watchdog"});
+
+    printf("========================================================\n");
+    printf("== dumpstate: done (id %d)\n", ds.id_);
+    printf("========================================================\n");
+
+    // Capture logcat since the last time we did it.
+    DoSystemLogcat(logcat_ts);
+}
+// END
 
 Dumpstate::RunStatus Dumpstate::DumpTraces(const char** path) {
     const std::string temp_file_pattern = ds.bugreport_internal_dir_ + "/dumptrace_XXXXXX";
@@ -2591,6 +2775,10 @@ static bool PrepareToWriteToFile() {
         ds.base_name_ += "-telephony";
     } else if (ds.options_->wifi_only) {
         ds.base_name_ += "-wifi";
+    // MIUI ADD: START
+    } else if (ds.options_->lite_only) {
+        ds.base_name_ += "-lite";
+    // END
     }
 
     if (ds.options_->do_screenshot) {
@@ -2640,6 +2828,27 @@ static void FinalizeFile() {
         final_path = ds.GetPath(ds.options_->out_dir, ".zip");
         android::os::CopyFileToFile(ds.path_, final_path);
     }
+
+    // MIUI ADD: START
+    if (ds.options_->lite_only) {
+        if (ds.options_->lite_zip.empty()) {
+            MYLOGE("Failed to copy zip file for final path is empty");
+            final_path = ds.path_;
+        } else {
+            final_path = ds.options_->lite_zip;
+            MYLOGI("Copy from %s to final path: %s", ds.path_.c_str(), final_path.c_str());
+
+            android::base::unique_fd out_fd(android::os::OpenForWrite(final_path));
+            if (android::os::CopyFileToFd(ds.path_, out_fd.get())) {
+                android::os::UnlinkAndLogOnError(ds.path_);
+            }
+        }
+
+        if (ds.control_socket_fd_ != -1) {
+            dprintf(ds.control_socket_fd_, "OK:%s\n", final_path.c_str());
+        }
+    }
+    // END
 
     if (ds.options_->stream_to_socket) {
         android::os::CopyFileToFd(ds.path_, ds.control_socket_fd_);
@@ -2742,7 +2951,7 @@ void Dumpstate::DumpOptions::Initialize(BugreportMode bugreport_mode,
 Dumpstate::RunStatus Dumpstate::DumpOptions::Initialize(int argc, char* argv[]) {
     RunStatus status = RunStatus::OK;
     int c;
-    while ((c = getopt(argc, argv, "dho:svqzpLPBRSV:w")) != -1) {
+    while ((c = getopt(argc, argv, "dho:svqzpLPBRSV:wbf:")) != -1) {
         switch (c) {
             // clang-format off
             case 'o': out_dir = optarg;              break;
@@ -2754,6 +2963,10 @@ Dumpstate::RunStatus Dumpstate::DumpOptions::Initialize(int argc, char* argv[]) 
             case 'P': do_progress_updates = true;    break;
             case 'R': is_remote_mode = true;         break;
             case 'L': limited_only = true;           break;
+            // MIUI ADD: START
+            case 'b': lite_only = true;              break;
+            case 'f': lite_zip = optarg;             break;
+            // END
             case 'V':
             case 'd':
             case 'z':
@@ -2944,7 +3157,7 @@ Dumpstate::RunStatus Dumpstate::RunInternal(int32_t calling_uid,
 
     // If we are going to use a socket, do it as early as possible
     // to avoid timeouts from bugreport.
-    if (options_->stream_to_socket || options_->progress_updates_to_socket) {
+    if (options_->stream_to_socket || options_->progress_updates_to_socket || options_->lite_only) {
         MYLOGD("Opening control socket\n");
         control_socket_fd_ = open_socket_fn_("dumpstate");
         if (control_socket_fd_ == -1) {
@@ -2985,8 +3198,12 @@ Dumpstate::RunStatus Dumpstate::RunInternal(int32_t calling_uid,
         Vibrate(150);
     }
 
+    // MIUI ADD: START
+    uid_t uid = options_->lite_only ? AID_ROOT : AID_SHELL;
+    gid_t gid = options_->lite_only ? AID_ROOT : AID_SHELL;
+
     if (zip_file != nullptr) {
-        if (chown(path_.c_str(), AID_SHELL, AID_SHELL)) {
+        if (chown(path_.c_str(), uid, gid)) {
             MYLOGE("Unable to change ownership of zip file %s: %s\n", path_.c_str(),
                     strerror(errno));
         }
@@ -2999,7 +3216,7 @@ Dumpstate::RunStatus Dumpstate::RunInternal(int32_t calling_uid,
     if (!redirect_to_file(stderr, const_cast<char*>(log_path_.c_str()))) {
         return ERROR;
     }
-    if (chown(log_path_.c_str(), AID_SHELL, AID_SHELL)) {
+    if (chown(log_path_.c_str(), uid, gid)) {
         MYLOGE("Unable to change ownership of dumpstate log file %s: %s\n", log_path_.c_str(),
                 strerror(errno));
     }
@@ -3014,7 +3231,7 @@ Dumpstate::RunStatus Dumpstate::RunInternal(int32_t calling_uid,
     if (!redirect_to_file(stdout, const_cast<char*>(tmp_path_.c_str()))) {
         return ERROR;
     }
-    if (chown(tmp_path_.c_str(), AID_SHELL, AID_SHELL)) {
+    if (chown(tmp_path_.c_str(), uid, gid)) {
         MYLOGE("Unable to change ownership of temporary bugreport file %s: %s\n",
                 tmp_path_.c_str(), strerror(errno));
     }
@@ -3037,6 +3254,9 @@ Dumpstate::RunStatus Dumpstate::RunInternal(int32_t calling_uid,
     bool is_dumpstate_restricted = options_->telephony_only
                                    || options_->wifi_only
                                    || options_->limited_only;
+    // MIUI ADD:
+    is_dumpstate_restricted |= options_->lite_only;
+
     if (!is_dumpstate_restricted) {
         // Invoke critical dumpsys first to preserve system state, before doing anything else.
         RunDumpsysCritical();
@@ -3061,7 +3281,12 @@ Dumpstate::RunStatus Dumpstate::RunInternal(int32_t calling_uid,
         DumpstateWifiOnly();
     } else if (options_->limited_only) {
         DumpstateLimitedOnly();
+    // MIUI ADD START
+    } else if (options_->lite_only) {
+        DumpstateLiteOnly();
+    // END
     } else {
+        get_mcrash_history_fd(&mcrash_history_fd);
         // Dump state for the default case. This also drops root.
         RunStatus s = DumpstateDefaultAfterCritical();
         if (s != RunStatus::OK) {
@@ -3120,6 +3345,12 @@ Dumpstate::RunStatus Dumpstate::RunInternal(int32_t calling_uid,
     MYLOGI("done (id %d)\n", id_);
 
     TEMP_FAILURE_RETRY(dup2(dup_stderr_fd, fileno(stderr)));
+
+    // MIUI ADD: START
+    if (options_->lite_only) {
+        android::os::UnlinkAndLogOnError(ds.log_path_);
+    }
+    // END
 
     if (control_socket_fd_ != -1) {
         MYLOGD("Closing control socket\n");
@@ -3334,6 +3565,17 @@ Dumpstate::RunStatus Dumpstate::ParseCommandlineAndRun(int argc, char* argv[]) {
         // When directly running dumpstate binary, the output is not expected to be written
         // to any external file descriptor.
         assert(options_->bugreport_fd.get() == -1);
+
+        // MIUI ADD: START
+        if (options_->lite_only) {
+            options_->do_vibrate = false;
+            if (android::base::GetBoolProperty("ro.build.ab_update", false)) {
+                bugreport_internal_dir_ = BOOTFAILD_AB_DIR;
+            } else {
+                bugreport_internal_dir_ = BOOTFAILD_DIR;
+            }
+        }
+        // END
 
         // calling_uid and calling_package are for user consent to share the bugreport with
         // an app; they are irrelevant here because bugreport is triggered via command line.
@@ -3869,6 +4111,32 @@ int Dumpstate::DumpFile(const std::string& title, const std::string& path) {
     UpdateProgress(WEIGHT_FILE);
 
     return status;
+}
+/*MIUI ADD
+ * Prints the contents of a file from vendor domain.
+ */
+int Dumpstate::DumpVendorFile(const std::string& title, const std::string& path) {
+    DurationReporter duration_reporter(title);
+    if(!getMiSysService()) return -1;
+    std::size_t pos_last_slash, len_path;
+    std::string dir, file;
+    len_path = strlen(path.c_str());
+    pos_last_slash = path.rfind("/");
+    if (pos_last_slash!=std::string::npos) {
+        dir = path.substr(0, pos_last_slash + 1);
+        file = path.substr(pos_last_slash + 1, len_path - pos_last_slash + 1);
+    }
+    else {
+        dir = "/";
+        file = path;
+    }
+    service->MiSysReadFile(dir, file, [&](auto& readFileResult){
+        dprintf(STDOUT_FILENO, "------ %s (%s) ------\n", title.c_str(), path.c_str());
+        dprintf(STDOUT_FILENO, "%s", readFileResult.data.c_str());
+    });
+
+    UpdateProgress(WEIGHT_FILE);
+    return 0;
 }
 
 int read_file_as_long(const char *path, long int *output) {

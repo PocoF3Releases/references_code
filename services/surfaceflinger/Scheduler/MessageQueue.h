@@ -37,6 +37,7 @@ struct ICompositor {
     virtual bool commit(nsecs_t frameTime, int64_t vsyncId, nsecs_t expectedVsyncTime) = 0;
     virtual void composite(nsecs_t frameTime, int64_t vsyncId) = 0;
     virtual void sample() = 0;
+    virtual void updateTime(nsecs_t intendedVsyncTimeStamp) = 0;
 
 protected:
     ~ICompositor() = default;
@@ -72,6 +73,7 @@ public:
     virtual void waitMessage() = 0;
     virtual void postMessage(sp<MessageHandler>&&) = 0;
     virtual void scheduleFrame() = 0;
+    virtual void scheduleFrameImmed() = 0;
 
     using Clock = std::chrono::steady_clock;
     virtual std::optional<Clock::time_point> getScheduledFrameTime() const = 0;
@@ -94,6 +96,10 @@ protected:
         bool isFramePending() const;
 
         virtual void dispatchFrame(int64_t vsyncId, nsecs_t expectedVsyncTime);
+        virtual void dispatchFrameImmed();
+
+        // MIUI ADD:
+        nsecs_t mVsyncTimeStamp = 0;
     };
 
     friend class Handler;
@@ -143,6 +149,7 @@ public:
     void postMessage(sp<MessageHandler>&&) override;
 
     void scheduleFrame() override;
+    void scheduleFrameImmed() override;
 
     std::optional<Clock::time_point> getScheduledFrameTime() const override;
 };

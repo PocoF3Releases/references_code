@@ -25,6 +25,9 @@
 #include "PointerControllerInterface.h"
 #include "TouchCursorInputMapperCommon.h"
 
+// MIUI ADD:
+#include "../stubs/MiCursorInputMapperStub.h"
+
 namespace android {
 
 // The default velocity control parameters that has no effect.
@@ -65,9 +68,16 @@ void CursorMotionAccumulator::finishSync() {
 // --- CursorInputMapper ---
 
 CursorInputMapper::CursorInputMapper(InputDeviceContext& deviceContext)
-      : InputMapper(deviceContext) {}
+      : InputMapper(deviceContext) {
+      //MIUI ADD:
+      MiCursorInputMapperStub::init();
+}
 
-CursorInputMapper::~CursorInputMapper() {}
+CursorInputMapper::~CursorInputMapper() {
+    if (mPointerController != nullptr) {
+        mPointerController->fade(PointerControllerInterface::Transition::IMMEDIATE);
+    }
+}
 
 uint32_t CursorInputMapper::getSources() const {
     return mSource;
@@ -334,6 +344,9 @@ void CursorInputMapper::sync(nsecs_t when, nsecs_t readTime) {
     mWheelXVelocityControl.move(when, &hscroll, nullptr);
 
     mPointerVelocityControl.move(when, &deltaX, &deltaY);
+
+    //MIUI ADD:
+    MiCursorInputMapperStub::sync(&vscroll, &hscroll);
 
     int32_t displayId = ADISPLAY_ID_NONE;
     float xCursorPosition = AMOTION_EVENT_INVALID_CURSOR_POSITION;

@@ -34,7 +34,12 @@
 #include "FrameTracer/FrameTracer.h"
 #include "TimeStats/TimeStats.h"
 
+// MIUI ADD
+#include "MiSurfaceFlingerStub.h"
 #define EARLY_RELEASE_ENABLED false
+// MIUI ADD:
+#include "MiuiSurfaceFlingerInspectorStub.h"
+// END
 
 namespace android {
 
@@ -197,6 +202,17 @@ bool BufferStateLayer::willPresentCurrentTransaction() const {
              (mDrawingState.buffer != nullptr || mDrawingState.bgColorLayer != nullptr)));
 }
 
+/* TODO: vhau uncomment once deferred transaction migration complete in
+ * WindowManager
+void BufferStateLayer::pushPendingState() {
+    if (!mDrawingState.modified) {
+        return;
+    }
+    mPendingStates.push_back(mDrawingState);
+    ATRACE_INT(mTransactionName.c_str(), mPendingStates.size());
+}
+*/
+
 Rect BufferStateLayer::getCrop(const Layer::State& s) const {
     return s.crop;
 }
@@ -347,6 +363,8 @@ bool BufferStateLayer::setBuffer(std::shared_ptr<renderengine::ExternalTexture>&
     ATRACE_CALL();
 
     if (!buffer) {
+        // MIUI ADD:
+        ALOGI("setBuffer but null. %s", getName().c_str());
         return false;
     }
 
@@ -354,6 +372,15 @@ bool BufferStateLayer::setBuffer(std::shared_ptr<renderengine::ExternalTexture>&
             bufferData.flags.test(BufferData::BufferDataChange::frameNumberChanged);
     const uint64_t frameNumber =
             frameNumberChanged ? bufferData.frameNumber : mDrawingState.frameNumber + 1;
+
+    if (bufferData.invalid) {
+        callReleaseBufferCallback(bufferData.releaseBufferListener,
+                                  buffer->getBuffer(), bufferData.frameNumber,
+                                  bufferData.acquireFence,
+                                  mFlinger->getMaxAcquiredBufferCountForCurrentRefreshRate(
+                                          mOwnerUid));
+        return false;
+    }
 
     if (mDrawingState.buffer) {
         mReleasePreviousBuffer = true;
@@ -384,7 +411,11 @@ bool BufferStateLayer::setBuffer(std::shared_ptr<renderengine::ExternalTexture>&
             mLastClientCompositionFence = nullptr;
         }
     }
-
+    // MIUI ADD:
+    if(mDrawingState.frameNumber > frameNumber) {
+        ALOGI("setBuffer drawingN:%" PRId64 " frN:%" PRId64 " %s",
+           mDrawingState.frameNumber, frameNumber, getName().c_str());
+    }
     mDrawingState.frameNumber = frameNumber;
     mDrawingState.releaseBufferListener = bufferData.releaseBufferListener;
     mDrawingState.buffer = std::move(buffer);
@@ -439,6 +470,7 @@ bool BufferStateLayer::setBuffer(std::shared_ptr<renderengine::ExternalTexture>&
     mDrawingState.width = mDrawingState.buffer->getWidth();
     mDrawingState.height = mDrawingState.buffer->getHeight();
     mDrawingState.releaseBufferEndpoint = bufferData.releaseBufferEndpoint;
+
     return true;
 }
 
@@ -578,6 +610,10 @@ bool BufferStateLayer::fenceHasSignaled() const {
         return true;
     }
 
+    if (latchUnsignaledBuffers()) {
+        return true;
+    }
+
     const bool fenceSignaled =
             getDrawingState().acquireFence->getStatus() == Fence::Status::Signaled;
     if (!fenceSignaled) {
@@ -700,6 +736,14 @@ status_t BufferStateLayer::updateActiveBuffer() {
     mBufferInfo.mBuffer = s.buffer;
     mBufferInfo.mFence = s.acquireFence;
     mBufferInfo.mFrameNumber = s.frameNumber;
+    // MIUI ADD: dynamic SurfaceFlinger Log
+    if(MiSurfaceFlingerStub::isDynamicSfLog()) {
+        ALOGI("sf.updateActiveBuffer bufId:%" PRId64 " frN:%" PRId64
+            " layerId:%d preRelease:%s",
+            s.buffer->getBuffer()->getId(), s.frameNumber,
+            getSequence(), mPreviousReleaseCallbackId.to_string().c_str());
+    }
+    // END
 
     return NO_ERROR;
 }
@@ -792,6 +836,7 @@ void BufferStateLayer::gatherBufferInfo() {
     mBufferInfo.mFenceTime = std::make_shared<FenceTime>(s.acquireFence);
     mBufferInfo.mFence = s.acquireFence;
     mBufferInfo.mTransform = s.bufferTransform;
+    MiSurfaceFlingerStub::changeLayerDataSpace(this);
     auto lastDataspace = mBufferInfo.mDataspace;
     mBufferInfo.mDataspace = translateDataspace(s.dataspace);
     if (lastDataspace != mBufferInfo.mDataspace) {
@@ -858,7 +903,14 @@ bool BufferStateLayer::bufferNeedsFiltering() const {
 
 void BufferStateLayer::decrementPendingBufferCount() {
     int32_t pendingBuffers = --mPendingBufferTransactions;
+    if (mFlinger->mDolphinWrapper.dolphinTrackBufferDecrement) {
+        mFlinger->mDolphinWrapper.dolphinTrackBufferDecrement(mBlastTransactionName.c_str(),
+                pendingBuffers);
+    }
     tracePendingBufferCount(pendingBuffers);
+    // MIUI ADD:
+    MiuiSurfaceFlingerInspectorStub::recordBufferTxCount(mBlastTransactionName.c_str(), pendingBuffers);
+    // END
 }
 
 void BufferStateLayer::tracePendingBufferCount(int32_t pendingBuffers) {

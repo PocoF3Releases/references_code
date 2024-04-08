@@ -285,6 +285,15 @@ void DisplayColorProfile::populateColorModes(
         }
     }
 
+#ifdef MI_FEATURE_ENABLE
+    iter = hwcColorModes.find(ColorMode::DISPLAY_P3);
+    if (iter != hwcColorModes.end()) {
+        for (auto intent : iter->second) {
+            sdrRenderIntents.insert(intent);
+        }
+    }
+#endif
+
     // add all known SDR combinations
     for (auto intent : sdrRenderIntents) {
         for (auto mode : sSdrColorModes) {

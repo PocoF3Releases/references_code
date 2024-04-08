@@ -18,6 +18,14 @@
 
 #include "VibratorInputMapper.h"
 
+// MIUI ADD START:
+#include "../stubs/MiInputReaderStub.h"
+#ifdef MIUI_BUILD
+#undef ALOGD
+#define ALOGD(...) if (MiInputReaderStub::getInputReaderAll()) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+#endif
+// END
+
 namespace android {
 
 VibratorInputMapper::VibratorInputMapper(InputDeviceContext& deviceContext)

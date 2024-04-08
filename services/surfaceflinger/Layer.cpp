@@ -75,9 +75,15 @@
 #include "SurfaceFlinger.h"
 #include "TimeStats/TimeStats.h"
 #include "TunnelModeEnabledReporter.h"
+#include "QtiGralloc.h"
+#include "MiSurfaceFlingerStub.h"
+#ifdef MI_FEATURE_ENABLE
+#include "MiuiSurfaceFlingerInspectorStub.h"
+#endif
 
 #define DEBUG_RESIZE 0
 
+using android::hardware::graphics::common::V1_0::BufferUsage;
 namespace android {
 namespace {
 constexpr int kDumpTableRowLength = 159;
@@ -144,6 +150,8 @@ Layer::Layer(const LayerCreationArgs& args)
     mDrawingState.isTrustedOverlay = false;
     mDrawingState.dropInputMode = gui::DropInputMode::NONE;
     mDrawingState.dimmingEnabled = true;
+    //MIUI ADD:
+    mDrawingState.screenFlags = 0;
 
     if (args.flags & ISurfaceComposerClient::eNoColorFill) {
         // Set an invalid color so there is no color fill.
@@ -188,6 +196,9 @@ Layer::~Layer() {
     if (mHadClonedChild) {
         mFlinger->mNumClones--;
     }
+#ifdef MI_FEATURE_ENABLE
+    MiuiSurfaceFlingerInspectorStub::removePredictionsByLayer(mName);
+#endif
 }
 
 LayerCreationArgs::LayerCreationArgs(SurfaceFlinger* flinger, sp<Client> client, std::string name,
@@ -355,6 +366,9 @@ void Layer::computeBounds(FloatRect parentBounds, ui::Transform parentTransform,
     // Calculate bounds by croping diplay frame with layer crop and parent bounds
     FloatRect bounds = mSourceBounds;
     const Rect layerCrop = getCrop(s);
+#if MI_SCREEN_PROJECTION
+    if (!MiSurfaceFlingerStub::continueComputeBounds(this)) return;
+#endif
     if (!layerCrop.isEmpty()) {
         bounds = mSourceBounds.intersect(layerCrop.toFloatRect());
     }
@@ -418,7 +432,12 @@ void Layer::prepareBasicGeometryCompositionState() {
     compositionState->isVisible = isVisible();
     compositionState->isOpaque = opaque && !usesRoundedCorners && alpha == 1.f;
     compositionState->shadowRadius = mEffectiveShadowRadius;
-
+#ifdef MI_SF_FEATURE
+    if (mDrawingState.shadowSettings.shadowType != 0) {
+        compositionState->shadowType = drawingState.shadowSettings.shadowType;
+        compositionState->shadowLength = drawingState.shadowSettings.length;
+    }
+#endif
     compositionState->contentDirty = contentDirty;
     contentDirty = false;
 
@@ -432,6 +451,9 @@ void Layer::prepareBasicGeometryCompositionState() {
     compositionState->backgroundBlurRadius = drawingState.backgroundBlurRadius;
     compositionState->blurRegions = drawingState.blurRegions;
     compositionState->stretchEffect = getStretchEffect();
+#if MI_SCREEN_PROJECTION
+       MiSurfaceFlingerStub::prepareBasicGeometryCompositionState(compositionState, drawingState, this);
+#endif
 }
 
 void Layer::prepareGeometryCompositionState() {
@@ -445,6 +467,11 @@ void Layer::prepareGeometryCompositionState() {
     compositionState->geomBufferUsesDisplayInverseTransform = getTransformToDisplayInverse();
     compositionState->geomUsesSourceCrop = usesSourceCrop();
     compositionState->isSecure = isSecure();
+    compositionState->isSecureDisplay = isSecureDisplay();
+    compositionState->isSecureCamera = isSecureCamera();
+    compositionState->isScreenshot = isScreenshot();
+
+    compositionState->layerClass = mLayerClass;
 
     compositionState->metadata.clear();
     const auto& supportedMetadata = mFlinger->getHwComposer().getSupportedLayerGenericMetadata();
@@ -490,7 +517,11 @@ void Layer::preparePerFrameCompositionState() {
     // Rounded corners no longer force client composition, since we may use a
     // hole punch so that the layer will appear to have rounded corners.
     if (isHdrY410() || drawShadows() || drawingState.blurRegions.size() > 0 ||
+#ifdef MI_SF_FEATURE
+        compositionState->stretchEffect.hasEffect() || drawMiuiShadows()) {
+#else
         compositionState->stretchEffect.hasEffect()) {
+#endif
         compositionState->forceClientComposition = true;
     }
     // If there are no visible region changes, we still need to update blur parameters.
@@ -633,6 +664,18 @@ std::optional<compositionengine::LayerFE::LayerSettings> Layer::prepareClientCom
     layerSettings.stretchEffect = getStretchEffect();
     // Record the name of the layer for debugging further down the stack.
     layerSettings.name = getName();
+#ifdef MI_SF_FEATURE
+    MiSurfaceFlingerStub::setVirtualDisplayCoverBlur(this, layerSettings);
+    if (mDrawingState.shadowSettings.shadowType == 4) {
+        layerSettings.atmosphereLamp = true;
+    }
+    // MIUI ADD: HDR Dimmer
+    layerSettings.hdrDimmerEnabled = mDrawingState.hdrDimmerEnabled;
+    layerSettings.hdrBrightRegion = mDrawingState.hdrBrightRegion;
+    layerSettings.hdrDimRegion = mDrawingState.hdrDimRegion;
+    layerSettings.hdrDimmerRatio = mDrawingState.hdrDimmerRatio;
+    // END
+#endif
     return layerSettings;
 }
 
@@ -666,6 +709,10 @@ std::vector<compositionengine::LayerFE::LayerSettings> Layer::prepareClientCompo
         prepareClearClientComposition(*layerSettings, false /* blackout */);
         return {*layerSettings};
     }
+#ifdef MI_SF_FEATURE
+    MiSurfaceFlingerStub::prepareMiuiShadowClientComposition(*layerSettings,
+                                                targetSettings.viewport, this);
+#endif
 
     // set the shadow for the layer if needed
     prepareShadowClientComposition(*layerSettings, targetSettings.viewport);
@@ -700,6 +747,23 @@ bool Layer::isSecure() const {
     return (p != nullptr) ? p->isSecure() : false;
 }
 
+bool Layer::isSecureDisplay() const {
+    sp<const GraphicBuffer> buffer = getBuffer();
+    return buffer && (buffer->getUsage() & GRALLOC_USAGE_PRIVATE_SECURE_DISPLAY);
+}
+
+bool Layer::isSecureCamera() const {
+    sp<const GraphicBuffer> buffer = getBuffer();
+    bool protected_buffer = buffer && (buffer->getUsage() & BufferUsage::PROTECTED);
+    bool camera_output = buffer && (buffer->getUsage() & BufferUsage::CAMERA_OUTPUT);
+    return protected_buffer && camera_output;
+}
+
+bool Layer::isScreenshot() const {
+    return ((getName().find("ScreenshotSurface") != std::string::npos) ||
+            (getName().find("RotationLayer") != std::string::npos) ||
+            (getName().find("BackColorSurface") != std::string::npos));
+}
 // ----------------------------------------------------------------------------
 // transaction
 // ----------------------------------------------------------------------------
@@ -894,6 +958,11 @@ bool Layer::isTrustedOverlay() const {
 bool Layer::setSize(uint32_t w, uint32_t h) {
     if (mDrawingState.requested_legacy.w == w && mDrawingState.requested_legacy.h == h)
         return false;
+
+    if (!MiSurfaceFlingerStub::validateLayerSize(w, h)) {
+         return false;
+    }
+
     mDrawingState.requested_legacy.w = w;
     mDrawingState.requested_legacy.h = h;
     mDrawingState.modified = true;
@@ -906,6 +975,7 @@ bool Layer::setSize(uint32_t w, uint32_t h) {
 }
 
 bool Layer::setAlpha(float alpha) {
+    MiSurfaceFlingerStub::getHBMLayerAlpha(this, alpha);
     if (mDrawingState.color.a == alpha) return false;
     mDrawingState.sequence++;
     mDrawingState.color.a = alpha;
@@ -913,6 +983,14 @@ bool Layer::setAlpha(float alpha) {
     setTransactionFlags(eTransactionNeeded);
     return true;
 }
+
+#if MI_SCREEN_PROJECTION
+// MIUI ADD: START
+bool Layer::setScreenFlags(int32_t screenFlags) {
+    return MiSurfaceFlingerStub::setScreenFlags(screenFlags, this);
+}
+// END
+#endif
 
 bool Layer::setBackgroundColor(const half3& color, float alpha, ui::Dataspace dataspace) {
     if (!mDrawingState.bgColorLayer && alpha == 0) {
@@ -1011,6 +1089,10 @@ bool Layer::setFlags(uint32_t flags, uint32_t mask) {
     mDrawingState.sequence++;
     mDrawingState.flags = newFlags;
     mDrawingState.modified = true;
+#if MI_SCREEN_PROJECTION
+        MiSurfaceFlingerStub::setChildImeFlags(flags, mask,this);
+#endif
+
     setTransactionFlags(eTransactionNeeded);
     return true;
 }
@@ -1075,15 +1157,21 @@ bool Layer::setFrameRateSelectionPriority(int32_t priority) {
 int32_t Layer::getFrameRateSelectionPriority() const {
     // Check if layer has priority set.
     if (mDrawingState.frameRateSelectionPriority != PRIORITY_UNSET) {
-        return mDrawingState.frameRateSelectionPriority;
+        mPriority = mDrawingState.frameRateSelectionPriority;
+        return mPriority;
     }
     // If not, search whether its parents have it set.
     sp<Layer> parent = getParent();
     if (parent != nullptr) {
-        return parent->getFrameRateSelectionPriority();
+        mPriority = parent->getFrameRateSelectionPriority();
+        return mPriority;
     }
 
     return Layer::PRIORITY_UNSET;
+}
+
+int32_t Layer::getPriority() {
+    return mPriority;
 }
 
 bool Layer::isLayerFocusedBasedOnPriority(int32_t priority) {
@@ -1097,6 +1185,14 @@ ui::LayerStack Layer::getLayerStack() const {
     return getDrawingState().layerStack;
 }
 
+void Layer::setSmomoLayerStackId() {
+    smomoLayerStackId = getLayerStack().id;
+}
+
+uint32_t Layer::getSmomoLayerStackId() {
+    return smomoLayerStackId;
+}
+
 bool Layer::setShadowRadius(float shadowRadius) {
     if (mDrawingState.shadowRadius == shadowRadius) {
         return false;
@@ -1108,6 +1204,79 @@ bool Layer::setShadowRadius(float shadowRadius) {
     setTransactionFlags(eTransactionNeeded);
     return true;
 }
+
+#ifdef MI_SF_FEATURE
+bool Layer::setShadowType(int shadowType) {
+    return MiSurfaceFlingerStub::setShadowType(shadowType, this);
+}
+
+bool Layer::setShadowLength(float length) {
+    return MiSurfaceFlingerStub::setShadowLength(length, this);
+}
+
+bool Layer::setShadowColor(const half4& color) {
+    return MiSurfaceFlingerStub::setShadowColor(color, this);
+}
+
+bool Layer::setShadowOffset(float offsetX, float offsetY) {
+    return MiSurfaceFlingerStub::setShadowOffset(offsetX, offsetY, this);
+}
+
+bool Layer::setShadowOutset(float outset) {
+    return MiSurfaceFlingerStub::setShadowOutset(outset, this);
+}
+
+bool Layer::setShadowLayers(int32_t numOfLayers) {
+    return MiSurfaceFlingerStub::setShadowLayers(numOfLayers, this);
+}
+
+bool Layer::hasVisibleChildren() const {
+    bool result = false;
+    for (const sp<Layer>& child : mCurrentChildren) {
+        result |= child->hasVisibleChildren();
+    }
+    return result;
+}
+#endif
+
+#ifdef MI_SF_FEATURE
+// MIUI ADD: HDR Dimmer
+bool Layer::setHdrDimmer(bool enable, std::vector<std::vector<float>> brightRegion,
+                         std::vector<std::vector<float>> dimRegion) {
+    if (!canDrawHdrDim()) {
+        bool result = false;
+        for (const sp<Layer>& child : mDrawingChildren) {
+            result |= child->setHdrDimmer(enable, brightRegion, dimRegion);
+        }
+        return result;
+    }
+    if (mDrawingState.hdrDimmerEnabled == enable
+            && mDrawingState.hdrBrightRegion == brightRegion
+            && mDrawingState.hdrDimRegion == dimRegion) {
+        return false;
+    }
+    mDrawingState.sequence++;
+    mDrawingState.hdrDimmerEnabled = enable;
+    mDrawingState.hdrBrightRegion = brightRegion;
+    mDrawingState.hdrDimRegion = dimRegion;
+    mDrawingState.modified = true;
+    setTransactionFlags(eTransactionNeeded);
+    return true;
+}
+
+bool Layer::setHdrDimmerRatio(float ratio) {
+
+    if (mDrawingState.hdrDimmerRatio == ratio) {
+        return false;
+    }
+    mDrawingState.sequence++;
+    mDrawingState.hdrDimmerRatio = ratio;
+    mDrawingState.modified = true;
+    setTransactionFlags(eTransactionNeeded);
+    return true;
+}
+// END
+#endif
 
 bool Layer::setFixedTransformHint(ui::Transform::RotationFlags fixedTransformHint) {
     if (mDrawingState.fixedTransformHint == fixedTransformHint) {
@@ -1453,6 +1622,7 @@ void Layer::miniDumpHeader(std::string& result) {
     result.append(" Layer name\n");
     result.append("           Z | ");
     result.append(" Window Type | ");
+    result.append(" Layer Class | ");
     result.append(" Comp Type | ");
     result.append(" Transform | ");
     result.append("  Disp Frame (LTRB) | ");
@@ -1490,6 +1660,7 @@ void Layer::miniDump(std::string& result, const DisplayDevice& display) const {
         StringAppendF(&result, "  %10d | ", layerState.z);
     }
     StringAppendF(&result, "  %10d | ", mWindowType);
+    StringAppendF(&result, "  %10d | ", mLayerClass);
     StringAppendF(&result, "%10s | ", toString(getCompositionType(display)).c_str());
     StringAppendF(&result, "%10s | ", toString(outputLayerState.bufferTransform).c_str());
     const Rect& frame = outputLayerState.displayFrame;
@@ -1586,8 +1757,9 @@ ssize_t Layer::removeChild(const sp<Layer>& layer) {
 void Layer::setChildrenDrawingParent(const sp<Layer>& newParent) {
     for (const sp<Layer>& child : mDrawingChildren) {
         child->mDrawingParent = newParent;
-        child->computeBounds(newParent->mBounds, newParent->mEffectiveTransform,
-                             newParent->mEffectiveShadowRadius);
+        const float childShadowRadius =
+                newParent->canDrawShadows() ? 0.f : newParent->mEffectiveShadowRadius;
+        child->computeBounds(newParent->mBounds, newParent->mEffectiveTransform, childShadowRadius);
     }
 }
 
@@ -2102,6 +2274,9 @@ void Layer::writeToProtoCommonState(LayerProto* layerInfo, LayerVector::StateSet
 
     layerInfo->set_id(sequence);
     layerInfo->set_name(getName().c_str());
+#if MI_SCREEN_PROJECTION
+        layerInfo->set_name(MiSurfaceFlingerStub::getLayerProtoName(this, state));
+#endif
     layerInfo->set_type(getType());
 
     for (const auto& child : children) {
@@ -2393,7 +2568,13 @@ WindowInfo Layer::fillInputInfo(const ui::Transform& displayTransform, bool disp
     // InputDispatcher, and obviously if they aren't visible they can't occlude
     // anything.
     const bool visible = hasInputInfo() ? canReceiveInput() : isVisible();
-    info.setInputConfig(WindowInfo::InputConfig::NOT_VISIBLE, !visible);
+
+    info.visible = visible;
+#if MI_SCREEN_PROJECTION
+    MiSurfaceFlingerStub::fillInputInfo(&info, this);
+#endif
+
+    info.setInputConfig(WindowInfo::InputConfig::NOT_VISIBLE, !info.visible);
 
     info.alpha = getAlpha();
     fillTouchOcclusionMode(info);
@@ -2631,6 +2812,10 @@ bool Layer::isInternalDisplayOverlay() const {
 
     sp<Layer> parent = mDrawingParent.promote();
     return parent && parent->isInternalDisplayOverlay();
+}
+
+nsecs_t Layer::getPreviousGfxInfo() {
+    return mFrameTracker.getPreviousGfxInfo();
 }
 
 void Layer::setClonedChild(const sp<Layer>& clonedChild) {

@@ -47,6 +47,10 @@ private:
     std::vector<int32_t> mUids = {};
     /** WorkSource Tag array */
     std::optional<std::vector<std::optional<String16>>> mNames = {};
+    //MIUI ADD START
+    String16 name0;
+    int32_t pid0;
+    //END
 };
 
 } // namespace android::os

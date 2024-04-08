@@ -55,6 +55,12 @@ OneShotTimer::~OneShotTimer() {
     stop();
 }
 
+#ifdef MI_FEATURE_ENABLE
+void OneShotTimer::setInterval(Interval interval) {
+    const_cast<Interval&>(mInterval) = interval;
+}
+#endif
+
 void OneShotTimer::start() {
     int result = sem_init(&mSemaphore, 0, 0);
     LOG_ALWAYS_FATAL_IF(result, "sem_init failed");

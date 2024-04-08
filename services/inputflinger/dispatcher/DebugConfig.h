@@ -23,6 +23,21 @@
 #include <log/log_event_list.h>
 
 namespace android::inputdispatcher {
+// MIUI ADD : START
+#ifdef MIUI_BUILD
+// we need all debug info on miui version, because our log control by dumpsys input debuglog
+const bool DEBUG_INBOUND_EVENT_DETAILS = true;
+const bool DEBUG_OUTBOUND_EVENT_DETAILS = true;
+const bool DEBUG_DISPATCH_CYCLE = true;
+const bool DEBUG_CHANNEL_CREATION = true;
+const bool DEBUG_INJECTION = true;
+const bool DEBUG_FOCUS = true;
+const bool DEBUG_TOUCH_MODE = true;
+const bool DEBUG_TOUCH_OCCLUSION = true;
+const bool DEBUG_APP_SWITCH = true;
+const bool DEBUG_HOVER = true;
+#else
+// END
 /**
  * Log detailed debug messages about each inbound event notification to the dispatcher.
  * Enable this via "adb shell setprop log.tag.InputDispatcherInboundEvent DEBUG" (requires restart)
@@ -94,6 +109,8 @@ const bool DEBUG_APP_SWITCH =
  */
 const bool DEBUG_HOVER =
         __android_log_is_loggable(ANDROID_LOG_DEBUG, LOG_TAG "Hover", ANDROID_LOG_INFO);
+// MIUI ADD :
+#endif
 } // namespace android::inputdispatcher
 
 #endif // _UI_INPUT_DISPATCHER_DEBUG_CONFIG_H

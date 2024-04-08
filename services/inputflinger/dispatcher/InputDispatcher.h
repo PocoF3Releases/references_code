@@ -563,6 +563,8 @@ private:
         bool hasBlockingOcclusion;
         float obscuringOpacity;
         std::string obscuringPackage;
+        // MIUI ADD:
+        std::string obscuringWindowName;
         int32_t obscuringUid;
         std::vector<std::string> debugInfo;
     };
@@ -684,6 +686,99 @@ private:
     bool recentWindowsAreOwnedByLocked(int32_t pid, int32_t uid) REQUIRES(mLock);
 
     sp<InputReporterInterface> mReporter;
+    // MIUI ADD:START
+    // some method or other can't move to stub so add here
+    enum MiuiSwitchDump {
+        OUT_DUMP_WINDOW = 0x01,
+        OUT_DUMP_ERROREVENTS = 0x02,
+    };
+
+    void miuiAddAnrStateLocked(const std::string time, const std::string& windowLabel,
+                         const std::string& reason) REQUIRES(mLock);
+    // for stub method
+    // change private to public for method because stub need to use
+public:
+    sp<android::gui::WindowInfoHandle> getWindowHandleForStubLocked(
+            const sp<IBinder>& windowHandleToken) const REQUIRES(mLock) {
+        return getWindowHandleLocked(windowHandleToken);
+    }
+
+    android::os::InputEventInjectionResult findTouchedWindowTargetsForStubLocked(
+            const nsecs_t& currentTime, const MotionEntry& entry,
+            std::vector<InputTarget>& inputTargets, nsecs_t* const& nextWakeupTime,
+            bool* const& outConflictingPointerActions) REQUIRES(mLock) {
+        return findTouchedWindowTargetsLocked(currentTime, entry, inputTargets, nextWakeupTime,
+                                              outConflictingPointerActions);
+    }
+
+    void setInjectionResultForStub(EventEntry& entry,
+                                   const android::os::InputEventInjectionResult& injectionResult) {
+        setInjectionResult(entry, injectionResult);
+    }
+
+    void synthesizeCancelationEventsForMonitorsForStubLocked(const CancelationOptions& options)
+            REQUIRES(mLock) {
+        synthesizeCancelationEventsForMonitorsLocked(options);
+    }
+
+    void addGlobalMonitoringTargetsForStubLocked(std::vector<InputTarget>& inputTargets,
+                                                 const int32_t& displayId) REQUIRES(mLock) {
+        addGlobalMonitoringTargetsLocked(inputTargets, displayId);
+    }
+    void synthesizeCancelationEventsForAllConnectionsForStubLocked(
+            const CancelationOptions& options) REQUIRES(mLock) {
+        synthesizeCancelationEventsForAllConnectionsLocked(options);
+    }
+    void dispatchEventForStubLocked(const nsecs_t& currentTime,
+                                    const std::shared_ptr<EventEntry>& entry,
+                                    const std::vector<InputTarget>& inputTargets) REQUIRES(mLock) {
+        dispatchEventLocked(currentTime, entry, inputTargets);
+    }
+    int32_t getTargetDisplayIdForStub(const EventEntry& entry) { return getTargetDisplayId(entry); }
+    const std::mutex& getLock() { return mLock; }
+    void addToReplacedKeysForStub(const int32_t& keyCode, const int32_t& deviceId,
+                                  const int32_t& newKeyCode) {
+        std::scoped_lock _l(mLock);
+        struct KeyReplacement replacement = {keyCode, deviceId};
+        mReplacedKeys[replacement] = newKeyCode;
+    }
+    bool isInputFilterEnabledForStubLocked() REQUIRES(mLock) { return mInputFilterEnabled; }
+    void resetNoFocusedWindowTimeoutForStubLocked() REQUIRES(mLock) {
+        resetNoFocusedWindowTimeoutLocked();
+    }
+    const std::unordered_map<int32_t /*displayId*/, android::gui::DisplayInfo>&
+                                                    getDisplayInfosForStubLock() REQUIRES(mLock) {
+        return mDisplayInfos;
+    }
+    void releasePendingEventForStubLocked() REQUIRES(mLock) {
+        releasePendingEventLocked();
+    }
+    const std::vector<sp<android::gui::WindowInfoHandle>>& getWindowHandlesForStubLocked(
+            int32_t displayId) const REQUIRES(mLock){
+        return getWindowHandlesLocked(displayId);
+    }
+    const std::shared_ptr<EventEntry>& getPendingEventForStubLocked() REQUIRES(mLock) {
+        return mPendingEvent;
+    }
+
+    int handleReceiveCallbackForStub(int events, sp<IBinder>& connectionToken) {
+        return handleReceiveCallback(events, connectionToken);
+    }
+
+    void startDispatchCycleForStub(nsecs_t currentTime, const sp<Connection>& connection) {
+        std::scoped_lock _l(mLock);
+        startDispatchCycleLocked(currentTime, connection);
+    }
+
+    const sp<Looper>& getLooper() {
+        return mLooper;
+    }
+
+    sp<android::gui::WindowInfoHandle> findTouchedForegroundWindowForStubLocked(
+            int32_t displayId) const REQUIRES(mLock) {
+        return findTouchedForegroundWindowLocked(displayId);
+    }
+    // END
 };
 
 } // namespace android::inputdispatcher

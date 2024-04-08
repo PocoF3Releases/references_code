@@ -60,6 +60,33 @@ void InputTarget::addPointers(BitSet32 newPointerIds, const ui::Transform& trans
     }
 }
 
+// MIUI MOD: START Activity Embedding
+void InputTarget::addPointers(BitSet32 newPointerIds, const ui::Transform& transform,
+                     bool isNeedMiuiEmbeddedEventMapping, float miuiEmbeddedMidLeft, float miuiEmbeddedMidRight,
+                     float miuiEmbeddedHotMarginLeftRight, float miuiEmbeddedHotMarginTopBottom) {
+    // The pointerIds can be empty, but still a valid InputTarget. This can happen for Monitors
+    // and non splittable windows since we will just use all the pointers from the input event.
+    if (newPointerIds.isEmpty()) {
+        setDefaultPointerTransform(transform);
+        return;
+    }
+
+    // Ensure that the new set of pointers doesn't overlap with the current set of pointers.
+    ALOG_ASSERT((pointerIds & newPointerIds) == 0);
+
+    pointerIds |= newPointerIds;
+    while (!newPointerIds.isEmpty()) {
+        int32_t pointerId = newPointerIds.clearFirstMarkedBit();
+        pointerTransforms[pointerId] = transform;
+        pointerInfos[pointerId].isNeedMiuiEmbeddedEventMapping = isNeedMiuiEmbeddedEventMapping;
+        pointerInfos[pointerId].miuiEmbeddedMidLeft = miuiEmbeddedMidLeft;
+        pointerInfos[pointerId].miuiEmbeddedMidRight = miuiEmbeddedMidRight;
+        pointerInfos[pointerId].miuiEmbeddedHotMarginLeftRight = miuiEmbeddedHotMarginLeftRight;
+        pointerInfos[pointerId].miuiEmbeddedHotMarginTopBottom = miuiEmbeddedHotMarginTopBottom;
+    }
+}
+// END
+
 void InputTarget::setDefaultPointerTransform(const ui::Transform& transform) {
     pointerIds.clear();
     pointerTransforms[0] = transform;

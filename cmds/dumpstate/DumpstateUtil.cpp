@@ -286,8 +286,9 @@ int RunCommandToFd(int fd, const std::string& title, const std::vector<std::stri
     args[size - 1] = nullptr;
 
     const char* command = command_string.c_str();
+    bool enable_miui_debugging = android::base::GetBoolProperty("ro.debuggable", false) ? 1 : 0;
 
-    if (options.PrivilegeMode() == SU_ROOT && PropertiesHelper::IsUserBuild()) {
+    if (options.PrivilegeMode() == SU_ROOT && PropertiesHelper::IsUserBuild() && !enable_miui_debugging) {
         dprintf(fd, "Skipping '%s' on user build.\n", command);
         return 0;
     }

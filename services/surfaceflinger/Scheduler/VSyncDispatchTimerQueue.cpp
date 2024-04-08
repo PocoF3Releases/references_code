@@ -24,6 +24,10 @@
 
 #include <scheduler/TimeKeeper.h>
 
+#ifdef MI_FEATURE_ENABLE
+#include "MiSurfaceFlingerStub.h"
+#endif
+
 #include "VSyncDispatchTimerQueue.h"
 #include "VSyncTracker.h"
 
@@ -109,6 +113,22 @@ ScheduleResult VSyncDispatchTimerQueueEntry::schedule(VSyncDispatch::ScheduleTim
         nextWakeupTime = nextVsyncTime - timing.workDuration - timing.readyDuration;
     }
 
+#ifdef MI_FEATURE_ENABLE
+    if (MiSurfaceFlingerStub::isSceneExist(VSYNC_OPTIMIZE_SCENE)) {
+        optimizeNextVsyncTime(tracker, nextVsyncTime, now, timing);
+        nextWakeupTime = nextVsyncTime - timing.workDuration - timing.readyDuration;
+        if(MiSurfaceFlingerStub::isModeChangeOpt()) {
+            bool const wouldSkipAVsyncTargetOptimize =
+                    mArmedInfo && (nextVsyncTime > (mArmedInfo->mActualVsyncTime + mMinVsyncDistance));
+            bool const wouldSkipAWakeupOptimize =
+                    mArmedInfo && ((nextWakeupTime > (mArmedInfo->mActualWakeupTime + mMinVsyncDistance)));
+            if (wouldSkipAVsyncTargetOptimize && wouldSkipAWakeupOptimize) {
+                return getExpectedCallbackTime(nextVsyncTime, timing);
+            }
+        }
+    }
+#endif
+
     auto const nextReadyTime = nextVsyncTime - timing.readyDuration;
     mScheduleTiming = timing;
     mArmedInfo = {nextWakeupTime, nextVsyncTime, nextReadyTime};
@@ -135,8 +155,22 @@ void VSyncDispatchTimerQueueEntry::update(VSyncTracker& tracker, nsecs_t now) {
 
     const auto earliestReadyBy = now + mScheduleTiming.workDuration + mScheduleTiming.readyDuration;
     const auto earliestVsync = std::max(earliestReadyBy, mScheduleTiming.earliestVsync);
+#ifdef MI_FEATURE_ENABLE
+    if (MiSurfaceFlingerStub::isSceneExist(VSYNC_OPTIMIZE_SCENE)) {
+        // Not allow to overwrite sf/app armed info to avoid
+        // the loss of VSYNC-sf/app events.
+        if (mArmedInfo && (mName == "sf" || mName == "app"))
+            return;
 
+    }
+    auto nextVsyncTime = tracker.nextAnticipatedVSyncTimeFrom(earliestVsync);
+    if (MiSurfaceFlingerStub::isSceneExist(VSYNC_OPTIMIZE_SCENE)) {
+        optimizeNextVsyncTime(tracker, nextVsyncTime, now, mScheduleTiming);
+    }
+
+#else
     const auto nextVsyncTime = tracker.nextAnticipatedVSyncTimeFrom(earliestVsync);
+#endif
     const auto nextReadyTime = nextVsyncTime - mScheduleTiming.readyDuration;
     const auto nextWakeupTime = nextReadyTime - mScheduleTiming.workDuration;
 
@@ -149,6 +183,13 @@ void VSyncDispatchTimerQueueEntry::disarm() {
 
 nsecs_t VSyncDispatchTimerQueueEntry::executing() {
     mLastDispatchTime = mArmedInfo->mActualVsyncTime;
+
+#ifdef MI_FEATURE_ENABLE
+    if (MiSurfaceFlingerStub::isSceneExist(VSYNC_OPTIMIZE_SCENE)) {
+        mLastWakeupTime = mArmedInfo->mActualWakeupTime;
+    }
+#endif
+
     disarm();
     return *mLastDispatchTime;
 }
@@ -198,6 +239,51 @@ void VSyncDispatchTimerQueueEntry::dump(std::string& result) const {
         StringAppendF(&result, "\t\t\tmLastDispatchTime unknown\n");
     }
 }
+
+#ifdef MI_FEATURE_ENABLE
+void VSyncDispatchTimerQueueEntry::optimizeNextVsyncTime(const VSyncTracker& tracker,
+                                                         nsecs_t& nextVsyncTime,
+                                                         nsecs_t now,
+                                                         const VSyncDispatch::ScheduleTiming& timing) {
+    /* Only for VSYNC-sf and VSYNC-app */
+    if (mName != "sf" && mName != "app")
+        return;
+
+    const nsecs_t period = tracker.currentPeriod();
+    if (mLastDispatchTime && mLastWakeupTime && period > 0) {
+        const nsecs_t minVsyncDistance = nsecs_t(period * 0.85);
+        const nsecs_t maxVsyncDistance = 2 * period - minVsyncDistance;
+        const int64_t skipVsyncCount = now > *mLastWakeupTime ?
+            (now - *mLastWakeupTime) / period : 0;
+        const nsecs_t lastDispatchTime = skipVsyncCount < 3 ? *mLastDispatchTime +
+            skipVsyncCount * period : *mLastWakeupTime;
+        nsecs_t distance = nextVsyncTime - lastDispatchTime;
+        /* Limit the error range of vsync to 0.15 period. */
+        if (distance < minVsyncDistance) {
+            nextVsyncTime =
+                tracker.nextAnticipatedVSyncTimeFrom(lastDispatchTime + minVsyncDistance);
+            distance = nextVsyncTime - lastDispatchTime;
+        }
+        if (distance > maxVsyncDistance &&
+                distance < (period + minVsyncDistance)) {
+            nextVsyncTime = lastDispatchTime + maxVsyncDistance;
+            distance = nextVsyncTime - lastDispatchTime;
+        }
+
+        /* Generate vsync immediately for the case that vsync
+         * request just missed the last vsync time point within
+         * 0.15 period, to improve fluency. */
+        auto const nowToLastWakeupTime = now - *mLastWakeupTime;
+        auto const nextWakeupTime = nextVsyncTime - timing.workDuration - timing.readyDuration;
+        if (nowToLastWakeupTime > minVsyncDistance &&
+            (((nowToLastWakeupTime % period) > minVsyncDistance &&
+            ((nextWakeupTime - now) > (period - minVsyncDistance))) ||
+            (nowToLastWakeupTime % period) < (period - minVsyncDistance))) {
+            nextVsyncTime = now + timing.workDuration + timing.readyDuration;
+        }
+    }
+}
+#endif
 
 VSyncDispatchTimerQueue::VSyncDispatchTimerQueue(std::unique_ptr<TimeKeeper> tk,
                                                  VSyncTracker& tracker, nsecs_t timerSlack,
@@ -251,6 +337,12 @@ void VSyncDispatchTimerQueue::rearmTimerSkippingUpdateFor(
     }
 
     if (min && min < mIntendedWakeupTime) {
+#ifdef MI_FEATURE_ENABLE
+        if (MiSurfaceFlingerStub::isSceneExist(VSYNC_OPTIMIZE_SCENE)) {
+            if (*min < now + mTimerSlack)
+                min = now + mTimerSlack;
+        }
+#endif
         if (ATRACE_ENABLED() && nextWakeupName && targetVsync) {
             ftl::Concat trace(ftl::truncated<5>(*nextWakeupName), " alarm in ", ns2us(*min - now),
                               "us; VSYNC in ", ns2us(*targetVsync - now), "us");
@@ -282,6 +374,13 @@ void VSyncDispatchTimerQueue::timerCallback() {
                 continue;
             }
 
+#ifdef MI_FEATURE_ENABLE
+        if (MiSurfaceFlingerStub::isSceneExist(VSYNC_OPTIMIZE_SCENE)) {
+            if (*wakeupTime > (now + mTimerSlack)) {
+                continue;
+            }
+        }
+#endif
             auto const readyTime = callback->readyTime();
 
             auto const lagAllowance = std::max(now - mIntendedWakeupTime, static_cast<nsecs_t>(0));

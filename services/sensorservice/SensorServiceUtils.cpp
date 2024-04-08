@@ -28,6 +28,8 @@ size_t eventSizeBySensorType(int type) {
     }
     switch (type) {
         case SENSOR_TYPE_POSE_6DOF:
+        case SENSOR_TYPE_LIGHT:
+        case SENSOR_TYPE_PRESSURE:
             return 16;
 
         case SENSOR_TYPE_ACCELEROMETER_LIMITED_AXES_UNCALIBRATED:

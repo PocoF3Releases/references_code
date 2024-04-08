@@ -22,14 +22,24 @@
 #include <utils/Timers.h>
 
 #include <inttypes.h>
+#include "MiSensorServiceStub.h"
 
 namespace android {
 namespace SensorServiceUtil {
+
+#ifdef MI_SENSORSERVICE_FEATURE_ENABLE
+#define SENSOR_TYPE_BACK_LUX 33171055  // back light sensor type
+#define SENSOR_TYPE_LIGHT_SECONDARY 33171081  // sencondary light sensor type
+#define SENSOR_TYPE_FOLD_STATUS 33171087 // fold status sensor type
+#endif
 
 namespace {
     constexpr size_t LOG_SIZE = 10;
     constexpr size_t LOG_SIZE_MED = 30;  // debugging for slower sensors
     constexpr size_t LOG_SIZE_LARGE = 50;  // larger samples for debugging
+#ifdef MI_SENSORSERVICE_FEATURE_ENABLE
+    constexpr size_t LOG_SIZE_HUGE = 1000;  // huge samples for debugging
+#endif
 }// unnamed namespace
 
 RecentEventLogger::RecentEventLogger(int sensorType) :
@@ -43,6 +53,9 @@ void RecentEventLogger::addEvent(const sensors_event_t& event) {
     std::lock_guard<std::mutex> lk(mLock);
     mRecentEvents.emplace(event);
     mIsLastEventCurrent = true;
+    MiSensorServiceStub::handleProxUsageTime(event, 0);
+    MiSensorServiceStub::handlePocModeUsageTime(event, 0);
+    MiSensorServiceStub::handleSensorEvent(event);
 }
 
 bool RecentEventLogger::isEmpty() const {
@@ -144,13 +157,25 @@ bool RecentEventLogger::populateLastEventIfCurrent(sensors_event_t *event) const
 size_t RecentEventLogger::logSizeBySensorType(int sensorType) {
     if (sensorType == SENSOR_TYPE_STEP_COUNTER ||
         sensorType == SENSOR_TYPE_SIGNIFICANT_MOTION ||
+#ifdef MI_SENSORSERVICE_FEATURE_ENABLE
+        sensorType == SENSOR_TYPE_ACCELEROMETER) {
+#else
         sensorType == SENSOR_TYPE_ACCELEROMETER ||
         sensorType == SENSOR_TYPE_LIGHT) {
+#endif
         return LOG_SIZE_LARGE;
     }
     if (sensorType == SENSOR_TYPE_PROXIMITY) {
         return LOG_SIZE_MED;
     }
+#ifdef MI_SENSORSERVICE_FEATURE_ENABLE
+    if (sensorType == SENSOR_TYPE_LIGHT ||
+        sensorType == SENSOR_TYPE_LIGHT_SECONDARY ||
+        sensorType == SENSOR_TYPE_FOLD_STATUS ||
+        sensorType == SENSOR_TYPE_BACK_LUX) {
+        return LOG_SIZE_HUGE;
+    }
+#endif
     return LOG_SIZE;
 }
 

@@ -114,6 +114,15 @@ struct LayerFECompositionState {
 
     // Background blur in pixels
     int backgroundBlurRadius{0};
+#if MI_SCREEN_PROJECTION
+    // MIUI ADD: START
+    int32_t privateLayer{0};
+    int32_t smallCastLayer{0};
+    int32_t lastFrameLayer{0};
+    int32_t virtualDisplayHidelayer{0};
+    bool recorderBarLayer{false};
+    // END
+#endif
 
     // The transform from layer local coordinates to composition coordinates
     ui::Transform geomLayerTransform;
@@ -133,6 +142,10 @@ struct LayerFECompositionState {
 
     // length of the shadow in screen space
     float shadowRadius{0.f};
+#ifdef MI_SF_FEATURE
+    float shadowLength{0.f};
+    int shadowType = 0;
+#endif
 
     // List of regions that require blur
     std::vector<BlurRegion> blurRegions;
@@ -210,7 +223,14 @@ struct LayerFECompositionState {
     // The dimming flag
     bool dimmingEnabled{true};
 
+    // layer classification
+    uint32_t layerClass;
+
+
     virtual ~LayerFECompositionState();
+    bool isSecureDisplay{false};
+    bool isSecureCamera{false};
+    bool isScreenshot{false};
 
     // Debugging
     virtual void dump(std::string& out) const;

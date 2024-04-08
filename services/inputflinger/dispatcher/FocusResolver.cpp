@@ -32,6 +32,8 @@ static constexpr bool DEBUG_FOCUS = false;
 #include <log/log.h>
 
 #include "FocusResolver.h"
+// MIUI ADD:
+#include "../stubs/MiFocusResolverStub.h"
 
 using android::gui::FocusRequest;
 using android::gui::WindowInfoHandle;
@@ -76,6 +78,12 @@ std::optional<FocusResolver::FocusChanges> FocusResolver::setInputWindows(
         const Focusability result = isTokenFocusable(requestedFocus, windows);
         const Focusability previousResult = mLastFocusResultByDisplay[displayId];
         mLastFocusResultByDisplay[displayId] = result;
+        // MIUI ADD: START
+        MiFocusResolverStub::afterSetInputWindowsFocusChecked(request, displayId,
+                                                              static_cast<int>(result),
+                                                              static_cast<int>(previousResult),
+                                                              currentFocus);
+        // END
         if (result == Focusability::OK) {
             return updateFocusedWindow(displayId,
                                        "Window became focusable. Previous reason: " +
@@ -111,6 +119,11 @@ std::optional<FocusResolver::FocusChanges> FocusResolver::setFocusedWindow(
             return std::nullopt;
         }
         Focusability result = isTokenFocusable(request.token, windows);
+        // MIUI ADD:START
+        MiFocusResolverStub::afterSetFocusedWindowFocusChecked(request, displayId,
+                                                               static_cast<int>(result), -1,
+                                                               currentFocus);
+        // END
         if (result == Focusability::OK) {
             return updateFocusedWindow(displayId, "setFocusedWindow with focus check",
                                        request.token, request.windowName);
@@ -121,6 +134,13 @@ std::optional<FocusResolver::FocusChanges> FocusResolver::setFocusedWindow(
     }
 
     Focusability result = isTokenFocusable(request.token, windows);
+    // MIUI ADD:START
+    MiFocusResolverStub::
+            afterSetFocusedWindowFocusChecked(request, displayId, static_cast<int>(result),
+                                              static_cast<int>(
+                                                      mLastFocusResultByDisplay[displayId]),
+                                              currentFocus);
+    // END
     // Update focus request. The focus resolver will always try to handle this request if there is
     // no focused window on the display.
     mFocusRequestByDisplay[displayId] = request;

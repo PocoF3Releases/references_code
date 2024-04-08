@@ -38,11 +38,16 @@
 #include <log/log.h>
 #include <system/window.h>
 #include <ui/GraphicTypes.h>
+#include <cutils/properties.h>
 
 #include "DisplayDevice.h"
 #include "Layer.h"
 #include "RefreshRateOverlay.h"
 #include "SurfaceFlinger.h"
+#include "MiSurfaceFlingerStub.h"
+#include "MiRefreshRateOverlay.h"
+
+using android::base::StringAppendF;
 
 namespace android {
 
@@ -68,8 +73,20 @@ DisplayDevice::DisplayDevice(DisplayDeviceCreationArgs& args)
         mActiveModeFPSTrace("ActiveModeFPS -" + to_string(getId())),
         mActiveModeFPSHwcTrace("ActiveModeFPS_HWC -" + to_string(getId())),
         mPhysicalOrientation(args.physicalOrientation),
+#if MI_SCREEN_PROJECTION
+        // MIUI ADD:
+        mIsScreenProjection(0),
+#endif
         mSupportedModes(std::move(args.supportedModes)),
+#if MI_VIRTUAL_DISPLAY_FRAMERATE
+        // MIUI ADD:
+        mLimitedFrameRate(0),
+        mNextFrameTs(0),
+        mInterval(0),
+        // END
+#endif
         mIsPrimary(args.isPrimary),
+        mIsPowerModeOverride(false),
         mRefreshRateConfigs(std::move(args.refreshRateConfigs)) {
     mCompositionDisplay->editState().isSecure = args.isSecure;
     mCompositionDisplay->createRenderSurface(
@@ -174,6 +191,7 @@ auto DisplayDevice::getInputInfo() const -> InputInfo {
 
 void DisplayDevice::setPowerMode(hal::PowerMode mode) {
     mPowerMode = mode;
+    resetVsyncPeriod();
     getCompositionDisplay()->setCompositionEnabled(mPowerMode != hal::PowerMode::OFF);
 }
 
@@ -198,8 +216,18 @@ void DisplayDevice::setActiveMode(DisplayModeId id) {
         mRefreshRateConfigs->setActiveModeId(mActiveMode->getId());
     }
     if (mRefreshRateOverlay) {
+#ifdef MI_FEATURE_ENABLE
+        bool isDdicAutoMode = MiSurfaceFlingerStub::isDdicAutoModeGroup(mActiveMode->getGroup());
+        bool isQsyncMode = MiSurfaceFlingerStub::isQsyncEnabled();
+        mRefreshRateOverlay->changeRefreshRate(mActiveMode->getFps(), isDdicAutoMode || isQsyncMode);
+        if (mSecondRefreshRateOverlay) {
+            mSecondRefreshRateOverlay->changeRefreshRate(mActiveMode->getFps(), isDdicAutoMode || isQsyncMode);
+        }
+#else
         mRefreshRateOverlay->changeRefreshRate(mActiveMode->getFps());
+#endif
     }
+    resetVsyncPeriod();
 }
 
 status_t DisplayDevice::initiateModeChange(const ActiveModeInfo& info,
@@ -240,15 +268,34 @@ std::optional<DisplayModeId> DisplayDevice::translateModeId(hal::HWConfigId hwcI
     return {};
 }
 
+void DisplayDevice::resetVsyncPeriod() {
+    std::scoped_lock<std::mutex> lock(mModeLock);
+    mVsyncPeriodUpdated = true;
+    mVsyncPeriod = 0;
+}
+
 nsecs_t DisplayDevice::getVsyncPeriodFromHWC() const {
+    std::scoped_lock<std::mutex> lock(mModeLock);
     const auto physicalId = getPhysicalId();
     if (!mHwComposer.isConnected(physicalId)) {
         return 0;
     }
 
+    if (!mVsyncPeriodUpdated && mVsyncPeriod) {
+        ALOGD("%s: value is cached. return %lu", __func__, (unsigned long)mVsyncPeriod);
+        return mVsyncPeriod;
+    }
+
     nsecs_t vsyncPeriod;
     const auto status = mHwComposer.getDisplayVsyncPeriod(physicalId, &vsyncPeriod);
     if (status == NO_ERROR) {
+        ALOGD("%s: Called HWC getDisplayVsyncPeriod. No error. period=%lu", __func__,
+          (unsigned long)vsyncPeriod);
+        if (mVsyncPeriod == vsyncPeriod) {
+            mVsyncPeriodUpdated = false;
+        } else {
+            mVsyncPeriod = vsyncPeriod;
+        }
         return vsyncPeriod;
     }
 
@@ -265,6 +312,14 @@ void DisplayDevice::onVsync(nsecs_t timestamp) {
     mLastHwVsync = timestamp;
 }
 
+void DisplayDevice::setPowerModeOverrideConfig(bool supported) {
+    mIsPowerModeOverride = supported;
+}
+
+bool DisplayDevice::getPowerModeOverrideConfig() const {
+    return mIsPowerModeOverride;
+}
+
 ui::Dataspace DisplayDevice::getCompositionDataSpace() const {
     return mCompositionDisplay->getState().dataspace;
 }
@@ -274,12 +329,48 @@ void DisplayDevice::setLayerStack(ui::LayerStack stack) {
     if (mRefreshRateOverlay) {
         mRefreshRateOverlay->setLayerStack(stack);
     }
+#ifdef MI_FEATURE_ENABLE
+    if (MiSurfaceFlingerStub::isSecondRefreshRateOverlayEnabled() && mSecondRefreshRateOverlay) {
+        mSecondRefreshRateOverlay->setLayerStack(stack);
+    }
+#endif
 }
 
 void DisplayDevice::setFlags(uint32_t flags) {
     mFlags = flags;
 }
 
+#if MI_SCREEN_PROJECTION
+// MIUI ADD: START
+void DisplayDevice::setDiffScreenProjection(uint32_t isScreenProjection) {
+    mCompositionDisplay->setDiffScreenProjection(isScreenProjection);
+    mIsScreenProjection = isScreenProjection;
+}
+// END
+#endif
+#if MI_VIRTUAL_DISPLAY_FRAMERATE
+// MIUI ADD:
+void DisplayDevice::setLimitedFrameRate(uint32_t frameRate) {
+    MiSurfaceFlingerStub::setLimitedFrameRateDisplayDevice(this, frameRate);
+}
+
+void DisplayDevice::setLimitedFrameRateReal(uint32_t frameRate) {
+    mLimitedFrameRate = frameRate;
+}
+
+bool DisplayDevice::needToComposite() {
+    return MiSurfaceFlingerStub::needToCompositeDisplayDevice(this);
+}
+
+void DisplayDevice::setIntervalReal(nsecs_t interval) {
+    mInterval = interval;
+}
+
+void DisplayDevice::setNextFrameTsReal(nsecs_t nextFrameTs) {
+    mNextFrameTs = nextFrameTs;
+}
+// END
+#endif
 void DisplayDevice::setDisplaySize(int width, int height) {
     LOG_FATAL_IF(!isVirtual(), "Changing the display size is supported only for virtual displays.");
     const auto size = ui::Size(width, height);
@@ -287,6 +378,11 @@ void DisplayDevice::setDisplaySize(int width, int height) {
     if (mRefreshRateOverlay) {
         mRefreshRateOverlay->setViewport(size);
     }
+#ifdef MI_FEATURE_ENABLE
+    if (MiSurfaceFlingerStub::isSecondRefreshRateOverlayEnabled() && mSecondRefreshRateOverlay) {
+        mSecondRefreshRateOverlay->setViewport(size);
+    }
+#endif
 }
 
 void DisplayDevice::setProjection(ui::Rotation orientation, Rect layerStackSpaceRect,
@@ -371,10 +467,18 @@ void DisplayDevice::dump(std::string& result) const {
         }
     }
 
+#if MI_SCREEN_PROJECTION
+    StringAppendF(&result, "mIsScreenProjection=%d, ", mIsScreenProjection);
+#endif
+
     result += "\n   powerMode="s;
     result += to_string(mPowerMode);
     result += '\n';
-
+#if MI_VIRTUAL_DISPLAY_FRAMERATE
+    // MIUI ADD:
+    StringAppendF(&result, "mLimitedFrameRate=%d, ", mLimitedFrameRate);
+    // END
+#endif
     if (mRefreshRateConfigs) {
         mRefreshRateConfigs->dump(result);
     }
@@ -459,6 +563,7 @@ HdrCapabilities DisplayDevice::getHdrCapabilities() const {
     if (!mOverrideHdrTypes.empty()) {
         hdrTypes = mOverrideHdrTypes;
     }
+    MiSurfaceFlingerStub::addDolbyVisionHdr(hdrTypes);
     return HdrCapabilities(hdrTypes, capabilities.getDesiredMaxLuminance(),
                            capabilities.getDesiredMaxAverageLuminance(),
                            capabilities.getDesiredMinLuminance());
@@ -467,14 +572,52 @@ HdrCapabilities DisplayDevice::getHdrCapabilities() const {
 void DisplayDevice::enableRefreshRateOverlay(bool enable, bool showSpinnner) {
     if (!enable) {
         mRefreshRateOverlay.reset();
+#ifdef MI_FEATURE_ENABLE
+        if (MiSurfaceFlingerStub::isSecondRefreshRateOverlayEnabled())
+            mSecondRefreshRateOverlay.reset();
+#endif
         return;
     }
 
-    const auto fpsRange = mRefreshRateConfigs->getSupportedRefreshRateRange();
+    auto fpsRange = mRefreshRateConfigs->getSupportedRefreshRateRange();
+    MiSurfaceFlingerStub::updateFpsRangeByLTPO(this, &fpsRange);
     mRefreshRateOverlay = std::make_unique<RefreshRateOverlay>(fpsRange, showSpinnner);
     mRefreshRateOverlay->setLayerStack(getLayerStack());
     mRefreshRateOverlay->setViewport(getSize());
+#ifdef MI_FEATURE_ENABLE
+    Fps refreshRate = getActiveMode()->getFps();
+    bool isDdicAutoMode = false;
+    bool isDdicIdleMode = false;
+    bool isQsyncMode = MiSurfaceFlingerStub::isQsyncEnabled();
+    if (MiSurfaceFlingerStub::isSecondRefreshRateOverlayEnabled()) {
+        mSecondRefreshRateOverlay = std::make_unique<MiRefreshRateOverlay>(fpsRange);
+        mSecondRefreshRateOverlay->setLayerStack(getLayerStack());
+        mSecondRefreshRateOverlay->setViewport(getSize());
+    }
+
+    if (MiSurfaceFlingerStub::isSceneExist(AOD_SCENE)) {
+        refreshRate = Fps::fromValue(MiSurfaceFlingerStub::MI_FPS_MIN_30HZ);
+    } else {
+        isDdicAutoMode = MiSurfaceFlingerStub::isDdicAutoModeGroup(getActiveMode()->getGroup());
+        isDdicIdleMode = MiSurfaceFlingerStub::isDdicIdleModeGroup(getActiveMode()->getGroup());
+        if (isDdicIdleMode) {
+            if (MiSurfaceFlingerStub::getDdicMinFpsByGroup(getActiveMode()->getGroup()) == MiSurfaceFlingerStub::MI_FPS_MIN_10HZ) {
+                refreshRate = Fps::fromValue(MiSurfaceFlingerStub::MI_FPS_MIN_10HZ);
+            } else {
+                refreshRate = Fps::fromValue(MiSurfaceFlingerStub::MI_FPS_MIN_1HZ);
+            }
+        } else {
+            refreshRate = getActiveMode()->getFps();
+        }
+    }
+    mRefreshRateOverlay->changeRefreshRate(refreshRate, isDdicAutoMode || isQsyncMode);
+    if (mSecondRefreshRateOverlay) {
+        mSecondRefreshRateOverlay->changeRefreshRate(refreshRate, isDdicAutoMode || isQsyncMode);
+    }
+#else
     mRefreshRateOverlay->changeRefreshRate(getActiveMode()->getFps());
+#endif
+
 }
 
 bool DisplayDevice::onKernelTimerChanged(std::optional<DisplayModeId> desiredModeId,
@@ -497,6 +640,51 @@ void DisplayDevice::animateRefreshRateOverlay() {
     }
 }
 
+#ifdef MI_FEATURE_ENABLE
+void DisplayDevice::setFpsForSecondRefreshRateOverlay(int32_t fps) {
+    mSecondRefreshRateOverlayFps = fps;
+}
+
+void DisplayDevice::showSecondRefreshRateOverlay(bool isIdleState) {
+    if (mSecondRefreshRateOverlay) {
+        int32_t fps = 0;
+        auto modeGroup = getActiveMode()->getGroup();
+        bool isDdicIdleMode = MiSurfaceFlingerStub::isDdicIdleModeGroup(getActiveMode()->getGroup());
+        bool isDdicAutoMode = MiSurfaceFlingerStub::isDdicAutoModeGroup(getActiveMode()->getGroup());
+        bool isQsyncMode = MiSurfaceFlingerStub::isQsyncEnabled();
+        ALOGV("%s: mode %s, fps=%d, group=%d", __func__, std::to_string(getActiveMode()->getId().value()).c_str(),
+                    getActiveMode()->getFps().getIntValue(), modeGroup);
+
+        if (isDdicIdleMode) {
+            if (MiSurfaceFlingerStub::getDdicMinFpsByGroup(modeGroup) == MiSurfaceFlingerStub::MI_FPS_MIN_10HZ) {
+                fps = MiSurfaceFlingerStub::MI_FPS_MIN_10HZ;
+            } else {
+                fps = MiSurfaceFlingerStub::MI_FPS_MIN_1HZ;
+            }
+        }
+        else if (isDdicAutoMode && isIdleState) {
+                fps = MiSurfaceFlingerStub::MI_FPS_MIN_1HZ;
+        }
+        else {
+            fps = getActiveMode()->getFps().getIntValue();
+        }
+
+        if (mSecondRefreshRateOverlayFps < fps)
+            fps = mSecondRefreshRateOverlayFps;
+
+        if (MiSurfaceFlingerStub::isSceneExist(AOD_SCENE)) {
+            fps = fps > MiSurfaceFlingerStub::MI_FPS_MIN_30HZ ? MiSurfaceFlingerStub::MI_FPS_MIN_30HZ : fps;
+        }
+        if (fps != mLastRefreshRateOverlayFps) {
+            mSecondRefreshRateOverlay->changeRefreshRate(Fps::fromValue(fps), isDdicAutoMode || isQsyncMode);
+            if (isQsyncMode && mRefreshRateOverlay)
+                mRefreshRateOverlay->changeRefreshRate(getActiveMode()->getFps(), isDdicAutoMode || isQsyncMode);
+        }
+        mLastRefreshRateOverlayFps = fps;
+    }
+}
+#endif
+
 bool DisplayDevice::setDesiredActiveMode(const ActiveModeInfo& info) {
     ATRACE_CALL();
 
@@ -515,13 +703,14 @@ bool DisplayDevice::setDesiredActiveMode(const ActiveModeInfo& info) {
     }
 
     // Check if we are already at the desired mode
-    if (getActiveMode()->getId() == info.mode->getId()) {
+    if (getActiveMode()->getId() == info.mode->getId() && !MiSurfaceFlingerStub::isDualBuitinDisp()) {
         return false;
     }
 
     // Initiate a mode change.
     mDesiredActiveModeChanged = true;
     mDesiredActiveMode = info;
+    resetVsyncPeriod();
     return true;
 }
 

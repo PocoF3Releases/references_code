@@ -30,10 +30,15 @@
 #include <gui/Surface.h>
 #include <gui/TraceUtils.h>
 #include <utils/Singleton.h>
+#include <string.h>
+
 #include <utils/Trace.h>
 
 #include <private/gui/ComposerService.h>
 
+#include <binder/IServiceManager.h>
+#include <pthread.h>
+#include <regex>
 #include <chrono>
 
 using namespace std::chrono_literals;
@@ -61,6 +66,45 @@ namespace android {
 #define BBQ_TRACE(x, ...)                                                                  \
     ATRACE_FORMAT("%s - %s(f:%u,a:%u)" x, __FUNCTION__, mName.c_str(), mNumFrameAvailable, \
                   mNumAcquired, ##__VA_ARGS__)
+
+static bool sIsGame = false;
+static std::string sLayerName = "";
+static pthread_once_t sCheckAppTypeOnce = PTHREAD_ONCE_INIT;
+static void initAppType() {
+    sp<IServiceManager> sm = defaultServiceManager();
+    sp<IBinder> perfservice = sm->checkService(String16("vendor.perfservice"));
+    if (perfservice == nullptr) {
+        ALOGE("Cannot find perfservice");
+        return;
+    }
+    String16 ifName = perfservice->getInterfaceDescriptor();
+    if (ifName.size() > 0) {
+        const std::regex re("(?:SurfaceView\\[)([^/]+).*");
+        std::smatch match;
+        if (!std::regex_match(sLayerName, match, re)) {
+            return;
+        }
+        String16 pkgName = String16(match[1].str().c_str());
+
+        Parcel data, reply;
+        int GAME_TYPE = 2;
+        int VENDOR_FEEDBACK_WORKLOAD_TYPE = 0x00001601;
+        int PERF_GET_FEEDBACK = IBinder::FIRST_CALL_TRANSACTION + 7;
+        int array[0];
+        data.markForBinder(perfservice);
+        data.writeInterfaceToken(ifName);
+        data.writeInt32(VENDOR_FEEDBACK_WORKLOAD_TYPE);
+        data.writeString16(pkgName);
+        data.writeInt32(getpid());
+        data.writeInt32Array(0, array);
+        perfservice->transact(PERF_GET_FEEDBACK, data, &reply);
+        reply.readExceptionCode();
+        int type = reply.readInt32();
+        if (type == GAME_TYPE) {
+            sIsGame = true;
+        }
+    }
+}
 
 void BLASTBufferItemConsumer::onDisconnect() {
     Mutex::Autolock lock(mMutex);
@@ -140,6 +184,10 @@ BLASTBufferQueue::BLASTBufferQueue(const std::string& name, bool updateDestinati
         mTransactionReadyCallback(nullptr),
         mSyncTransaction(nullptr),
         mUpdateDestinationFrame(updateDestinationFrame) {
+    if (name.find("SurfaceView") != std::string::npos) {
+        sLayerName = name;
+        pthread_once(&sCheckAppTypeOnce, initAppType);
+    }
     createBufferQueue(&mProducer, &mConsumer);
     // since the adapter is in the client process, set dequeue timeout
     // explicitly so that dequeueBuffer will block
@@ -163,6 +211,7 @@ BLASTBufferQueue::BLASTBufferQueue(const std::string& name, bool updateDestinati
     ComposerService::getComposerService()->getMaxAcquiredBufferCount(&mMaxAcquiredBuffers);
     mBufferItemConsumer->setMaxAcquiredBufferCount(mMaxAcquiredBuffers);
     mCurrentMaxAcquiredBufferCount = mMaxAcquiredBuffers;
+
     mNumAcquired = 0;
     mNumFrameAvailable = 0;
 
@@ -176,6 +225,8 @@ BLASTBufferQueue::BLASTBufferQueue(const std::string& name, bool updateDestinati
             if (callbackCopy) callbackCopy(true);
         }, this);
 
+    // MIUI ADD: dynamic ViewRootImpl and BlastBufferQueue Log
+    mPropDynamicLog = property_get_bool("persist.sys.sf.dynamic.log", false);
     BQA_LOGV("BLASTBufferQueue created");
 }
 
@@ -249,6 +300,25 @@ void BLASTBufferQueue::update(const sp<SurfaceControl>& surface, uint32_t width,
     if (applyTransaction) {
         // All transactions on our apply token are one-way. See comment on mAppliedLastTransaction
         t.setApplyToken(mApplyToken).apply(false, true);
+    }
+    if((strstr(mName.c_str(),"ScreenDecorOverlay") != nullptr || strstr(mName.c_str(),"RoundCorner") != nullptr)
+      && mSurfaceControl != nullptr){
+       sp<SurfaceComposerClient> client = mSurfaceControl->getClient();
+       if (client != nullptr) {
+           const sp<IBinder> display = client->getInternalDisplayToken();
+           if (display != nullptr) {
+               bool isDeviceRCSupported = false;
+               status_t err = client->isDeviceRCSupported(display, &isDeviceRCSupported);
+               if (!err && isDeviceRCSupported) {
+                   // retain original flags and append SW Flags
+                   uint64_t usage = GraphicBuffer::USAGE_HW_COMPOSER |
+                                    GraphicBuffer::USAGE_HW_TEXTURE |
+                                    GraphicBuffer::USAGE_SW_READ_RARELY |
+                                    GraphicBuffer::USAGE_SW_WRITE_RARELY;
+                   mConsumer->setConsumerUsageBits(usage);
+                }
+            }
+        }
     }
 }
 
@@ -351,6 +421,16 @@ void BLASTBufferQueue::transactionCallback(nsecs_t /*latchTime*/, const sp<Fence
                                                     stat.latchTime,
                                                     stat.frameEventStats.dequeueReadyTime);
                 }
+                // MIUI ADD: dynamic ViewRootImpl and BlastBufferQueue Log
+                if(isDynamicLog()) {
+                    for (const auto& [key, value]: mSubmitted) {
+                        if (stat.frameEventStats.frameNumber > key.framenumber) {
+                            ALOGD("bbq.transactionCallback stale:%s curRelease:%" PRIu64,
+                                key.to_string().c_str(), stat.frameEventStats.frameNumber);
+                        }
+                    }
+                }
+                // END
             } else {
                 BQA_LOGE("Failed to find matching SurfaceControl in transactionCallback");
             }
@@ -407,9 +487,16 @@ void BLASTBufferQueue::releaseBufferCallback(
         mCurrentMaxAcquiredBufferCount = *currentMaxAcquiredBufferCount;
     }
 
-    const auto numPendingBuffersToHold =
-            isEGL ? std::max(0u, mMaxAcquiredBuffers - mCurrentMaxAcquiredBufferCount) : 0;
+    const uint32_t numPendingBuffersToHold =
+            isEGL ? std::max(0, mMaxAcquiredBuffers - (int32_t)mCurrentMaxAcquiredBufferCount) : 0;
     mPendingRelease.emplace_back(ReleasedBuffer{id, releaseFence});
+    // MIUI ADD: dynamic ViewRootImpl and BlastBufferQueue Log
+    if(isDynamicLog()) {
+        ALOGD("bbq.releaseBufferCallback %s isEGL:%d mMaxAcq:%u currMaxAcq:%u numToHold:%u ",
+            id.to_string().c_str(), isEGL, mMaxAcquiredBuffers,
+            currentMaxAcquiredBufferCount, numPendingBuffersToHold);
+    }
+    // END
 
     // Release all buffers that are beyond the ones that we need to hold
     while (mPendingRelease.size() > numPendingBuffersToHold) {
@@ -438,6 +525,7 @@ void BLASTBufferQueue::releaseBuffer(const ReleaseCallbackId& callbackId,
         return;
     }
     mNumAcquired--;
+    mNumUndequeued++;
     BBQ_TRACE("frame=%" PRIu64, callbackId.framenumber);
     BQA_LOGV("released %s", callbackId.to_string().c_str());
     mBufferItemConsumer->releaseBuffer(it->second, releaseFence);
@@ -568,9 +656,20 @@ void BLASTBufferQueue::acquireNextBufferLocked(
     }
 
     mergePendingTransactions(t, bufferItem.mFrameNumber);
+    // MIUI ADD: dynamic ViewRootImpl and BlastBufferQueue Log
+    if(isDynamicLog()) {
+        ALOGD("bbq.acquireNextBufferLocked bufId:%" PRIu64 " frN:%" PRIu64 " layerId:%d apply:%s",
+                bufferItem.mGraphicBuffer->getId(), bufferItem.mFrameNumber,
+                mSurfaceControl->getLayerId(), boolToString(applyTransaction));
+    }
+    // END
     if (applyTransaction) {
-        // All transactions on our apply token are one-way. See comment on mAppliedLastTransaction
-        t->setApplyToken(mApplyToken).apply(false, true);
+        if (sIsGame) {
+            t->setApplyToken(mApplyToken).apply(false, false);
+        } else {
+            // All transactions on our apply token are one-way. See comment on mAppliedLastTransaction
+            t->setApplyToken(mApplyToken).apply(false, true);
+        }
         mAppliedLastTransaction = true;
         mLastAppliedFrameNumber = bufferItem.mFrameNumber;
     } else {
@@ -588,9 +687,22 @@ void BLASTBufferQueue::acquireNextBufferLocked(
 }
 
 Rect BLASTBufferQueue::computeCrop(const BufferItem& item) {
-    if (item.mScalingMode == NATIVE_WINDOW_SCALING_MODE_SCALE_CROP) {
-        return GLConsumer::scaleDownCrop(item.mCrop, mSize.width, mSize.height);
+    // MIUI MOD: dynamic wallpaper display exception
+
+    // if (item.mScalingMode == NATIVE_WINDOW_SCALING_MODE_SCALE_CROP) {
+    //      return GLConsumer::scaleDownCrop(item.mCrop, mSize.width, mSize.height);
+    // }
+
+    uint32_t width = mSize.width;
+    uint32_t height = mSize.height;
+    if (item.mTransform & NATIVE_WINDOW_TRANSFORM_ROT_90) {
+        width = mSize.height;
+        height = mSize.width;
     }
+    if (item.mScalingMode == NATIVE_WINDOW_SCALING_MODE_SCALE_CROP) {
+        return GLConsumer::scaleDownCrop(item.mCrop, width, height);
+    }
+    // MIUI END: dynamic wallpaper display exception
     return item.mCrop;
 }
 
@@ -707,6 +819,7 @@ void BLASTBufferQueue::onFrameReplaced(const BufferItem& item) {
 void BLASTBufferQueue::onFrameDequeued(const uint64_t bufferId) {
     std::unique_lock _lock{mTimestampMutex};
     mDequeueTimestamps[bufferId] = systemTime();
+    mNumUndequeued--;
 };
 
 void BLASTBufferQueue::onFrameCancelled(const uint64_t bufferId) {
@@ -1129,5 +1242,23 @@ void BLASTBufferQueue::setTransactionHangCallback(std::function<void(bool)> call
     std::unique_lock _lock{mMutex};
     mTransactionHangCallback = callback;
 }
+
+// MIUI ADD: START
+bool BLASTBufferQueue::adjustMaxDequeuedBufferCountForProducer(int count) {
+    return mProducer->adjustMaxDequeuedBufferCount(count) == NO_ERROR;
+}
+// END
+
+// MIUI ADD: dynamic ViewRootImpl and BlastBufferQueue Log
+bool BLASTBufferQueue::setDynamicLog(int dynamic) {
+    mDynamicLog = (dynamic > 0 ? true : false);
+    ALOGD("setDynamicLog prop:%d dynamic:%d", mPropDynamicLog, mDynamicLog);
+    return mDynamicLog;
+}
+
+bool BLASTBufferQueue::isDynamicLog() {
+    return (mPropDynamicLog || mDynamicLog);
+}
+// END
 
 } // namespace android

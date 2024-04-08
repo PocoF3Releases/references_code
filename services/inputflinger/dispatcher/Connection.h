@@ -71,6 +71,9 @@ public:
     const std::string getWindowName() const;
 
     std::deque<DispatchEntry*>::iterator findWaitQueueEntry(uint32_t seq);
+
+    // MIUI ADD:
+    bool fdOutputEvent = false;
 };
 
 } // namespace android::inputdispatcher

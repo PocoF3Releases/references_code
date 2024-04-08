@@ -292,11 +292,20 @@ constexpr const char* const kManualInterfaces[] = {
   "IAAudioClient",
   "IAAudioService",
   "VtsFuzzer",
+  "miui.IProcessManager",
   nullptr,
 };
 
 constexpr const char* const kDownstreamManualInterfaces[] = {
   // Add downstream interfaces here.
+  // MIUI ADD: START
+  "com.miui.performance.IMiuiBoosterManager",
+  "com.miui.analytics.ITrackBinder",
+  "miui.IShellService",
+  "miui.mqsas.IMQSService",
+  "miui.greeze.IGreezeCallback",
+  "miui.greeze.IGreezeManager",
+  "miui.greeze.IMonitorToken",
   nullptr,
 };
 

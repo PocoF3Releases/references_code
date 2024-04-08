@@ -28,6 +28,7 @@
 #undef LOG_TAG
 #endif
 #define LOG_TAG "AppOpsManager"
+#define MIUI_OP_START 10000
 
 namespace android {
 
@@ -170,6 +171,11 @@ void AppOpsManager::setCameraAudioRestriction(int32_t mode) {
 
 // check it the appops needs to be collected and cache result
 bool AppOpsManager::shouldCollectNotes(int32_t opcode) {
+    // MIUI ADD
+    if (opcode > MIUI_OP_START) {
+        return false;
+    }
+    // END
     // Whether an appop should be collected: 0 == not initialized, 1 == don't note, 2 == note
     static uint8_t appOpsToNote[AppOpsManager::_NUM_OP] = {0};
 

@@ -78,6 +78,13 @@ struct CompositionRefreshArgs {
     // If set, causes the dirty regions to flash with the delay
     std::optional<std::chrono::microseconds> devOptFlashDirtyRegionsDelay;
 
+#ifdef MI_FEATURE_ENABLE
+    std::string gamePackageName{"gamelayerdefault"};
+
+    uint32_t gameColorMode;
+
+    uint32_t layersInfo;
+#endif
     // The earliest time to send the present command to the HAL
     std::chrono::steady_clock::time_point earliestPresentTime;
 
@@ -90,6 +97,12 @@ struct CompositionRefreshArgs {
 
     // If set, a frame has been scheduled for that time.
     std::optional<std::chrono::steady_clock::time_point> scheduledFrameTime;
+
+#ifdef MI_FEATURE_ENABLE
+    // MIUI ADD: Added just for Global HBM Dither (J2S-T)
+    std::optional<mat4> gpuColorTransformMatrix;
+    // MIUI ADD: END
+#endif
 };
 
 } // namespace android::compositionengine

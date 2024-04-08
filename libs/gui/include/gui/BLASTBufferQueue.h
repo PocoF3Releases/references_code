@@ -29,6 +29,7 @@
 #include <system/window.h>
 #include <thread>
 #include <queue>
+#include <cutils/properties.h>
 
 namespace android {
 
@@ -59,7 +60,6 @@ protected:
 
 private:
     const wp<BLASTBufferQueue> mBLASTBufferQueue;
-
     uint64_t mCurrentFrameNumber = 0;
 
     Mutex mMutex;
@@ -82,6 +82,13 @@ public:
     }
     sp<Surface> getSurface(bool includeSurfaceControlHandle);
     bool isSameSurfaceControl(const sp<SurfaceControl>& surfaceControl) const;
+
+    void setUndequeuedBufferCount(int count) {
+        mNumUndequeued = count;
+    }
+    int getUndequeuedBufferCount() const {
+        return mNumUndequeued;
+    }
 
     void onBufferFreed(const wp<GraphicBuffer>&/* graphicBuffer*/) override { /* TODO */ }
     void onFrameReplaced(const BufferItem& item) override;
@@ -120,6 +127,13 @@ public:
      * the only case we detect.
      */
     void setTransactionHangCallback(std::function<void(bool)> callback);
+
+    // MIUI ADD:
+    bool adjustMaxDequeuedBufferCountForProducer(int);
+    // MIUI ADD: dynamic ViewRootImpl and BlastBufferQueue Log
+    bool setDynamicLog(int);
+    bool isDynamicLog();
+    // END
 
     virtual ~BLASTBufferQueue();
 
@@ -163,8 +177,14 @@ private:
     // the max to be acquired
     int32_t mMaxAcquiredBuffers = 1;
 
+    int mNumUndequeued GUARDED_BY(mMutex) = 0;
     int32_t mNumFrameAvailable GUARDED_BY(mMutex) = 0;
     int32_t mNumAcquired GUARDED_BY(mMutex) = 0;
+
+    // MIUI ADD: dynamic ViewRootImpl and BlastBufferQueue Log
+    bool mPropDynamicLog = false;
+    bool mDynamicLog = false;
+
 
     // Keep a reference to the submitted buffers so we can release when surfaceflinger drops the
     // buffer or the buffer has been presented and a new buffer is ready to be presented.

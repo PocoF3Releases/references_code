@@ -112,6 +112,16 @@ public:
 
     std::optional<int32_t> getLightPlayerId(int32_t deviceId, int32_t lightId) override;
 
+    // MIUI ADD: START
+    inline int32_t bumpGenerationLockedForStub() REQUIRES(mLock) {
+        return bumpGenerationLocked();
+    };
+
+    inline const std::weak_ptr<PointerControllerInterface> getPointerControllerForStub(){
+        return mPointerController;
+    }
+    // END
+
 protected:
     // These members are protected so they can be instrumented by test cases.
     virtual std::shared_ptr<InputDevice> createDeviceLocked(int32_t deviceId,

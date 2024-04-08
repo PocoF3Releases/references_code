@@ -6,7 +6,15 @@
 #define LOG_TAG "InputTransport"
 
 //#define LOG_NDEBUG 0
-
+//MIUI ADD: START
+#ifdef MIUI_BUILD
+//we need all debug info on miui version, because our log control by dumpsys input debuglog
+#define DEBUG_CHANNEL_MESSAGES 1
+static constexpr bool DEBUG_CHANNEL_LIFECYCLE = true;
+static constexpr bool DEBUG_TRANSPORT_ACTIONS = true;
+#define DEBUG_RESAMPLING 1
+#else
+// END
 // Log debug messages about channel messages (send message, receive message)
 #define DEBUG_CHANNEL_MESSAGES 0
 
@@ -18,6 +26,8 @@ static constexpr bool DEBUG_TRANSPORT_ACTIONS = false;
 
 // Log debug messages about touch event resampling
 #define DEBUG_RESAMPLING 0
+// MIUI ADD:
+#endif
 
 #include <errno.h>
 #include <fcntl.h>
@@ -36,7 +46,24 @@ static constexpr bool DEBUG_TRANSPORT_ACTIONS = false;
 
 #include <input/InputTransport.h>
 
+// MIUI ADD: START
+#include <json/json.h>
+#include <time.h>
+// END
+
 using android::base::StringPrintf;
+
+// MIUI ADD: START
+static bool gInputLogEnabled = false;
+#ifdef MIUI_BUILD
+// on miui version we should modify ALOGD working way, let ALOGD control by dumpsys input debuglog
+// Working way: switchInputLog call by inputstubimpl to modify gInputLogEnabled.(see
+// MiInputDispatcherStubImpl.cpp in vendor/xiaomi/)
+#undef ALOGD
+#define ALOGD(...) \
+    if (gInputLogEnabled) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+#endif
+// END
 
 namespace android {
 
@@ -63,6 +90,12 @@ static const nsecs_t RESAMPLE_MAX_DELTA = 20 * NANOS_PER_MS;
 // Maximum time to predict forward from the last known state, to avoid predicting too
 // far into the future.  This time is further bounded by 50% of the last time delta.
 static const nsecs_t RESAMPLE_MAX_PREDICTION = 8 * NANOS_PER_MS;
+//MIUI ADD :START
+static const int  AMOTION_EVENT_FLAG_DEBUGINPUT_TRANSPORT_ALL = 0x04000000;
+static const bool kBerserkMode = property_get_bool("persist.berserk.mode.support", false);
+static const size_t LATENCY_SAMPLE_NUMBER_MAX = 2;
+static const int  AMOTION_EVENT_FLAG_ONEWAY = 0x02000000;
+//END
 
 /**
  * System property for enabling / disabling touch resampling.
@@ -76,6 +109,12 @@ static const nsecs_t RESAMPLE_MAX_PREDICTION = 8 * NANOS_PER_MS;
  */
 static const char* PROPERTY_RESAMPLING_ENABLED = "ro.input.resampling";
 
+// MIUI ADD: START
+static const int SLOW_INPUT_THRESHOLD = 200; // ms
+static const int INPUT_LOG_WRITE_TIME_INTERVAL = 3000; // ms
+static const char* PROPERTY_PERF_LOG_TURBO_VERSION = "persist.sys.perfdebug.monitor.perfversion";
+// END
+
 template<typename T>
 inline static T min(const T& a, const T& b) {
     return a < b ? a : b;
@@ -88,6 +127,14 @@ inline static float lerp(float a, float b, float alpha) {
 inline static bool isPointerEvent(int32_t source) {
     return (source & AINPUT_SOURCE_CLASS_POINTER) == AINPUT_SOURCE_CLASS_POINTER;
 }
+
+//MIUI ADD : START
+inline static bool isPointerFromStylus(int32_t source, int32_t toolType) {
+    return isFromSource(source, AINPUT_SOURCE_STYLUS)
+            && (toolType == AMOTION_EVENT_TOOL_TYPE_STYLUS
+            || toolType == AMOTION_EVENT_TOOL_TYPE_ERASER);
+}
+//END
 
 inline static const char* toString(bool value) {
     return value ? "true" : "false";
@@ -721,7 +768,8 @@ android::base::Result<InputPublisher::ConsumerResponse> InputPublisher::receiveC
 // --- InputConsumer ---
 
 InputConsumer::InputConsumer(const std::shared_ptr<InputChannel>& channel)
-      : mResampleTouch(isTouchResamplingEnabled()), mChannel(channel), mMsgDeferred(false) {}
+      : /* MIUI ADD */mPerfLogTurboNative(isPerfLogTurboNative()), mResampleTouch(isTouchResamplingEnabled()),
+          mChannel(channel), mMsgDeferred(false){}
 
 InputConsumer::~InputConsumer() {
 }
@@ -730,8 +778,36 @@ bool InputConsumer::isTouchResamplingEnabled() {
     return property_get_bool(PROPERTY_RESAMPLING_ENABLED, true);
 }
 
+// MIUI ADD: START
+bool InputConsumer::isPerfLogTurboNative() {
+    return property_get_int32(PROPERTY_PERF_LOG_TURBO_VERSION, 3) == 3;
+}
+
+void InputConsumer::writeExceptionLog(int32_t action, int duration) {
+    int exceptionLogFd = open("/dev/mi_exception_log", O_RDWR | O_CLOEXEC | O_NONBLOCK);
+    if (exceptionLogFd > 0) {
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        Json::StreamWriterBuilder factory;
+        Json::Value root;
+        root["EventID"] = 902002001;
+        root["EventTime"] = static_cast<uint64_t>(tv.tv_sec) * UINT64_C(1000) + tv.tv_usec / UINT64_C(1000);
+        root["Latency"] = duration;
+        root["InputChannel"] = mChannel->getName().c_str();
+        root["InputAction"] = action;
+        std::string exception_log_str = Json::writeString(factory, root);
+        int errid = write(exceptionLogFd, &exception_log_str, sizeof(exception_log_str));
+        if (errid == -1) {
+            ALOGW("err write to mi_exception_log");
+        }
+        close(exceptionLogFd);
+    }
+}
+// END
+
 status_t InputConsumer::consume(InputEventFactoryInterface* factory, bool consumeBatches,
-                                nsecs_t frameTime, uint32_t* outSeq, InputEvent** outEvent) {
+                                nsecs_t frameTime, uint32_t* outSeq, InputEvent** outEvent,
+                                int* motionEventType, int* touchMoveNumber, bool* flag) {
     if (DEBUG_TRANSPORT_ACTIONS) {
         ALOGD("channel '%s' consumer ~ consume: consumeBatches=%s, frameTime=%" PRId64,
               mChannel->getName().c_str(), toString(consumeBatches), frameTime);
@@ -750,13 +826,27 @@ status_t InputConsumer::consume(InputEventFactoryInterface* factory, bool consum
         } else {
             // Receive a fresh message.
             status_t result = mChannel->receiveMessage(&mMsg);
-            if (result == OK) {
+            // MIUI MOD: START
+            // if (result == OK) {
+            if (result == OK && (mMsg.header.type != InputMessage::Type::MOTION ||
+                                 (mMsg.body.motion.flags & AMOTION_EVENT_FLAG_ONEWAY) == 0)) {
+            // END
                 mConsumeTimes.emplace(mMsg.header.seq, systemTime(SYSTEM_TIME_MONOTONIC));
             }
+            if (result == 0) {
+                if ((mMsg.body.motion.action & AMOTION_EVENT_ACTION_MASK) == AMOTION_EVENT_ACTION_MOVE){
+                    mTouchMoveCounter++;
+                } else {
+                    mTouchMoveCounter = 0;
+                }
+                *flag = true;
+            }
+            *motionEventType = mMsg.body.motion.action & AMOTION_EVENT_ACTION_MASK;
+            *touchMoveNumber = mTouchMoveCounter;
             if (result) {
                 // Consume the next batched event unless batches are being held for later.
                 if (consumeBatches || result != WOULD_BLOCK) {
-                    result = consumeBatch(factory, frameTime, outSeq, outEvent);
+                    result = consumeBatch(factory, frameTime, outSeq, outEvent, touchMoveNumber);
                     if (*outEvent) {
                         if (DEBUG_TRANSPORT_ACTIONS) {
                             ALOGD("channel '%s' consumer ~ consumed batch event, seq=%u",
@@ -781,10 +871,33 @@ status_t InputConsumer::consume(InputEventFactoryInterface* factory, bool consum
                     ALOGD("channel '%s' consumer ~ consumed key event, seq=%u",
                           mChannel->getName().c_str(), *outSeq);
                 }
+
+                // MIUI ADD: START
+                nsecs_t systemtime = ns2ms(systemTime(SYSTEM_TIME_MONOTONIC));
+                nsecs_t duration = systemtime - ns2ms(keyEvent->getEventTime());
+                nsecs_t timeinterval = systemtime - mLastWriteKeyLogTime;
+                if (duration > SLOW_INPUT_THRESHOLD && timeinterval > INPUT_LOG_WRITE_TIME_INTERVAL) {
+                    if (mPerfLogTurboNative) {
+                        mLastWriteKeyLogTime = systemtime;
+                        writeExceptionLog(keyEvent->getAction(), duration);
+                    } else {
+                        ALOGW("PerfMonitor: %dms so far, channel '%s' consumer ~ consumed key event,"
+                                "seq=%u, action=%d",duration, mChannel->getName().c_str(), *outSeq,
+                                keyEvent->getAction());
+                    }
+                }
+                // END
             break;
             }
 
             case InputMessage::Type::MOTION: {
+                // MIUI ADD: START
+                if (kBerserkMode && mLatencySampleNumber < LATENCY_SAMPLE_NUMBER_MAX) {
+                    nsecs_t latency =
+                            systemTime(SYSTEM_TIME_MONOTONIC) - mMsg.body.motion.eventTime;
+                    addLatency(latency);
+                }
+                // END
                 ssize_t batchIndex = findBatch(mMsg.body.motion.deviceId, mMsg.body.motion.source);
                 if (batchIndex >= 0) {
                     Batch& batch = mBatches[batchIndex];
@@ -801,7 +914,12 @@ status_t InputConsumer::consume(InputEventFactoryInterface* factory, bool consum
                         const size_t count = batch.samples.size();
                         for (size_t i = 0; i < count; i++) {
                             const InputMessage& msg = batch.samples[i];
-                            sendFinishedSignal(msg.header.seq, false);
+                            // MIUI MOD : START
+                            // sendFinishedSignal(msg.header.seq, false);
+                            if ((msg.body.motion.flags & AMOTION_EVENT_FLAG_ONEWAY) == 0) {
+                                sendFinishedSignal(msg.header.seq, false);
+                            }
+                            // END
                         }
                         batch.samples.erase(batch.samples.begin(), batch.samples.begin() + count);
                         mBatches.erase(mBatches.begin() + batchIndex);
@@ -844,11 +962,32 @@ status_t InputConsumer::consume(InputEventFactoryInterface* factory, bool consum
                 initializeMotionEvent(motionEvent, &mMsg);
                 *outSeq = mMsg.header.seq;
                 *outEvent = motionEvent;
-
+                // MIUI ADD : START
+                if ((motionEvent->getFlags() & AMOTION_EVENT_FLAG_DEBUGINPUT_TRANSPORT_ALL) != 0) {
+                    InputChannel::switchInputLog(true);
+                } else {
+                    InputChannel::switchInputLog(false);
+                }
+                // END
                 if (DEBUG_TRANSPORT_ACTIONS) {
                     ALOGD("channel '%s' consumer ~ consumed motion event, seq=%u",
                           mChannel->getName().c_str(), *outSeq);
                 }
+                // MIUI ADD: START
+                nsecs_t systemtime = ns2ms(systemTime(SYSTEM_TIME_MONOTONIC));
+                nsecs_t duration = systemtime - ns2ms(motionEvent->getEventTime());
+                nsecs_t timeinterval = systemtime - mLastWriteMonitorLogTime;
+                if (duration > SLOW_INPUT_THRESHOLD && timeinterval > INPUT_LOG_WRITE_TIME_INTERVAL ) {
+                    if (mPerfLogTurboNative) {
+                        mLastWriteMonitorLogTime = systemtime;
+                        writeExceptionLog(motionEvent->getAction(), duration);
+                    } else {
+                        ALOGW("PerfMonitor: %dms so far, channel '%s' consumer ~ consumed montion event,"
+                                "seq=%u, action=%d",duration, mChannel->getName().c_str(), *outSeq,
+                                motionEvent->getAction());
+                    }
+                }
+                // END
                 break;
             }
 
@@ -905,7 +1044,7 @@ status_t InputConsumer::consume(InputEventFactoryInterface* factory, bool consum
 }
 
 status_t InputConsumer::consumeBatch(InputEventFactoryInterface* factory,
-        nsecs_t frameTime, uint32_t* outSeq, InputEvent** outEvent) {
+        nsecs_t frameTime, uint32_t* outSeq, InputEvent** outEvent, int* touchMoveNumber) {
     status_t result;
     for (size_t i = mBatches.size(); i > 0; ) {
         i--;
@@ -917,8 +1056,18 @@ status_t InputConsumer::consumeBatch(InputEventFactoryInterface* factory,
         }
 
         nsecs_t sampleTime = frameTime;
-        if (mResampleTouch) {
-            sampleTime -= RESAMPLE_LATENCY;
+        if (mResampleTouch && (*touchMoveNumber != 1)) {
+            // MIUI MOD : START
+            // sampleTime -= RESAMPLE_LATENCY;
+            // Modify RESAMPLE_LATENCY to 0 for stylus
+            if (!isStylus(batch)) {
+                nsecs_t resampleLatency = RESAMPLE_LATENCY;
+                if (kBerserkMode) {
+                    resampleLatency = getResampleLatency();
+                }
+                sampleTime -= resampleLatency;
+            }
+            //END
         }
         ssize_t split = findSampleNoLaterThan(batch, sampleTime);
         if (split < 0) {
@@ -952,10 +1101,18 @@ status_t InputConsumer::consumeSamples(InputEventFactoryInterface* factory,
         InputMessage& msg = batch.samples[i];
         updateTouchState(msg);
         if (i) {
-            SeqChain seqChain;
-            seqChain.seq = msg.header.seq;
-            seqChain.chain = chain;
-            mSeqChains.push_back(seqChain);
+            // MIUI MOD: START
+            // SeqChain seqChain;
+            // seqChain.seq = msg.header.seq;
+            // seqChain.chain = chain;
+            // mSeqChains.push_back(seqChain);
+            if ((msg.body.motion.flags & AMOTION_EVENT_FLAG_ONEWAY) == 0) {
+                SeqChain seqChain;
+                seqChain.seq = msg.header.seq;
+                seqChain.chain = chain;
+                mSeqChains.push_back(seqChain);
+            }
+            // END
             addSample(motionEvent, &msg);
         } else {
             initializeMotionEvent(motionEvent, &msg);
@@ -1184,6 +1341,10 @@ void InputConsumer::resampleTouchState(nsecs_t sampleTime, MotionEvent* event,
             // would've cleared the resampled bit in rewriteMessage if they had. We can't modify
             // lastResample in place becasue the mapping from pointer ID to index may have changed.
             touchState.lastResample.pointers[i].copyFrom(oldLastResample.getPointerById(id));
+#ifdef MI_FEATURE_ENABLE
+            touchState.lastResample.pointers[i].setAxisValue(AMOTION_EVENT_AXIS_TOOL_MINOR,
+                current->getPointerById(id).getAxisValue(AMOTION_EVENT_AXIS_TOOL_MINOR));
+#endif
             continue;
         }
 
@@ -1441,6 +1602,27 @@ ssize_t InputConsumer::findSampleNoLaterThan(const Batch& batch, nsecs_t time) {
     return ssize_t(index) - 1;
 }
 
+//MIUI ADD ：START
+bool InputConsumer::isStylus(const Batch& batch) {
+    return batch.samples.size() > 0 ? isPointerFromStylus(batch.samples[0].body.motion.source,
+        batch.samples[0].body.motion.pointers[0].properties.toolType) : false;
+}
+
+nsecs_t InputConsumer::getResampleLatency() {
+    if (mLatencySampleNumber < LATENCY_SAMPLE_NUMBER_MAX || mMiuiResampleLatency < 0 ||
+        mMiuiResampleLatency > RESAMPLE_LATENCY) {
+        return RESAMPLE_LATENCY;
+    }
+    return (nsecs_t)mMiuiResampleLatency;
+}
+
+void InputConsumer::addLatency(nsecs_t latency) {
+    mLatencySampleNumber++;
+    // To avoid overflow
+    mMiuiResampleLatency += (latency - mMiuiResampleLatency) / (double)mLatencySampleNumber;
+}
+// END
+
 std::string InputConsumer::dump() const {
     std::string out;
     out = out + "mResampleTouch = " + toString(mResampleTouch) + "\n";
@@ -1540,5 +1722,11 @@ std::string InputConsumer::dump() const {
     }
     return out;
 }
+
+// MIUI ADD: START
+void InputChannel::switchInputLog(bool enable) {
+    gInputLogEnabled = enable;
+}
+// END
 
 } // namespace android

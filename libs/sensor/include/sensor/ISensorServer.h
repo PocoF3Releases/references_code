@@ -48,6 +48,12 @@ public:
              int mode, const String16& opPackageName, const String16& attributionTag) = 0;
     virtual int32_t isDataInjectionEnabled() = 0;
 
+#if MI_SCREEN_PROJECTION
+    // MIUI ADD:
+    virtual void setSensorDisableApp(const String8& packageName) = 0;
+    virtual void removeSensorDisableApp(const String8& packageName) = 0;
+    // END
+#endif
     virtual sp<ISensorEventConnection> createSensorDirectConnection(const String16& opPackageName,
             uint32_t size, int32_t type, int32_t format, const native_handle_t *resource) = 0;
 

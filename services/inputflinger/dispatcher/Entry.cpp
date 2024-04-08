@@ -173,7 +173,9 @@ KeyEntry::~KeyEntry() {}
 
 std::string KeyEntry::getDescription() const {
     if (!GetBoolProperty("ro.debuggable", false)) {
-        return "KeyEvent";
+        // MIUI MOD:
+        // return "KeyEvent";
+        return StringPrintf("KeyEvent(action=%s)", KeyEvent::actionToString(action));
     }
     return StringPrintf("KeyEvent(deviceId=%d, eventTime=%" PRIu64 ", source=%s, displayId=%" PRId32
                         ", action=%s, "
@@ -242,7 +244,9 @@ MotionEntry::~MotionEntry() {}
 
 std::string MotionEntry::getDescription() const {
     if (!GetBoolProperty("ro.debuggable", false)) {
-        return "MotionEvent";
+        // MIUI MOD:
+        // return "MotionEvent";
+        return StringPrintf("MotionEvent(action=%s)", MotionEvent::actionToString(action).c_str());
     }
     std::string msg;
     msg += StringPrintf("MotionEvent(deviceId=%d, eventTime=%" PRIu64
@@ -319,6 +323,27 @@ DispatchEntry::DispatchEntry(std::shared_ptr<EventEntry> eventEntry, int32_t tar
         deliveryTime(0),
         resolvedAction(0),
         resolvedFlags(0) {}
+
+// MIUI ADD: START Activity Embedding
+DispatchEntry::DispatchEntry(std::shared_ptr<EventEntry> eventEntry, int32_t targetFlags,
+                            ui::Transform transform, const ui::Transform& rawTransform, float globalScaleFactor,
+                            bool isNeedMiuiEmbeddedEventMapping, float miuiEmbeddedMidLeft, float miuiEmbeddedMidRight,
+                            float miuiEmbeddedHotMarginLeftRight, float miuiEmbeddedHotMarginTopBottom)
+      : seq(nextSeq()),
+        eventEntry(std::move(eventEntry)),
+        targetFlags(targetFlags),
+        transform(transform),
+        rawTransform(rawTransform),
+        globalScaleFactor(globalScaleFactor),
+        deliveryTime(0),
+        resolvedAction(0),
+        resolvedFlags(0),
+        isNeedMiuiEmbeddedEventMapping(isNeedMiuiEmbeddedEventMapping),
+        miuiEmbeddedMidLeft(miuiEmbeddedMidLeft),
+        miuiEmbeddedMidRight(miuiEmbeddedMidRight),
+        miuiEmbeddedHotMarginLeftRight(miuiEmbeddedHotMarginLeftRight),
+        miuiEmbeddedHotMarginTopBottom(miuiEmbeddedHotMarginTopBottom){}
+// END
 
 uint32_t DispatchEntry::nextSeq() {
     // Sequence number 0 is reserved and will never be returned.

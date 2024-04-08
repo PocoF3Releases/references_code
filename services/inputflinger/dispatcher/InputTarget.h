@@ -24,6 +24,16 @@
 
 namespace android::inputdispatcher {
 
+// MIUI ADD: START Activity Embedding
+struct PointerInfo {
+    bool isNeedMiuiEmbeddedEventMapping = false;
+    float miuiEmbeddedMidLeft = 0.0f;
+    float miuiEmbeddedMidRight = 0.0f;
+    float miuiEmbeddedHotMarginLeftRight = 0.0f;
+    float miuiEmbeddedHotMarginTopBottom = 0.0f;
+};
+// END
+
 /*
  * An input target specifies how an input event is to be dispatched to a particular window
  * including the window's input channel, control flags, a timeout, and an X / Y offset to
@@ -111,6 +121,12 @@ struct InputTarget {
     ui::Transform pointerTransforms[MAX_POINTERS];
 
     void addPointers(BitSet32 pointerIds, const ui::Transform& transform);
+    // MIUI ADD: START Activity Embedding
+    PointerInfo pointerInfos[MAX_POINTERS];
+    void addPointers(BitSet32 pointerIds, const ui::Transform& transform,
+                     bool isNeedMiuiEmbeddedEventMapping, float miuiEmbeddedMidLeft, float miuiEmbeddedMidRight,
+                     float miuiEmbeddedHotMarginLeftRight, float miuiEmbeddedHotMarginTopBottom);
+    // END
     void setDefaultPointerTransform(const ui::Transform& transform);
 
     /**

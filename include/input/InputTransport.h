@@ -317,6 +317,8 @@ public:
         return inputChannel.getName() == getName() && inputChannel.getConnectionToken() == mToken &&
                 lhs.st_ino == rhs.st_ino;
     }
+    // MIUI ADD:
+    static void switchInputLog(bool enable);
 
 private:
     base::unique_fd dupFd() const;
@@ -485,7 +487,8 @@ public:
      * Other errors probably indicate that the channel is broken.
      */
     status_t consume(InputEventFactoryInterface* factory, bool consumeBatches, nsecs_t frameTime,
-                     uint32_t* outSeq, InputEvent** outEvent);
+                     uint32_t* outSeq, InputEvent** outEvent,
+                     int* motionEventType, int* touchMoveNumber, bool* flag);
 
     /* Sends a finished signal to the publisher to inform it that the message
      * with the specified sequence number has finished being process and whether
@@ -517,6 +520,13 @@ public:
     std::string dump() const;
 
 private:
+    int mTouchMoveCounter = 0;
+    //MIUI ADD: START
+    const bool mPerfLogTurboNative;
+    nsecs_t mLastWriteMonitorLogTime = 0;
+    nsecs_t mLastWriteKeyLogTime = 0;
+    // END
+
     // True if touch resampling is enabled.
     const bool mResampleTouch;
 
@@ -639,8 +649,15 @@ private:
     // will be raised for that connection, and no further events will be posted to that channel.
     std::unordered_map<uint32_t /*seq*/, nsecs_t /*consumeTime*/> mConsumeTimes;
 
+    // MIUI ADD: START
+    double mMiuiResampleLatency = 0;
+    size_t mLatencySampleNumber = 0;
+    // END
+
     status_t consumeBatch(InputEventFactoryInterface* factory,
-            nsecs_t frameTime, uint32_t* outSeq, InputEvent** outEvent);
+            nsecs_t frameTime, uint32_t* outSeq, InputEvent** outEvent,
+            int* touchMoveNumber);
+
     status_t consumeSamples(InputEventFactoryInterface* factory,
             Batch& batch, size_t count, uint32_t* outSeq, InputEvent** outEvent);
 
@@ -668,6 +685,13 @@ private:
     static bool shouldResampleTool(int32_t toolType);
 
     static bool isTouchResamplingEnabled();
+    // MIUI ADD: START
+    static bool isPerfLogTurboNative();
+    void writeExceptionLog(int32_t action, int duration);
+    static bool isStylus(const Batch& batch);
+    nsecs_t getResampleLatency();
+    void addLatency( nsecs_t latency);
+    // END
 };
 
 } // namespace android

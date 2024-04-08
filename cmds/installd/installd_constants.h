@@ -59,6 +59,9 @@ constexpr int DEXOPT_GENERATE_COMPACT_DEX = 1 << 11;
 constexpr int DEXOPT_GENERATE_APP_IMAGE = 1 << 12;
 constexpr int DEXOPT_FOR_RESTORE = 1 << 13; // TODO(b/135202722): remove
 
+// MIUI ADD:
+constexpr int DEXOPT_MULTI_ARCH = 1 << 30;
+
 /* all known values for dexopt flags */
 constexpr int DEXOPT_MASK =
     DEXOPT_PUBLIC
@@ -73,6 +76,8 @@ constexpr int DEXOPT_MASK =
     | DEXOPT_ENABLE_HIDDEN_API_CHECKS
     | DEXOPT_GENERATE_COMPACT_DEX
     | DEXOPT_GENERATE_APP_IMAGE
+    // MIUI ADD:
+    | DEXOPT_MULTI_ARCH
     | DEXOPT_FOR_RESTORE;
 
 // NOTE: keep in sync with StorageManager

@@ -44,6 +44,14 @@ public:
     MOCK_METHOD1(setDisplaySize, void(const ui::Size&));
     MOCK_CONST_METHOD0(getTransformHint, ui::Transform::RotationFlags());
 
+#if MI_SCREEN_PROJECTION
+    // MIUI ADD: START
+    MOCK_METHOD1(setDiffScreenProjection, void(uint32_t));
+    MOCK_METHOD1(setCastMode, void(uint32_t));
+    MOCK_METHOD1(setLastFrame, void(uint32_t));
+    // END
+#endif
+
     MOCK_METHOD(void, setLayerFilter, (ui::LayerFilter));
     MOCK_METHOD(bool, includesLayer, (ui::LayerFilter), (const));
     MOCK_METHOD(bool, includesLayer, (const sp<compositionengine::LayerFE>&), (const));
@@ -133,6 +141,7 @@ public:
     MOCK_METHOD1(canPredictCompositionStrategy, bool(const CompositionRefreshArgs&));
     MOCK_METHOD1(setPredictCompositionStrategy, void(bool));
     MOCK_METHOD1(setTreat170mAsSrgb, void(bool));
+    MOCK_CONST_METHOD2(getVisibleLayerInfo, void(std::vector<std::string>*, std::vector<int32_t>*));
 };
 
 } // namespace android::compositionengine::mock

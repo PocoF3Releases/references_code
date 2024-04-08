@@ -33,6 +33,9 @@
 
 #include "DisplayHardware/DisplayMode.h"
 
+// MIUI ADD:
+#include "MiuiEventThreadInspectorStub.h"
+
 // ---------------------------------------------------------------------------
 namespace android {
 // ---------------------------------------------------------------------------
@@ -226,6 +229,11 @@ private:
 
     const std::unique_ptr<VSyncSource> mVSyncSource GUARDED_BY(mMutex);
     frametimeline::TokenManager* const mTokenManager;
+
+    // MIUI ADD: START
+    MiuiEventThreadInspectorStub* mEventThreadInspector = nullptr;
+    bool mConditionNotifiedByVsync;
+    // END
 
     const InterceptVSyncsCallback mInterceptVSyncsCallback;
     const ThrottleVsyncCallback mThrottleVsyncCallback;

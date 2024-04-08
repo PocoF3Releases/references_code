@@ -47,6 +47,9 @@
 #include "egl_object.h"
 #include "egl_tls.h"
 #include "egl_trace.h"
+#if MI_MIGGLE
+#include "../MiGL/MiGLStub.h"
+#endif
 
 using namespace android;
 
@@ -1028,7 +1031,11 @@ EGLBoolean eglMakeCurrentImpl(EGLDisplay dpy, EGLSurface draw, EGLSurface read, 
 
     if (result == EGL_TRUE) {
         if (c) {
+#if MI_MIGGLE
+            setGLHooksThreadSpecific(MiGLStub::getGLThreadSpecific(c->cnx->hooks[c->version]));
+#else
             setGLHooksThreadSpecific(c->cnx->hooks[c->version]);
+#endif
             egl_tls_t::setContext(ctx);
             _c.acquire();
             _r.acquire();

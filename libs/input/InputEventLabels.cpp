@@ -314,7 +314,10 @@ namespace android {
     DEFINE_KEYCODE(REFRESH), \
     DEFINE_KEYCODE(THUMBS_UP), \
     DEFINE_KEYCODE(THUMBS_DOWN), \
-    DEFINE_KEYCODE(PROFILE_SWITCH)
+    DEFINE_KEYCODE(PROFILE_SWITCH), \
+    /* MIUI ADD: START */ \
+    DEFINE_KEYCODE(GOTO)
+    // END
 
 // NOTE: If you add a new axis here you must also add it to several other files.
 //       Refer to frameworks/base/core/java/android/view/MotionEvent.java for the full list.

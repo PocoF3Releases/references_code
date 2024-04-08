@@ -48,6 +48,29 @@ public:
         remote()->transact(NOTE_STOP_SENSOR_TRANSACTION, data, &reply);
     }
 
+    /**
+     * MI ADD START
+     * Package name is passed for collecting system app's power.
+     */
+    virtual void noteStartSensorWithPkg(int uid, int sensor, const String16& packageName) {
+        Parcel data, reply;
+        data.writeInterfaceToken(IBatteryStats::getInterfaceDescriptor());
+        data.writeInt32(uid);
+        data.writeInt32(sensor);
+        data.writeString16(packageName);
+        remote()->transact(NOTE_START_SENSOR_PACKAGE_TRANSACTION, data, &reply);
+    }
+
+    virtual void noteStopSensorWithPkg(int uid, int sensor, const String16& packageName) {
+        Parcel data, reply;
+        data.writeInterfaceToken(IBatteryStats::getInterfaceDescriptor());
+        data.writeInt32(uid);
+        data.writeInt32(sensor);
+        data.writeString16(packageName);
+        remote()->transact(NOTE_STOP_SENSOR_PACKAGE_TRANSACTION, data, &reply);
+    }
+    //END
+
     virtual void noteStartVideo(int uid) {
         Parcel data, reply;
         data.writeInterfaceToken(IBatteryStats::getInterfaceDescriptor());
@@ -139,6 +162,26 @@ status_t BnBatteryStats::onTransact(
     uint32_t code, const Parcel& data, Parcel* reply, uint32_t flags)
 {
     switch(code) {
+                // MI ADD: STRAT
+        case NOTE_START_SENSOR_PACKAGE_TRANSACTION: {
+            CHECK_INTERFACE(IBatteryStats, data, reply);
+            int uid = data.readInt32();
+            int sensor = data.readInt32();
+            String16 package(data.readString16());
+            noteStartSensorWithPkg(uid, sensor, package);
+            reply->writeNoException();
+            return NO_ERROR;
+        } break;
+        case NOTE_STOP_SENSOR_PACKAGE_TRANSACTION: {
+            CHECK_INTERFACE(IBatteryStats, data, reply);
+            int uid = data.readInt32();
+            int sensor = data.readInt32();
+            String16 package(data.readString16());
+            noteStopSensorWithPkg(uid, sensor, package);
+            reply->writeNoException();
+            return NO_ERROR;
+        } break;
+        // END
         case NOTE_START_SENSOR_TRANSACTION: {
             CHECK_INTERFACE(IBatteryStats, data, reply);
             int uid = data.readInt32();

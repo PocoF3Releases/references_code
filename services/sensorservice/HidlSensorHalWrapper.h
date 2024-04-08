@@ -167,6 +167,9 @@ private:
     std::array<Event, SensorEventQueue::MAX_RECEIVE_BUFFER_EVENT_COUNT> mEventBuffer;
 
     sp<SensorsHalDeathReceiver> mSensorsHalDeathReceiver;
+
+    bool isVirtualInjectSensorData = false;
+    sensors_event_t virtualSensorEvent;
 };
 
 } // namespace android

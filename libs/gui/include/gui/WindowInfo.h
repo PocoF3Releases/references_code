@@ -171,6 +171,12 @@ struct WindowInfo : public Parcelable {
                 static_cast<uint32_t>(os::InputConfig::SPY),
         INTERCEPTS_STYLUS =
                 static_cast<uint32_t>(os::InputConfig::INTERCEPTS_STYLUS),
+        // MIUI ADD: START
+        TRANSFER_ANY_TOUCH_FOR_DRAG =
+                static_cast<uint32_t>(os::InputConfig::TRANSFER_ANY_TOUCH_FOR_DRAG),
+        SKIP_HANDWRITING_INJECT_MOTION_EVENT =
+                static_cast<uint32_t>(os::InputConfig::SKIP_HANDWRITING_INJECT_MOTION_EVENT),
+        // END
         // clang-format on
     };
 
@@ -220,6 +226,15 @@ struct WindowInfo : public Parcelable {
      */
     Region touchableRegion;
 
+    // MIUI ADD: START Activity Embedding
+    Region miuiEmbeddedMidRegion;
+    Region miuiEmbeddedHotRegion;
+    // END
+
+    // MIUI ADD: START
+    bool visible = false;
+    //END
+
     TouchOcclusionMode touchOcclusionMode = TouchOcclusionMode::BLOCK_UNTRUSTED;
     int32_t ownerPid = -1;
     int32_t ownerUid = -1;
@@ -229,6 +244,11 @@ struct WindowInfo : public Parcelable {
     InputApplicationInfo applicationInfo;
     bool replaceTouchableRegionWithCrop = false;
     wp<IBinder> touchableRegionCropHandle;
+    // MIUI ADD: START Activity Embedding
+    bool isNeedMiuiEmbeddedEventMapping = false;
+    void addMiuiEmbeddedMidRegion(const Rect& region);
+    void addMiuiEmbeddedHotRegion(const Rect& region);
+    // END
 
     // The window's layout params flags and type set by WM.
     Type layoutParamsType = Type::UNKNOWN;

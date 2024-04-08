@@ -20,6 +20,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <mutex>
 
 #include <android-base/thread_annotations.h>
 #include <android/native_window.h>
@@ -47,6 +48,8 @@
 #include "Scheduler/RefreshRateConfigs.h"
 #include "ThreadContext.h"
 #include "TracedOrdinal.h"
+
+#include "MiRefreshRateOverlay.h"
 
 namespace android {
 
@@ -95,6 +98,10 @@ public:
     ui::Size getSize() const { return {getWidth(), getHeight()}; }
 
     void setLayerStack(ui::LayerStack);
+    #if MI_SCREEN_PROJECTION
+    // MIUI ADD:
+    void setDiffScreenProjection(uint32_t isScreenProjection);
+    #endif
     void setDisplaySize(int width, int height);
     void setProjection(ui::Rotation orientation, Rect viewport, Rect frame);
     void stageBrightness(float brightness) REQUIRES(kMainThreadContext);
@@ -130,6 +137,19 @@ public:
         LOG_FATAL_IF(!id);
         return *id;
     }
+
+#if MI_VIRTUAL_DISPLAY_FRAMERATE
+    // MIUI ADD:
+    uint32_t                getLimitedFrameRate() const { return mLimitedFrameRate; }
+    void                    setLimitedFrameRate(uint32_t frameRate);
+    void                    setLimitedFrameRateReal(uint32_t frameRate);
+    bool                    needToComposite();
+    nsecs_t                 getInterval() const { return mInterval; }
+    void                    setIntervalReal(nsecs_t interval);
+    nsecs_t                 getNextFrameTs() const { return mNextFrameTs; }
+    void                    setNextFrameTsReal(nsecs_t nextFrameTs);
+    // END
+#endif
 
     const wp<IBinder>& getDisplayToken() const { return mDisplayToken; }
     int32_t getSequenceId() const { return mSequenceId; }
@@ -244,11 +264,17 @@ public:
     bool isRefreshRateOverlayEnabled() const { return mRefreshRateOverlay != nullptr; }
     bool onKernelTimerChanged(std::optional<DisplayModeId>, bool timerExpired);
     void animateRefreshRateOverlay();
-
+#ifdef MI_FEATURE_ENABLE
+    void showSecondRefreshRateOverlay(bool isIdleState);
+    void setFpsForSecondRefreshRateOverlay(int32_t fps);
+#endif
     void onVsync(nsecs_t timestamp);
     nsecs_t getVsyncPeriodFromHWC() const;
     nsecs_t getRefreshTimestamp() const;
+    void resetVsyncPeriod();
 
+    void setPowerModeOverrideConfig(bool supported);
+    bool getPowerModeOverrideConfig() const;
     // release HWC resources (if any) for removable displays
     void disconnect();
 
@@ -260,6 +286,9 @@ public:
     void dump(std::string& result) const;
 
 private:
+    friend class SurfaceFlinger;
+    friend class MiSurfaceFlingerImpl;
+
     const sp<SurfaceFlinger> mFlinger;
     HWComposer& mHwComposer;
     const wp<IBinder> mDisplayToken;
@@ -274,6 +303,10 @@ private:
 
     const ui::Rotation mPhysicalOrientation;
     ui::Rotation mOrientation = ui::ROTATION_0;
+    #if MI_SCREEN_PROJECTION
+    // MIUI ADD:
+    uint32_t mIsScreenProjection;
+    #endif
 
     static ui::Transform::RotationFlags sPrimaryDisplayRotationFlags;
 
@@ -284,7 +317,19 @@ private:
     float mBrightness = -1.f;
     const DisplayModes mSupportedModes;
 
+#if MI_VIRTUAL_DISPLAY_FRAMERATE
+    // MIUI ADD:
+    uint32_t mLimitedFrameRate;
+    nsecs_t  mNextFrameTs;
+    nsecs_t  mInterval;
+    // END
+#endif
+
     std::atomic<nsecs_t> mLastHwVsync = 0;
+
+    mutable std::mutex mModeLock;
+    mutable bool mVsyncPeriodUpdated = true;
+    mutable nsecs_t mVsyncPeriod = 0;
 
     // TODO(b/182939859): Remove special cases for primary display.
     const bool mIsPrimary;
@@ -295,8 +340,15 @@ private:
 
     std::vector<ui::Hdr> mOverrideHdrTypes;
 
+    bool mIsPowerModeOverride;
+
     std::shared_ptr<scheduler::RefreshRateConfigs> mRefreshRateConfigs;
     std::unique_ptr<RefreshRateOverlay> mRefreshRateOverlay;
+#ifdef MI_FEATURE_ENABLE
+    std::unique_ptr<MiRefreshRateOverlay> mSecondRefreshRateOverlay;
+    int32_t mSecondRefreshRateOverlayFps = 0;
+    int32_t mLastRefreshRateOverlayFps = -1;
+#endif
 
     mutable std::mutex mActiveModeLock;
     ActiveModeInfo mDesiredActiveMode GUARDED_BY(mActiveModeLock);
@@ -326,6 +378,21 @@ struct DisplayDeviceState {
     sp<IGraphicBufferProducer> surface;
     ui::LayerStack layerStack;
     uint32_t flags = 0;
+#if MI_SCREEN_PROJECTION
+    // MIUI ADD:
+    uint32_t isScreenProjection = 0;
+#endif
+
+#if MI_VIRTUAL_DISPLAY_FRAMERATE
+    // MIUI ADD:
+    uint32_t limitedFrameRate = 0;
+    // END
+#endif
+
+#ifdef MI_SF_FEATURE
+    bool miSecurityDisplay = false;
+#endif
+
     Rect layerStackSpaceRect;
     Rect orientedDisplaySpaceRect;
     ui::Rotation orientation = ui::ROTATION_0;

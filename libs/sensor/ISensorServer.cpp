@@ -42,6 +42,12 @@ enum {
     GET_DYNAMIC_SENSOR_LIST,
     CREATE_SENSOR_DIRECT_CONNECTION,
     SET_OPERATION_PARAMETER,
+#if MI_SCREEN_PROJECTION
+    // MIUI ADD:START
+    SET_SENSOR_DISABLE_APP,
+    REMOVE_SENSOR_DISABLE_APP,
+    // END
+#endif
 };
 
 class BpSensorServer : public BpInterface<ISensorServer>
@@ -109,6 +115,24 @@ public:
         remote()->transact(ENABLE_DATA_INJECTION, data, &reply);
         return reply.readInt32();
     }
+
+#if MI_SCREEN_PROJECTION
+    // MIUI ADD: START
+    virtual void setSensorDisableApp(const String8& packageName) {
+        Parcel data, reply;
+        data.writeInterfaceToken(ISensorServer::getInterfaceDescriptor());
+        data.writeString8(packageName);
+        remote()->transact(SET_SENSOR_DISABLE_APP, data, &reply);
+    }
+
+    virtual void removeSensorDisableApp(const String8& packageName) {
+        Parcel data, reply;
+        data.writeInterfaceToken(ISensorServer::getInterfaceDescriptor());
+        data.writeString8(packageName);
+        remote()->transact(REMOVE_SENSOR_DISABLE_APP, data, &reply);
+    }
+    // END
+#endif
 
     virtual sp<ISensorEventConnection> createSensorDirectConnection(const String16& opPackageName,
             uint32_t size, int32_t type, int32_t format, const native_handle_t *resource) {
@@ -183,6 +207,22 @@ status_t BnSensorServer::onTransact(
             reply->writeInt32(static_cast<int32_t>(ret));
             return NO_ERROR;
         }
+#if MI_SCREEN_PROJECTION
+        // MIUI ADD: START
+        case SET_SENSOR_DISABLE_APP:{
+            CHECK_INTERFACE(ISensorServer, data, reply);
+            const String8& appName = data.readString8();
+            setSensorDisableApp(appName);
+            return NO_ERROR;
+        }
+        case REMOVE_SENSOR_DISABLE_APP:{
+            CHECK_INTERFACE(ISensorServer, data, reply);
+            const String8& appName = data.readString8();
+            removeSensorDisableApp(appName);
+            return NO_ERROR;
+        }
+        // END
+#endif
         case GET_DYNAMIC_SENSOR_LIST: {
             CHECK_INTERFACE(ISensorServer, data, reply);
             const String16& opPackageName = data.readString16();

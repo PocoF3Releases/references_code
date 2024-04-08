@@ -81,9 +81,11 @@ status_t RenderEngineThreaded::setSchedFifo(bool enabled) {
 void RenderEngineThreaded::threadMain(CreateInstanceFactory factory) NO_THREAD_SAFETY_ANALYSIS {
     ATRACE_CALL();
 
+#ifndef MI_RE_SETAFFINITY
     if (!SetTaskProfiles(0, {"SFRenderEnginePolicy"})) {
         ALOGW("Failed to set render-engine task profile!");
     }
+#endif
 
     if (setSchedFifo(true) != NO_ERROR) {
         ALOGW("Couldn't set SCHED_FIFO");
@@ -312,6 +314,21 @@ bool RenderEngineThreaded::canSkipPostRenderCleanup() const {
     return mRenderEngine->canSkipPostRenderCleanup();
 }
 
+void RenderEngineThreaded::setViewportAndProjection(Rect viewPort, Rect sourceCrop) {
+    std::promise<void> resultPromise;
+    std::future<void> resultFuture = resultPromise.get_future();
+    {
+        std::lock_guard lock(mThreadMutex);
+        mFunctionCalls.push([&resultPromise, viewPort, sourceCrop](renderengine::RenderEngine& instance) {
+            ATRACE_NAME("REThreaded::setViewportAndProjection");
+            instance.setViewportAndProjection(viewPort, sourceCrop);
+            resultPromise.set_value();
+        });
+    }
+    mCondition.notify_one();
+    resultFuture.wait();
+}
+
 void RenderEngineThreaded::drawLayersInternal(
         const std::shared_ptr<std::promise<RenderEngineResult>>&& resultPromise,
         const DisplaySettings& display, const std::vector<LayerSettings>& layers,
@@ -414,6 +431,20 @@ void RenderEngineThreaded::setEnableTracing(bool tracingEnabled) {
         });
     }
     mCondition.notify_one();
+}
+int RenderEngineThreaded::getRETid() {
+    std::promise<int> resultPromise;
+    std::future<int> resultFuture = resultPromise.get_future();
+    {
+        std::lock_guard lock(mThreadMutex);
+        mFunctionCalls.push([&resultPromise](renderengine::RenderEngine& instance) {
+            ATRACE_NAME("REThreaded::getRETid");
+            int tid = instance.getRETid();
+            resultPromise.set_value(tid);
+        });
+    }
+    mCondition.notify_one();
+    return resultFuture.get();
 }
 } // namespace threaded
 } // namespace renderengine

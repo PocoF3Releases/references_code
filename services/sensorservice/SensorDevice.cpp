@@ -673,7 +673,29 @@ void SensorDevice::setUidStateForConnection(void* ident, SensorService::UidState
         }
     }
 }
-
+#ifdef HAS_SENSOR_CONTROL 
+void SensorDevice::setUidControlStateForConnection(void* ident, bool enable) {
+    Mutex::Autolock _l(mLock);
+    if (enable){
+        addDisabledReasonForIdentLocked(ident,DisabledReason::DISABLE_REASON_SENSOR_CONTROL);
+    } else{
+        removeDisabledReasonForIdentLocked(ident, DisabledReason::DISABLE_REASON_SENSOR_CONTROL);
+    }
+    for (size_t i = 0; i< mActivationCount.size(); ++i) {
+        int handle = mActivationCount.keyAt(i);
+        Info& info = mActivationCount.editValueAt(i);
+        if (info.hasBatchParamsForIdent(ident)) {
+            updateBatchParamsLocked(handle, info);
+            bool disable = info.numActiveClients() == 0 && info.isActive;
+            bool enable = info.numActiveClients() > 0 && !info.isActive;
+            if ((enable || disable) &&
+                doActivateHardwareLocked(handle, enable) == NO_ERROR) {
+                info.isActive = enable;
+            }
+        }
+    }
+}
+#endif
 bool SensorDevice::isSensorActive(int handle) const {
     Mutex::Autolock _l(mLock);
     ssize_t activationIndex = mActivationCount.indexOfKey(handle);

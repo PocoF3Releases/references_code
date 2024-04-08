@@ -226,6 +226,9 @@ public:
     // Queries whether a given display is wide color display.
     static status_t isWideColorDisplay(const sp<IBinder>& display, bool* outIsWideColorDisplay);
 
+    // Queries whether a given display has support of Hardware RC.
+    static status_t isDeviceRCSupported(const sp<IBinder>& display, bool* outDeviceRCSupported);
+
     /*
      * Returns whether brightness operations are supported on a display.
      *
@@ -252,6 +255,12 @@ public:
      */
     static status_t setDisplayBrightness(const sp<IBinder>& displayToken,
                                          const gui::DisplayBrightness& brightness);
+
+    // MIUI ADD: START
+    static status_t setDisplayBrightnessWithDimLayer(const sp<IBinder>& displayToken,
+                                             const gui::DisplayBrightness& brightness,
+                                             bool hdrBoost, float dimmerFactor);
+    // END
 
     static status_t addHdrLayerInfoListener(const sp<IBinder>& displayToken,
                                             const sp<gui::IHdrLayerInfoListener>& listener);
@@ -288,6 +297,24 @@ public:
      */
     static status_t setGlobalShadowSettings(const half4& ambientColor, const half4& spotColor,
                                             float lightPosY, float lightPosZ, float lightRadius);
+#ifdef CURTAIN_ANIM
+    static status_t setCurtainAnimRate(float rate);
+    static status_t enableCurtainAnim(bool isEnable);
+#endif
+#ifdef MI_SF_FEATURE
+    // MIUI ADD: HDR Dimmer
+    /*
+     * Sets the global configuration of HDR Dimmer.
+     * enable: true means open HDR Dimmer, false means close.
+     * factor: brightening factor, used to adjust dimming level.
+     */
+    static status_t enableHdrDimmer(bool enable, float factor);
+    // END
+#endif
+    // MIUI ADD: START
+    static status_t onFrameDropped(int32_t droppedFrameCount,
+                                        int64_t intendedVsyncTime, String8 windowName);
+    // END
 
     /*
      * Returns whether and how a display supports DISPLAY_DECORATION layers.
@@ -300,6 +327,14 @@ public:
      */
     static std::optional<aidl::android::hardware::graphics::common::DisplayDecorationSupport>
     getDisplayDecorationSupport(const sp<IBinder>& displayToken);
+
+    // MIUI ADD: START
+    static status_t setFpsVideoToDisplay(uint32_t cmd, Parcel *data);
+    // END
+
+    // MIUI ADD: START
+    static bool checkLayerNum();
+    // END
 
     // ------------------------------------------------------------------------
     // surface creation / destruction
@@ -494,6 +529,19 @@ public:
         Transaction& setDimmingEnabled(const sp<SurfaceControl>& sc, bool dimmingEnabled);
         Transaction& setAlpha(const sp<SurfaceControl>& sc,
                 float alpha);
+#if MI_SCREEN_PROJECTION
+        //MIUI ADD:
+        Transaction& setScreenProjection(const sp<SurfaceControl>& sc,
+                int32_t screenFlags);
+#endif
+#if MI_VIRTUAL_DISPLAY_FRAMERATE
+        //  MIUI ADD:
+        void setLimitedFrameRate(const sp<IBinder>& token, uint32_t frameRate);
+        //  END
+#endif
+#ifdef MI_SF_FEATURE
+        void setMiSecurityDisplay(const sp<IBinder>& token, bool isSecurity);
+#endif
         Transaction& setMatrix(const sp<SurfaceControl>& sc,
                 float dsdx, float dtdx, float dtdy, float dsdy);
         Transaction& setCrop(const sp<SurfaceControl>& sc, const Rect& crop);
@@ -579,7 +627,25 @@ public:
         Transaction& setGeometry(const sp<SurfaceControl>& sc,
                 const Rect& source, const Rect& dst, int transform);
         Transaction& setShadowRadius(const sp<SurfaceControl>& sc, float cornerRadius);
-
+#ifdef MI_SF_FEATURE
+        Transaction& setShadowSettings(const sp<SurfaceControl>& sc, int shadowType,
+                float length, const half4& color, float offsetX, float offsetY,
+                float outset, int32_t numOfLayers);
+#endif
+#ifdef MI_SF_FEATURE
+        // MIUI ADD: HDR Dimmer
+        /**
+         * Sets the local configuration of HDR Dimmer.
+         * @param enable ture: open the Hdr Dimmer.
+         * @param region
+         *     Areas to be highlighted, and only takes effect when type is 2.
+        */
+        Transaction& setHdrDimmer(const sp<SurfaceControl>& sc, bool enable,
+                const std::vector<std::vector<float>>& brightRegions,
+                const std::vector<std::vector<float>>& dimRegions);
+        Transaction& setHdrDimmerRatio(const sp<SurfaceControl>& sc, float ratio);
+        // END
+#endif
         Transaction& setFrameRate(const sp<SurfaceControl>& sc, float frameRate,
                                   int8_t compatibility, int8_t changeFrameRateStrategy);
 
@@ -660,6 +726,9 @@ public:
          * TODO (b/213644870): Remove all permissioned things from Transaction
          */
         void sanitize();
+#if MI_DEFER_GESTURE_ANIM
+        void deferAnimation(const sp<SurfaceControl>& sc, int num);
+#endif
     };
 
     status_t clearLayerFrameStats(const sp<IBinder>& token) const;

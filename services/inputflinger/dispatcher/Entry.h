@@ -238,10 +238,24 @@ struct DispatchEntry {
     int32_t resolvedAction;
     int32_t resolvedFlags;
 
+    // MIUI ADD: START Activity Embedding
+    bool isNeedMiuiEmbeddedEventMapping = false;
+    float miuiEmbeddedMidLeft = 0.0f;
+    float miuiEmbeddedMidRight = 0.0f;
+    float miuiEmbeddedHotMarginLeftRight = 0.0f;
+    float miuiEmbeddedHotMarginTopBottom = 0.0f;
+    // END
+
     DispatchEntry(std::shared_ptr<EventEntry> eventEntry, int32_t targetFlags,
                   const ui::Transform& transform, const ui::Transform& rawTransform,
                   float globalScaleFactor);
 
+    // MIUI ADD: START Activity Embedding
+    DispatchEntry(std::shared_ptr<EventEntry> eventEntry, int32_t targetFlags,
+                  ui::Transform transform, const ui::Transform& rawTransform, float globalScaleFactor,
+                  bool isNeedMiuiEmbeddedEventMapping, float miuiEmbeddedMidLeft, float miuiEmbeddedMidRight,
+                  float miuiEmbeddedHotMarginLeftRight, float miuiEmbeddedHotMarginTopBottom);
+    // END
     inline bool hasForegroundTarget() const { return targetFlags & InputTarget::FLAG_FOREGROUND; }
 
     inline bool isSplit() const { return targetFlags & InputTarget::FLAG_SPLIT; }

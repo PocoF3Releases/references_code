@@ -796,6 +796,7 @@ public:
     status_t getColorManagement(bool* /*outGetColorManagement*/) const override { return NO_ERROR; }
     status_t getProtectedContentSupport(bool* /*outSupported*/) const override { return NO_ERROR; }
 
+    status_t isDeviceRCSupported(const sp<IBinder>&, bool*) const override { return NO_ERROR; }
     status_t addRegionSamplingListener(const Rect& /*samplingArea*/,
                                        const sp<IBinder>& /*stopLayerHandle*/,
                                        const sp<IRegionSamplingListener>& /*listener*/) override {
@@ -988,6 +989,13 @@ public:
     }
 
     binder::Status notifyPowerBoost(int /*boostId*/) override { return binder::Status::ok(); }
+
+    //MIUI ADD: START
+    status_t producerFrameDropped(int32_t /*droppedFrameCount*/,
+                                  int64_t /*intendedVsyncTime*/, String8 /*windowName*/) {
+        return NO_ERROR;
+    }
+    //END
 
 protected:
     IBinder* onAsBinder() override { return nullptr; }

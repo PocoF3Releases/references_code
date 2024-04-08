@@ -27,6 +27,7 @@
 #include <SkSurface.h>
 #include <log/log.h>
 #include <utils/Trace.h>
+#include <android-base/properties.h>
 
 namespace android {
 namespace renderengine {
@@ -47,11 +48,41 @@ KawaseBlurFilter::KawaseBlurFilter(): BlurFilter() {
         }
     )");
 
+#ifdef MIUI_BLUR
+    mSupportedHdrDim =
+            android::base::GetBoolProperty("persist.sys.hdr_dimmer_supported", false);
+    if (mSupportedHdrDim) {
+        setFrost();
+        if (mNoiseShader) {
+            blurString = SkString(R"(
+                uniform shader child;
+                uniform float in_blurOffset;
+
+                uniform shader in_noiseImage;
+                uniform float in_noiseCoeff;
+
+                half4 main(float2 xy) {
+                    half4 c = child.eval(xy);
+                    c += child.eval(xy + float2(+in_blurOffset, +in_blurOffset));
+                    c += child.eval(xy + float2(+in_blurOffset, -in_blurOffset));
+                    c += child.eval(xy + float2(-in_blurOffset, -in_blurOffset));
+                    c += child.eval(xy + float2(-in_blurOffset, +in_blurOffset));
+
+                    half3 noise = (in_noiseImage.eval(xy).rgb - 0.5) * in_noiseCoeff;
+                    return half4(c.rgb * 0.2 + noise, 1.0);
+                }
+            )");
+        }
+    }
+#endif
     auto [blurEffect, error] = SkRuntimeEffect::MakeForShader(blurString);
     if (!blurEffect) {
         LOG_ALWAYS_FATAL("RuntimeShader error: %s", error.c_str());
     }
     mBlurEffect = std::move(blurEffect);
+#ifdef MIUI_BLUR
+    setSaturation();
+#endif
 }
 
 sk_sp<SkImage> KawaseBlurFilter::generate(GrRecordingContext* context, const uint32_t blurRadius,
@@ -61,7 +92,12 @@ sk_sp<SkImage> KawaseBlurFilter::generate(GrRecordingContext* context, const uin
     // A radius transformation is required for approximating them, and also to introduce
     // non-integer steps, necessary to smoothly interpolate large radii.
     float tmpRadius = (float)blurRadius / 2.0f;
+#ifdef MIUI_BLUR
+    bool iscts = isCTS();
+    float numberOfPasses = std::min(iscts ? 4 : kMaxPasses, (uint32_t)ceil(tmpRadius));
+#else
     float numberOfPasses = std::min(kMaxPasses, (uint32_t)ceil(tmpRadius));
+#endif
     float radiusByPasses = tmpRadius / (float)numberOfPasses;
 
     // create blur surface with the bit depth and colorspace of the original surface
@@ -81,6 +117,18 @@ sk_sp<SkImage> KawaseBlurFilter::generate(GrRecordingContext* context, const uin
             input->makeShader(SkTileMode::kClamp, SkTileMode::kClamp, linear, blurMatrix);
     blurBuilder.uniform("in_blurOffset") = radiusByPasses * kInputScale;
 
+#ifdef MIUI_BLUR
+    if (mSupportedHdrDim && mNoiseShader) {
+        if (!iscts) {
+            blurBuilder.child("in_noiseImage") = mNoiseShader;
+            blurBuilder.uniform("in_noiseCoeff") = mNoiseCoeff;
+        } else {
+            blurBuilder.child("in_noiseImage") = mNoiseShader;
+            blurBuilder.uniform("in_noiseCoeff") = 0.0;
+        }
+    }
+#endif
+
     sk_sp<SkImage> tmpBlur(blurBuilder.makeImage(context, nullptr, scaledInfo, false));
 
     // And now we'll build our chain of scaled blur stages
@@ -88,8 +136,25 @@ sk_sp<SkImage> KawaseBlurFilter::generate(GrRecordingContext* context, const uin
         blurBuilder.child("child") =
                 tmpBlur->makeShader(SkTileMode::kClamp, SkTileMode::kClamp, linear);
         blurBuilder.uniform("in_blurOffset") = (float) i * radiusByPasses * kInputScale;
+#ifdef MIUI_BLUR
+    if (mSupportedHdrDim && mNoiseShader) {
+        if (!iscts) {
+            blurBuilder.child("in_noiseImage") = mNoiseShader;
+            blurBuilder.uniform("in_noiseCoeff") = mNoiseCoeff;
+        } else {
+            blurBuilder.child("in_noiseImage") = mNoiseShader;
+            blurBuilder.uniform("in_noiseCoeff") = 0.0;
+        }
+    }
+#endif
         tmpBlur = blurBuilder.makeImage(context, nullptr, scaledInfo, false);
     }
+
+#ifdef MIUI_BLUR
+    if(!iscts) {
+       tmpBlur = makeSaturation(context, tmpBlur, linear, scaledInfo, blurRadius);
+    }
+#endif
 
     return tmpBlur;
 }

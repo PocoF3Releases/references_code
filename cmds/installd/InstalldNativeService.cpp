@@ -75,6 +75,8 @@
 #include "CrateManager.h"
 #include "MatchExtensionGen.h"
 #include "QuotaUtils.h"
+// MIUI ADD:
+#include "InstalldStub.h"
 
 #ifndef LOG_TAG
 #define LOG_TAG "installd"
@@ -115,6 +117,7 @@ static constexpr const char* kFuseProp = "persist.sys.fuse";
 static constexpr const char* kAppDataIsolationEnabledProperty = "persist.zygote.app_data_isolation";
 static constexpr const char* kMntSdcardfs = "/mnt/runtime/default/";
 static constexpr const char* kMntFuse = "/mnt/pass_through/0/";
+static constexpr int FLAG_LOCK_WHEN_MOVE               = 1 << 2;
 
 static std::atomic<bool> sAppDataIsolationEnabled(false);
 
@@ -3506,14 +3509,26 @@ binder::Status InstalldNativeService::invalidateMounts() {
 
         if (android::base::GetBoolProperty(kFuseProp, false)) {
             if (target.find(kMntFuse) == 0) {
-                LOG(DEBUG) << "Found storage mount " << source << " at " << target;
-                mStorageMounts[source] = target;
+                // MIUI MOD: START
+                // speed install may mount path to /Android/data, don't record this path.
+                auto position = target.find(kMntSpeedInstall);
+                if (position == std::string::npos) {
+                    LOG(DEBUG) << "Found storage mount " << source << " at " << target;
+                    mStorageMounts[source] = target;
+                }
+                // MIUI END
             }
         } else {
 #if !BYPASS_SDCARDFS
             if (target.find(kMntSdcardfs) == 0) {
-                LOG(DEBUG) << "Found storage mount " << source << " at " << target;
-                mStorageMounts[source] = target;
+                // MIUI MOD: START
+                // speed install may mount path to /Android/data, don't record this path.
+                auto position = target.find(kMntSpeedInstall);
+                if (position == std::string::npos) {
+                    LOG(DEBUG) << "Found storage mount " << source << " at " << target;
+                    mStorageMounts[source] = target;
+                }
+                // MIUI END
             }
 #endif
         }
@@ -3714,6 +3729,157 @@ binder::Status InstalldNativeService::getOdexVisibility(
 
     *_aidl_return = get_odex_visibility(apk_path, instruction_set, oat_dir);
     return *_aidl_return == -1 ? error() : ok();
+}
+
+/**
+ * MIUI ADD:
+ */
+binder::Status InstalldNativeService::changeSpeedInstallFileOwner(const std::string& path,
+        int32_t uid, int32_t gid, bool* _aidl_return) {
+    ENFORCE_UID(AID_SYSTEM);
+    *_aidl_return = true;
+    if (chown(path.c_str(), uid, gid) != 0) {
+        LOG(WARNING) << "Failed to chown install path";
+        *_aidl_return = false;
+    }
+    return ok();
+}
+
+/**
+ * MIUI ADD:
+ */
+binder::Status InstalldNativeService::speedInstallRedirectDir(const std::string& fromPath,
+        const std::string& toPath, bool* _aidl_return) {
+    ENFORCE_UID(AID_SYSTEM);
+    *_aidl_return = true;
+    int errorNo = mount(fromPath.c_str(), toPath.c_str(), nullptr, MS_BIND, nullptr);
+    if(errorNo != 0) {
+        LOG(WARNING) << "Failed to redirect install path" << " errno:" << errno
+                << ":" << strerror(errno);
+        *_aidl_return = false;
+        return ok();
+    }
+
+
+    return ok();
+}
+
+/**
+ * MIUI ADD:
+ */
+binder::Status InstalldNativeService::speedInstallUnRedirectAndDeleteDir(const std::string& fromPath,
+        const std::optional<std::string>& toPath, bool* _aidl_return) {
+    ENFORCE_UID(AID_SYSTEM);
+    *_aidl_return = true;
+    if( toPath && umount(toPath->c_str()) != 0) {
+        LOG(WARNING) << "Failed to unredirect install path" ;
+        *_aidl_return = false;
+    }
+
+    if (*_aidl_return) {
+        if (delete_dir_contents_and_dir(fromPath, true) != 0) {
+            LOG(WARNING) << "Failed to delete install dir and contents";
+        }
+    } else if (toPath) {
+        delete_dir_contents(*toPath, true);
+    }
+
+    return ok();
+}
+
+// MIUI ADD:
+binder::Status InstalldNativeService::moveData(const std::string& src, const std::string& dst,
+        int32_t uid, int32_t gid, const std::string& seInfo, int32_t flag, bool* _aidl_return){
+    ENFORCE_UID(AID_SYSTEM);
+
+    if (uid < 0 || gid < 0) {
+        LOG(DEBUG) << "MIUI-START for moveData()...return for uid=" << uid << ", gid=" << gid;
+        *_aidl_return = false;
+        return ok();
+    }
+
+    LOG(DEBUG) << "MIUI-START for moveData()...start,dst=" << dst << ",uid=" << uid << ",gid=" << gid;
+
+    bool success = false;
+
+    // check if we need lock befor move
+    if ((flag & FLAG_LOCK_WHEN_MOVE) == FLAG_LOCK_WHEN_MOVE) {
+        std::lock_guard<std::recursive_mutex> lock(mLock);
+        LOG(DEBUG) << "MIUI-START for moveData()...locking....";
+        success = InstalldStub::moveData(src, dst, uid, gid, seInfo, flag);
+    } else {
+        success = InstalldStub::moveData(src, dst, uid, gid, seInfo, flag);
+    }
+
+    *_aidl_return = success;
+
+    LOG(DEBUG) << "MIUI-START for moveData()... " << (success ? "success" : "fail");
+
+    return ok();
+}
+
+/**
+ * MIUI ADD:
+ */
+binder::Status InstalldNativeService::transferData(const std::string& src, const std::string& target_base,
+        const std::string& target_relative, bool copy, int32_t target_uid, int32_t target_gid,
+        int32_t target_mode, const std::string& target_se_info, bool ignore_set_perm_err, int32_t* _aidl_return) {
+    ENFORCE_UID(AID_SYSTEM);
+
+    LOG(WARNING) << "MIUI-START for transferData()...start";
+
+    if (-1 == transfer(src.c_str(), target_base.c_str(), target_relative.c_str(), copy, target_uid,
+            target_gid, target_mode, target_se_info.c_str(), ignore_set_perm_err)) {
+        *_aidl_return = errno;
+        LOG(WARNING) << "MIUI-START for transferData()... failed, errno= " << strerror(*_aidl_return);
+    } else {
+        *_aidl_return = 0;
+        LOG(WARNING) << "MIUI-START for transferData()... success";
+    }
+
+    return ok();
+}
+
+/**
+ * MIUI ADD:
+ */
+binder::Status InstalldNativeService::getDataFD(const std::string& filePath, std::vector<::android::os::ParcelFileDescriptor>* fds,
+        int32_t* _aidl_return) {
+    ENFORCE_UID(AID_SYSTEM);
+
+    LOG(WARNING) << "MIUI-START for getDataFD()...start";
+
+    int ret;
+    if (-1 == (ret = open(filePath.c_str(), O_RDONLY))) {
+        *_aidl_return = errno;
+        LOG(WARNING) << "MIUI-START for getDataFD()... failed, errno= " << strerror(*_aidl_return);
+    } else {
+        *_aidl_return = 0;
+        fds->at(0).reset(::android::base::unique_fd(ret));
+        LOG(WARNING) << "MIUI-START for getDataFD()... success";
+    }
+
+    return ok();
+}
+
+/**
+ * MIUI ADD:
+ */
+binder::Status InstalldNativeService::listDataDir(const std::string& path, int64_t start, int64_t max_count,
+        std::vector<std::string>* list, std::vector<int64_t>* offset, int32_t* _aidl_return) {
+    ENFORCE_UID(AID_SYSTEM);
+
+    LOG(WARNING) << "MIUI-START for listDataDir()...start";
+
+    if (-1 == list_files(path.c_str(), start, max_count, list, &offset->at(0))) {
+        *_aidl_return = errno;
+        LOG(WARNING) << "MIUI-START for listDataDir()... failed, errno= " << strerror(*_aidl_return);
+    } else {
+        *_aidl_return = 0;
+        LOG(WARNING) << "MIUI-START for listDataDir()... success";
+    }
+
+    return ok();
 }
 
 }  // namespace installd

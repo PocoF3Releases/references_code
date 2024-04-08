@@ -43,6 +43,7 @@
 #include "Layer.h"
 #include "Scheduler/VsyncController.h"
 #include "SurfaceFlinger.h"
+#include "MiSurfaceFlingerStub.h"
 
 namespace android {
 using namespace std::chrono_literals;
@@ -368,7 +369,9 @@ void RegionSamplingThread::captureSample() {
 
     std::vector<Descriptor> activeDescriptors;
     for (const auto& descriptor : descriptors) {
-        if (listeners.count(descriptor.listener) != 0) {
+        // MIUI MOD : Activity Embedding
+        //if (listeners.count(descriptor.listener) != 0) {
+        if (listeners.count(descriptor.listener) != 0 || MiSurfaceFlingerStub::isEmbeddedEnable()) {
             activeDescriptors.emplace_back(descriptor);
         }
     }

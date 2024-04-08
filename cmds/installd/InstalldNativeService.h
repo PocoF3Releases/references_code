@@ -183,7 +183,14 @@ public:
             bool* _aidl_return);
 
     binder::Status migrateLegacyObbData();
-
+    // MIUI ADD: START
+    binder::Status changeSpeedInstallFileOwner(const std::string& path, int32_t uid, int32_t gid,
+            bool* _aidl_return);
+    binder::Status speedInstallRedirectDir(const std::string& fromPath,
+            const std::string& toPath, bool* _aidl_return);
+    binder::Status speedInstallUnRedirectAndDeleteDir(const std::string& fromPath,
+            const std::optional<std::string>& toPath, bool* _aidl_return);
+    // END
     binder::Status cleanupInvalidPackageDirs(const std::optional<std::string>& uuid, int32_t userId,
                                              int32_t flags);
 
@@ -191,8 +198,19 @@ public:
                                      const std::string& instructionSet,
                                      const std::optional<std::string>& outputPath,
                                      int32_t* _aidl_return);
+    // MIUI ADD:
+    binder::Status moveData(const std::string& src, const std::string& dst,
+            int32_t uid, int32_t gid, const std::string& seInfo, int32_t flag, bool* _aidl_return);
 
 private:
+    // MIUI ADD:
+    binder::Status transferData(const std::string& src, const std::string& target_base,
+        const std::string& target_relative, bool copy, int32_t target_uid, int32_t target_gid,
+        int32_t target_mode, const std::string& target_se_info, bool ignore_set_perm_err, int32_t* _aidl_return);
+    binder::Status getDataFD(const std::string& filePath, std::vector<::android::os::ParcelFileDescriptor>* fds, int32_t* _aidl_return);
+    binder::Status listDataDir(const std::string& path, int64_t start, int64_t max_count,
+        std::vector<std::string>* list, std::vector<int64_t>* offset, int32_t* _aidl_return);
+
     std::recursive_mutex mLock;
     std::unordered_map<userid_t, std::weak_ptr<std::shared_mutex>> mUserIdLock;
     std::unordered_map<std::string, std::weak_ptr<std::recursive_mutex>> mPackageNameLock;

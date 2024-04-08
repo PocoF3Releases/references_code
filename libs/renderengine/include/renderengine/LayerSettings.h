@@ -134,6 +134,38 @@ struct ShadowSettings {
     bool casterIsTranslucent = false;
 };
 
+#ifdef MI_SF_FEATURE
+struct MiuiShadowSettings {
+    // Type of shadow.
+    // 0-NoShadow, 1-AmbientShadow, 2-SpotShadow, 3-BlurShadow, 4-AtmosphereLamp
+    int32_t shadowType = 0;
+
+    // Boundaries of the shadow.
+    FloatRect boundaries = FloatRect();
+
+    // Color to the ambient shadow. The alpha is premultiplied.
+    vec4 color = vec4();
+
+    // Position of the light source used to cast the spot shadow.
+    vec3 lightPos = vec3();
+
+    // Radius of the spot light source. Smaller radius will have sharper edges,
+    // larger radius will have softer shadows
+    float lightRadius = 0.f;
+
+    // Length of the cast shadow. If length is <= 0.f no shadows will be drawn.
+    float length = 0.f;
+
+    int32_t numOfLayers = 1;
+    float offsetX = 0.f;
+    float offsetY = 0.f;
+    float outset = 0.f;
+    // If true fill in the casting layer is translucent and the shadow needs to fill the bounds.
+    // Otherwise the shadow will only be drawn around the edges of the casting layer.
+    bool casterIsTranslucent = false;
+};
+#endif
+
 // The settings that RenderEngine requires for correctly rendering a Layer.
 struct LayerSettings {
     // Geometry information
@@ -179,6 +211,18 @@ struct LayerSettings {
     // If white point nits are unknown, then this layer is assumed to have the
     // same luminance as the brightest layer in the scene.
     float whitePointNits = -1.f;
+
+#ifdef MI_SF_FEATURE
+    bool coverBlur = false;
+    MiuiShadowSettings miShadow;
+    bool atmosphereLamp = false;
+    // MIUI ADD: HDR Dimmer
+    bool hdrDimmerEnabled = false;
+    std::vector<std::vector<float>> hdrBrightRegion;
+    std::vector<std::vector<float>> hdrDimRegion;
+    float hdrDimmerRatio = 1.0f;
+    // END
+#endif
 };
 
 // Keep in sync with custom comparison function in

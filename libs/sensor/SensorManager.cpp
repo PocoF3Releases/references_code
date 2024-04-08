@@ -285,6 +285,24 @@ bool SensorManager::isDataInjectionEnabled() {
     return false;
 }
 
+#if MI_SCREEN_PROJECTION
+// MIUI ADD: START
+void SensorManager::setSensorDisableApp(const String8& packageName) {
+    Mutex::Autolock _l(mLock);
+    if (assertStateLocked() == NO_ERROR) {
+        mSensorServer->setSensorDisableApp(packageName);
+    }
+}
+
+void SensorManager::removeSensorDisableApp(const String8& packageName) {
+    Mutex::Autolock _l(mLock);
+    if (assertStateLocked() == NO_ERROR) {
+        mSensorServer->removeSensorDisableApp(packageName);
+    }
+}
+// END
+#endif
+
 int SensorManager::createDirectChannel(
         size_t size, int channelType, const native_handle_t *resourceHandle) {
     Mutex::Autolock _l(mLock);
