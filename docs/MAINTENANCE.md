@@ -18,6 +18,8 @@ python3 tools/repoindex workspace index --tree android-t-qcom
 python3 tools/repoindex workspace verify --live --hash-implementations
 python3 tools/repoindex workspace benchmark --samples 5 --budget-ms 100 --out evidence/benchmarks.json
 python3 tools/repoindex/scripts/check.py
+# Optional development packaging check; uses installed build tools, no network:
+python3 tools/repoindex/scripts/check_package.py
 ```
 
 The configured guide updates after successful CLI maintenance; `workspace guide`
@@ -31,6 +33,12 @@ reports are recoverable from the pre-cleanup history backup rather than active d
 canonical directory without `.git`; retain the local provenance file. Generic
 frontends, checks, benchmarks and tests belong upstream. Consumer `scripts/` files
 are thin compatibility routes and must not acquire a second implementation.
+
+Develop in independent `~/tools/repoindex`. The implementation is a package under
+`src/repoindex/`; keep that entire directory when vendoring. See its
+[development map](../tools/repoindex/docs/DEVELOPMENT.md) for module ownership and
+installed-package checks. Refresh from a verified canonical commit; do not link
+the consumer to a mutable development checkout.
 
 ## History and recovery
 

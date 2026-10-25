@@ -52,3 +52,7 @@ The existing `scripts/refsearch.py` command forwards to the same frontend. It ke
 JSON for indexed results and plain live/scopes output, with its historical 40-result
 default. `scripts/reindex.py` and `scripts/benchmark_search.py` are also compatibility
 shims; the generic implementation is maintained only in repoindex.
+
+For tool development or optional isolated installation, use the
+[package guide](../tools/repoindex/docs/DEVELOPMENT.md). Search commands above
+use the pinned workspace copy, not a potentially different global installation.
