@@ -39,13 +39,16 @@ performance and documentation/architecture; no further required findings remaine
 in their reviewed scope. Workspace checks validate docs/config/part sizes without
 restoring databases or scanning source trees.
 
-A real [fresh GitHub sparse clone](../evidence/fresh-clone.json), with no source
-folders or existing caches, passed 29 acceptance checks and all 81 synthetic tool
-tests. Its isolated Python environment contained zero third-party distributions,
-no installed repoindex and no pip. The first ordinary query restored both caches;
-file/header/body/range searches worked for each tree and both-tree API queries
-passed with network, subprocess and ingestion guards. JSON/text budgets, scope
-intersections, compatibility scripts, nested/outside-workspace discovery and
-expected missing-live-source errors passed. Bundles, restored DB mtimes and the
-Git worktree stayed unchanged. Only runtime Python/SQLite and the checkout are
-needed; the isolated environment was test isolation, not a setup requirement.
+The reusable [fresh-clone check](MAINTENANCE.md#fresh-index-only-acceptance)
+passed 29 acceptance checks against a real GitHub sparse clone with no source
+folders or initial caches. The [report](../evidence/fresh-clone.json) records zero
+third-party distributions, no pip/installed repoindex, automatic restoration of
+both indexes, guarded API/CLI queries, bounded output, expected errors and
+unchanged bundles/databases/worktree. Its temporary clone was removed afterward.
+The command never invokes source ingestion or synthetic fixture builds.
+
+Separately, 81 canonical fixtures and 3 consumer-harness regressions pass. The
+consumer tests cover the guarded probe, missing chunks under Python optimization,
+and cleanup/reporting after clone failure. Their inputs are tiny synthetic trees;
+they do not rebuild either real source index. Python/SQLite remain runtime
+prerequisites; this is not a certification of every platform/version.

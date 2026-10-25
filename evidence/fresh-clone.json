@@ -1,221 +1,209 @@
 {
-  "date": "2026-10-25",
-  "reference_revision": "c04bc32bc1542a3e5c83308e7030e2d73d8a7a76",
-  "tool_revision": "549b2eec1cdf6424933604c2a3002c63433dbffe",
-  "git_remote_clone": true,
-  "source_directories_present": false,
-  "cold_cache_start": true,
-  "runtime_installs_run": false,
-  "real_corpus_rebuilt": false,
   "completed": true,
+  "trees": [
+    "LA.UM.8.12.r1-11900-sm8250.0",
+    "android-t-qcom"
+  ],
+  "tool_version": "2.1.1",
+  "python": "3.14.4",
+  "sqlite": "3.46.1",
+  "site_packages_enabled": false,
+  "third_party_distributions": 0,
+  "pip_installed": false,
+  "repoindex_installed": false,
+  "source_directories_present": false,
+  "probe_network_process_ingestion_guards": true,
   "checks": [
     {
-      "command": "isolated Python environment",
+      "check": "cold saved status",
       "exit": 0,
-      "seconds": 0.058,
-      "stdout_bytes": 127
+      "expected_exit": 0,
+      "seconds": 0.009,
+      "stdout_bytes": 838
     },
     {
-      "command": "python3 tools/repoindex workspace --help",
+      "check": "configured scopes",
       "exit": 0,
-      "seconds": 0.076,
-      "stdout_bytes": 2052
+      "expected_exit": 0,
+      "seconds": 0.004,
+      "stdout_bytes": 1529
     },
     {
-      "command": "python3 tools/repoindex workspace status --json",
+      "check": "first ordinary query restores both",
       "exit": 0,
-      "seconds": 0.088,
-      "stdout_bytes": 838,
-      "rows": 2
+      "expected_exit": 0,
+      "seconds": 16.741,
+      "stdout_bytes": 1007
     },
     {
-      "command": "python3 tools/repoindex workspace scopes",
+      "check": "warm saved status",
       "exit": 0,
-      "seconds": 0.078,
-      "stdout_bytes": 1131
+      "expected_exit": 0,
+      "seconds": 0.008,
+      "stdout_bytes": 836
     },
     {
-      "command": "python3 scripts/check.py",
+      "check": "android-t-qcom files",
       "exit": 0,
-      "seconds": 0.083,
-      "stdout_bytes": 77
+      "expected_exit": 0,
+      "seconds": 0.009,
+      "stdout_bytes": 544
     },
     {
-      "command": "python3 tools/repoindex workspace files *AudioFlinger* --limit 5 --json",
+      "check": "android-t-qcom symbol",
       "exit": 0,
-      "seconds": 17.437,
-      "stdout_bytes": 544,
-      "rows": 5
+      "expected_exit": 0,
+      "seconds": 0.009,
+      "stdout_bytes": 203
     },
     {
-      "command": "python3 tools/repoindex workspace status --json",
+      "check": "android-t-qcom body",
       "exit": 0,
-      "seconds": 0.077,
-      "stdout_bytes": 836,
-      "rows": 2
+      "expected_exit": 0,
+      "seconds": 0.023,
+      "stdout_bytes": 740
     },
     {
-      "command": "python3 tools/repoindex workspace files *camxbpsnode* --tree LA.UM.8.12.r1-11900-sm8250.0 --limit 5 --json",
+      "check": "android-t-qcom default body",
       "exit": 0,
-      "seconds": 0.088,
-      "stdout_bytes": 226,
-      "rows": 2
+      "expected_exit": 0,
+      "seconds": 0.023,
+      "stdout_bytes": 740
     },
     {
-      "command": "python3 tools/repoindex workspace symbol BPSNode --scope camera --limit 5 --json",
+      "check": "android-t-qcom scoped body",
       "exit": 0,
-      "seconds": 0.095,
-      "stdout_bytes": 181,
-      "rows": 1
+      "expected_exit": 0,
+      "seconds": 0.014,
+      "stdout_bytes": 740
     },
     {
-      "command": "python3 tools/repoindex workspace symbol AudioFlinger --tree android-t-qcom --limit 5 --json",
+      "check": "android-t-qcom source range",
       "exit": 0,
-      "seconds": 0.093,
-      "stdout_bytes": 203,
-      "rows": 1
+      "expected_exit": 0,
+      "seconds": 0.01,
+      "stdout_bytes": 519
     },
     {
-      "command": "python3 tools/repoindex workspace impl BPSNode::ExecuteProcessRequest --limit 5 --json",
+      "check": "LA.UM.8.12.r1-11900-sm8250.0 files",
       "exit": 0,
-      "seconds": 0.142,
-      "stdout_bytes": 418,
-      "rows": 2
+      "expected_exit": 0,
+      "seconds": 0.004,
+      "stdout_bytes": 226
     },
     {
-      "command": "python3 tools/repoindex workspace impl AudioFlinger::checkAttributionSourcePackage --limit 5 --json",
+      "check": "LA.UM.8.12.r1-11900-sm8250.0 symbol",
       "exit": 0,
-      "seconds": 0.131,
-      "stdout_bytes": 740,
-      "rows": 3
+      "expected_exit": 0,
+      "seconds": 0.004,
+      "stdout_bytes": 181
     },
     {
-      "command": "python3 tools/repoindex workspace impl AudioFlinger::checkAttributionSourcePackage --path-prefix android-t-qcom/frameworks/av/services/audioflinger --limit 5 --json",
+      "check": "LA.UM.8.12.r1-11900-sm8250.0 body",
       "exit": 0,
-      "seconds": 0.113,
-      "stdout_bytes": 740,
-      "rows": 3
+      "expected_exit": 0,
+      "seconds": 0.007,
+      "stdout_bytes": 418
     },
     {
-      "command": "python3 tools/repoindex workspace source android-t-qcom/frameworks/av/services/audioflinger/AudioFlinger.cpp --line 283 --limit 4 --json",
+      "check": "LA.UM.8.12.r1-11900-sm8250.0 default body",
       "exit": 0,
-      "seconds": 0.096,
-      "stdout_bytes": 519,
-      "rows": 1
+      "expected_exit": 0,
+      "seconds": 0.025,
+      "stdout_bytes": 418
     },
     {
-      "command": "python3 tools/repoindex workspace source LA.UM.8.12.r1-11900-sm8250.0/camx/src/hwl/bps/camxbpsnode.cpp --line 1351 --limit 4 --json",
+      "check": "LA.UM.8.12.r1-11900-sm8250.0 scoped body",
       "exit": 0,
-      "seconds": 0.102,
-      "stdout_bytes": 483,
-      "rows": 1
+      "expected_exit": 0,
+      "seconds": 0.012,
+      "stdout_bytes": 418
     },
     {
-      "command": "python3 tools/repoindex workspace impl BPSNode --tree android-t-qcom --scope camera --json",
+      "check": "LA.UM.8.12.r1-11900-sm8250.0 source range",
       "exit": 0,
-      "seconds": 0.074,
-      "stdout_bytes": 0,
-      "rows": 0
+      "expected_exit": 0,
+      "seconds": 0.006,
+      "stdout_bytes": 557
     },
     {
-      "command": "python3 tools/repoindex workspace source android-t-qcom/frameworks/av/services/audioflinger/AudioFlinger.cpp --line 10000000 --json",
-      "exit": 0,
-      "seconds": 0.097,
-      "stdout_bytes": 0,
-      "rows": 0
+      "check": "both-tree Python API with guards",
+      "exit": 0
     },
     {
-      "command": "python3 tools/repoindex workspace text AudioFlinger --scope frameworks",
-      "exit": 2,
-      "seconds": 0.074,
+      "check": "empty tree/scope intersection",
+      "exit": 0,
+      "expected_exit": 0,
+      "seconds": 0.004,
       "stdout_bytes": 0
     },
     {
-      "command": "python3 tools/repoindex workspace files Mode --tree not-a-tree",
-      "exit": 2,
-      "seconds": 0.067,
+      "check": "range past EOF",
+      "exit": 0,
+      "expected_exit": 0,
+      "seconds": 0.005,
       "stdout_bytes": 0
     },
     {
-      "command": "python3 tools/repoindex workspace files *.cpp --limit 1000",
+      "check": "missing live source is explicit",
+      "exit": 2,
+      "expected_exit": 2,
+      "seconds": 0.005,
+      "stdout_bytes": 0
+    },
+    {
+      "check": "unknown tree fails",
+      "exit": 2,
+      "expected_exit": 2,
+      "seconds": 0.001,
+      "stdout_bytes": 0
+    },
+    {
+      "check": "bounded text",
       "exit": 0,
-      "seconds": 0.094,
+      "expected_exit": 0,
+      "seconds": 0.011,
       "stdout_bytes": 12000
     },
     {
-      "command": "python3 tools/repoindex workspace files *.cpp --limit 1000 --json",
+      "check": "bounded JSON",
       "exit": 0,
-      "seconds": 0.096,
-      "stdout_bytes": 11990,
-      "rows": 89
+      "expected_exit": 0,
+      "seconds": 0.009,
+      "stdout_bytes": 11990
     },
     {
-      "command": "python3 tools/repoindex workspace files *.cpp --limit 2 --json",
+      "check": "global result limit",
       "exit": 0,
-      "seconds": 0.097,
-      "stdout_bytes": 231,
-      "rows": 2
+      "expected_exit": 0,
+      "seconds": 0.009,
+      "stdout_bytes": 231
     },
     {
-      "command": "python3 scripts/refsearch.py impl BPSNode::ExecuteProcessRequest --scope camera --limit 2",
-      "exit": 0,
-      "seconds": 0.103,
-      "stdout_bytes": 418,
-      "rows": 2
+      "check": "launcher tools/repoindex",
+      "exit": 0
     },
     {
-      "command": "python3 scripts/reindex.py --help",
-      "exit": 0,
-      "seconds": 0.066,
-      "stdout_bytes": 1891
+      "check": "launcher scripts/refsearch.py",
+      "exit": 0
     },
     {
-      "command": "python3 scripts/benchmark_search.py --help",
-      "exit": 0,
-      "seconds": 0.066,
-      "stdout_bytes": 2008
+      "check": "launcher scripts/reindex.py",
+      "exit": 0
     },
     {
-      "command": "workspace discovery from a nested directory",
-      "exit": 0,
-      "seconds": 0.104,
-      "stdout_bytes": 148
+      "check": "launcher scripts/benchmark_search.py",
+      "exit": 0
     },
     {
-      "command": "explicit workspace from outside checkout",
-      "exit": 0,
-      "seconds": 0.098,
-      "stdout_bytes": 122
-    },
-    {
-      "command": "both-tree API with network/process/ingestion guards",
-      "exit": 0,
-      "seconds": 0.152,
-      "stdout_bytes": 59
-    },
-    {
-      "command": "python3 scripts/check.py --tests",
-      "exit": 0,
-      "seconds": 5.249,
-      "stdout_bytes": 163
+      "check": "launcher scripts/check.py",
+      "exit": 0
     }
   ],
-  "environment": {
-    "python": "3.14.4",
-    "sqlite": "3.46.1",
-    "third_party_distributions": 0,
-    "repoindex_installed": false,
-    "pip_installed": false
-  },
+  "reference_revision": "c41843a03b2ab6c532e4efca6038cdfded4552bf",
   "data_and_worktree_unchanged": true,
-  "restored_database_count": 2,
-  "synthetic_fixture_suite_run": true,
-  "partial_clone_filter": "blob:none",
-  "sample_source_blobs_absent_from_git": true,
-  "clone_recipe": [
-    "git clone --filter=blob:none --sparse --single-branch --branch main https://github.com/PocoF3Releases/references_code.git",
-    "cd references_code",
-    "git sparse-checkout set tools/repoindex index docs evidence scripts"
-  ],
-  "scope": "Real GitHub sparse clone; empty no-pip environment; 29 acceptance checks plus 81 synthetic tool tests. No real source indexing or runtime package installation."
+  "runtime_installs_run": false,
+  "real_corpus_rebuilt": false,
+  "elapsed_seconds": 38.299,
+  "command": "python3 scripts/check_fresh_clone.py"
 }
