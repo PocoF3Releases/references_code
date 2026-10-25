@@ -1,0 +1,185 @@
+[
+  {
+    "mode": "files",
+    "query": "*AudioFlinger*",
+    "prefixes": [
+      "LA.UM.8.12.r1-11900-sm8250.0",
+      "android-t-qcom"
+    ],
+    "median_ms": 6.191,
+    "samples_ms": [
+      33.348,
+      6.191,
+      6.131,
+      6.807,
+      6.078
+    ],
+    "rows": 9
+  },
+  {
+    "mode": "files",
+    "query": "Mode.h",
+    "prefixes": [
+      "LA.UM.8.12.r1-11900-sm8250.0",
+      "android-t-qcom"
+    ],
+    "median_ms": 7.713,
+    "samples_ms": [
+      56.471,
+      8.27,
+      7.713,
+      7.405,
+      7.436
+    ],
+    "rows": 20
+  },
+  {
+    "mode": "files",
+    "query": "*.h",
+    "prefixes": [
+      "LA.UM.8.12.r1-11900-sm8250.0",
+      "android-t-qcom"
+    ],
+    "median_ms": 1.273,
+    "samples_ms": [
+      2.267,
+      1.239,
+      1.279,
+      1.266,
+      1.273
+    ],
+    "rows": 20
+  },
+  {
+    "mode": "symbol",
+    "query": "BPSNode",
+    "prefixes": [
+      "LA.UM.8.12.r1-11900-sm8250.0",
+      "android-t-qcom"
+    ],
+    "median_ms": 4.913,
+    "samples_ms": [
+      6.927,
+      4.849,
+      4.913,
+      4.893,
+      4.987
+    ],
+    "rows": 1
+  },
+  {
+    "mode": "files",
+    "query": "*nothing_can_match_59746*",
+    "prefixes": [
+      "LA.UM.8.12.r1-11900-sm8250.0",
+      "android-t-qcom"
+    ],
+    "median_ms": 5.663,
+    "samples_ms": [
+      14.084,
+      5.755,
+      5.663,
+      5.606,
+      5.611
+    ],
+    "rows": 0
+  },
+  {
+    "mode": "files",
+    "query": "*Audio*",
+    "prefixes": [
+      "android-t-qcom/frameworks/av"
+    ],
+    "median_ms": 10.441,
+    "samples_ms": [
+      73.132,
+      10.441,
+      10.431,
+      10.388,
+      10.478
+    ],
+    "rows": 20
+  },
+  {
+    "mode": "impl",
+    "query": "AudioFlinger::checkAttributionSourcePackage",
+    "prefixes": [
+      "android-t-qcom/frameworks/av"
+    ],
+    "median_ms": 9.14,
+    "samples_ms": [
+      47.995,
+      8.718,
+      9.14,
+      9.662,
+      8.864
+    ],
+    "rows": 3
+  },
+  {
+    "mode": "impl",
+    "query": "BPSNode::ExecuteProcessRequest",
+    "prefixes": [
+      "LA.UM.8.12.r1-11900-sm8250.0/camx"
+    ],
+    "median_ms": 4.986,
+    "samples_ms": [
+      52.777,
+      5.075,
+      4.763,
+      4.814,
+      4.986
+    ],
+    "rows": 2
+  },
+  {
+    "mode": "impl",
+    "query": "pExecuteProcessRequestData->pNodeProcessRequestData",
+    "prefixes": [
+      "LA.UM.8.12.r1-11900-sm8250.0/camx"
+    ],
+    "median_ms": 3.405,
+    "samples_ms": [
+      7.1,
+      3.434,
+      3.399,
+      3.335,
+      3.405
+    ],
+    "rows": 20
+  },
+  {
+    "mode": "impl",
+    "query": "return",
+    "prefixes": [
+      "LA.UM.8.12.r1-11900-sm8250.0",
+      "android-t-qcom"
+    ],
+    "median_ms": 5.112,
+    "samples_ms": [
+      54.875,
+      5.37,
+      5.006,
+      5.112,
+      4.96
+    ],
+    "rows": 20
+  },
+  {
+    "mode": "impl",
+    "query": "never_a_real_body_marker_743953",
+    "prefixes": [
+      "LA.UM.8.12.r1-11900-sm8250.0",
+      "android-t-qcom"
+    ],
+    "median_ms": 6.359,
+    "samples_ms": [
+      14.167,
+      6.447,
+      6.315,
+      6.359,
+      6.156
+    ],
+    "rows": 0
+  }
+]

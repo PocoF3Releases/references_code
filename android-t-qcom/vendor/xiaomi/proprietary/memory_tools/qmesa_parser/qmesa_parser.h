@@ -1,0 +1,11 @@
+#ifndef _QMESA_PARE_H_
+#define _QMESA_PARE_H_
+
+#define CID_MANFID_SANDISK	0x2
+#define CID_MANFID_TOSHIBA 	0x11
+#define CID_MANFID_MICRON	0x13
+#define CID_MANFID_SAMSUNG	0x15
+#define CID_MANFID_HYNIX	0x90
+#define CID_MANFID_NUMONYX_MICRON 0xfe
+
+#endif /*_QMESA_PARE_H_*/

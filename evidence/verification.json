@@ -1,0 +1,36 @@
+{
+  "checked_on": "2026-10-25",
+  "checks": "chunk/database hashes, SQLite/FTS integrity, file/header/body coverage, live metadata and all implementation raw/normalized hashes",
+  "trees": [
+    {
+      "tree": "LA.UM.8.12.r1-11900-sm8250.0",
+      "chunks_verified": 5,
+      "database_integrity": "ok",
+      "files": 44561,
+      "header_symbols": 225021,
+      "includes": 20546,
+      "search_backend": "trigram",
+      "live_metadata_verified": true,
+      "live_contents_hashed": false,
+      "implementation_files": 2490,
+      "implementation_bytes": 61327285,
+      "implementation_hashes_verified": true,
+      "database_sha256": "09e295f2593a92b64d05d72b71b80c6230cf579eb7edc001a84a9b9dd4b5ce1a"
+    },
+    {
+      "tree": "android-t-qcom",
+      "chunks_verified": 63,
+      "database_integrity": "ok",
+      "files": 212048,
+      "header_symbols": 2977498,
+      "includes": 458588,
+      "search_backend": "trigram",
+      "live_metadata_verified": true,
+      "live_contents_hashed": false,
+      "implementation_files": 72079,
+      "implementation_bytes": 1426541925,
+      "implementation_hashes_verified": true,
+      "database_sha256": "74533fed0eed37069ceac93733678ca517b4bbeca8f133932a39d957114e2a4a"
+    }
+  ]
+}

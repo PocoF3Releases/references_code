@@ -1,0 +1,366 @@
+{
+  "LA.UM.8.12.r1-11900-sm8250.0": {
+    "files": 44561,
+    "bytes": 4314522968,
+    "components": {
+      "android-perf": {
+        "files": 291,
+        "bytes": 1646670
+      },
+      "bluetooth": {
+        "files": 164,
+        "bytes": 1505871
+      },
+      "camera-devicetree": {
+        "files": 42,
+        "bytes": 493139
+      },
+      "camx": {
+        "files": 1175,
+        "bytes": 29392097
+      },
+      "chi-cdk": {
+        "files": 18483,
+        "bytes": 1673709102
+      },
+      "cne": {
+        "files": 90,
+        "bytes": 616052
+      },
+      "common": {
+        "files": 532,
+        "bytes": 18084609
+      },
+      "commonsys": {
+        "files": 2698,
+        "bytes": 74470754
+      },
+      "commonsys-intf": {
+        "files": 736,
+        "bytes": 5221234
+      },
+      "configstore": {
+        "files": 14,
+        "bytes": 19992
+      },
+      "coretech-config-vendor": {
+        "files": 2,
+        "bytes": 387
+      },
+      "cv": {
+        "files": 2788,
+        "bytes": 35640931
+      },
+      "data": {
+        "files": 393,
+        "bytes": 6901086
+      },
+      "devicetree-4.19": {
+        "files": 3716,
+        "bytes": 9269846
+      },
+      "diag": {
+        "files": 45,
+        "bytes": 191854
+      },
+      "display": {
+        "files": 15,
+        "bytes": 106929
+      },
+      "display-devicetree": {
+        "files": 51,
+        "bytes": 352706
+      },
+      "dspservices_ship": {
+        "files": 3,
+        "bytes": 383
+      },
+      "fastmmi": {
+        "files": 23,
+        "bytes": 72360
+      },
+      "fm": {
+        "files": 59,
+        "bytes": 671544
+      },
+      "ftm": {
+        "files": 44,
+        "bytes": 754090
+      },
+      "fwk-utils": {
+        "files": 10,
+        "bytes": 42055
+      },
+      "gles": {
+        "files": 4,
+        "bytes": 9944
+      },
+      "gps": {
+        "files": 671,
+        "bytes": 5642903
+      },
+      "gps-release": {
+        "files": 3,
+        "bytes": 7093
+      },
+      "ims-ship": {
+        "files": 23,
+        "bytes": 1753475
+      },
+      "interfaces": {
+        "files": 273,
+        "bytes": 703363
+      },
+      "llvm-arm-toolchain-ship": {
+        "files": 436,
+        "bytes": 1486220459
+      },
+      "mdm-helper": {
+        "files": 11,
+        "bytes": 95131
+      },
+      "mm-audio": {
+        "files": 972,
+        "bytes": 15389379
+      },
+      "mm-audio-auto": {
+        "files": 11,
+        "bytes": 60848
+      },
+      "mm-audio-auto-cal": {
+        "files": 38,
+        "bytes": 1472006
+      },
+      "mm-audio-cal": {
+        "files": 824,
+        "bytes": 121420487
+      },
+      "mm-audio-external": {
+        "files": 38,
+        "bytes": 2921506
+      },
+      "mm-core": {
+        "files": 3,
+        "bytes": 81240
+      },
+      "mm-video": {
+        "files": 6,
+        "bytes": 164946
+      },
+      "mm-video-utils": {
+        "files": 106,
+        "bytes": 1399849
+      },
+      "nqnfc-firmware": {
+        "files": 31,
+        "bytes": 1052011
+      },
+      "platform-boost": {
+        "files": 13,
+        "bytes": 48178
+      },
+      "prebuilt_HY11": {
+        "files": 1292,
+        "bytes": 551467710
+      },
+      "qcril": {
+        "files": 318,
+        "bytes": 12877931
+      },
+      "qcril-data-hal": {
+        "files": 387,
+        "bytes": 2585902
+      },
+      "qcril-hal": {
+        "files": 1572,
+        "bytes": 29058513
+      },
+      "qcril-qmi-services": {
+        "files": 23,
+        "bytes": 2047159
+      },
+      "qcril-qmi-services-headers": {
+        "files": 23,
+        "bytes": 2940817
+      },
+      "qdssagent": {
+        "files": 5,
+        "bytes": 22412
+      },
+      "qmi": {
+        "files": 199,
+        "bytes": 10079111
+      },
+      "qmi-framework": {
+        "files": 78,
+        "bytes": 428161
+      },
+      "qrdplus": {
+        "files": 10,
+        "bytes": 27155
+      },
+      "qrsp": {
+        "files": 63,
+        "bytes": 1139383
+      },
+      "ramdump-parser": {
+        "files": 4,
+        "bytes": 44718
+      },
+      "remotefs": {
+        "files": 9,
+        "bytes": 69278
+      },
+      "resource-overlay": {
+        "files": 167,
+        "bytes": 511360
+      },
+      "sectools": {
+        "files": 2627,
+        "bytes": 35446199
+      },
+      "securemsm": {
+        "files": 459,
+        "bytes": 143304691
+      },
+      "sensors-see": {
+        "files": 609,
+        "bytes": 5120647
+      },
+      "ss-restart": {
+        "files": 9,
+        "bytes": 55991
+      },
+      "ss-services": {
+        "files": 18,
+        "bytes": 99623
+      },
+      "telephony-apps": {
+        "files": 5,
+        "bytes": 56704
+      },
+      "thermal-engine": {
+        "files": 107,
+        "bytes": 1494202
+      },
+      "time-services": {
+        "files": 13,
+        "bytes": 154888
+      },
+      "vpp": {
+        "files": 294,
+        "bytes": 4208902
+      },
+      "wfd": {
+        "files": 9,
+        "bytes": 135342
+      },
+      "wigig": {
+        "files": 834,
+        "bytes": 5729111
+      },
+      "wlan": {
+        "files": 590,
+        "bytes": 7810549
+      }
+    }
+  },
+  "android-t-qcom": {
+    "files": 212048,
+    "bytes": 3157863915,
+    "components": {
+      "art": {
+        "files": 1843,
+        "bytes": 26427110
+      },
+      "bionic": {
+        "files": 2305,
+        "bytes": 26380957
+      },
+      "bootable": {
+        "files": 257,
+        "bytes": 1982255
+      },
+      "build": {
+        "files": 32,
+        "bytes": 152879
+      },
+      "cts": {
+        "files": 545,
+        "bytes": 5398095
+      },
+      "development": {
+        "files": 155,
+        "bytes": 840154
+      },
+      "device": {
+        "files": 5157,
+        "bytes": 105811597
+      },
+      "external": {
+        "files": 98053,
+        "bytes": 1624469721
+      },
+      "frameworks": {
+        "files": 8604,
+        "bytes": 93781498
+      },
+      "hardware": {
+        "files": 3327,
+        "bytes": 30459437
+      },
+      "libcore": {
+        "files": 94,
+        "bytes": 609414
+      },
+      "libnativehelper": {
+        "files": 39,
+        "bytes": 254699
+      },
+      "miui": {
+        "files": 348,
+        "bytes": 2417787
+      },
+      "out": {
+        "files": 1,
+        "bytes": 4208
+      },
+      "packages": {
+        "files": 5937,
+        "bytes": 299455798
+      },
+      "pdk": {
+        "files": 1,
+        "bytes": 793
+      },
+      "platform_testing": {
+        "files": 2,
+        "bytes": 1497
+      },
+      "prebuilts": {
+        "files": 72541,
+        "bytes": 760564728
+      },
+      "sdk": {
+        "files": 28,
+        "bytes": 153251
+      },
+      "system": {
+        "files": 5193,
+        "bytes": 60048003
+      },
+      "test": {
+        "files": 194,
+        "bytes": 1623975
+      },
+      "tools": {
+        "files": 97,
+        "bytes": 542557
+      },
+      "vendor": {
+        "files": 7295,
+        "bytes": 116483502
+      }
+    }
+  }
+}

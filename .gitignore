@@ -1,0 +1,6 @@
+/.cache/
+/.repoindex.db*
+**/__pycache__/
+
+# Preserve the already tracked reference header; ignore newly generated output.
+/android-t-qcom/out/

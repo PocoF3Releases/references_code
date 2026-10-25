@@ -1,0 +1,42 @@
+{
+  "date": "2026-10-25",
+  "source_directories_present": false,
+  "checks": [
+    {
+      "command": "python3 tools/repoindex workspace restore",
+      "elapsed_seconds": 15.291,
+      "stdout_bytes": 476,
+      "exit": 0
+    },
+    {
+      "command": "python3 tools/repoindex workspace impl AudioFlinger::checkAttributionSourcePackage --tree android-t-qcom --limit 3",
+      "elapsed_seconds": 0.107,
+      "stdout_bytes": 475,
+      "exit": 0
+    },
+    {
+      "command": "python3 tools/repoindex workspace impl BPSNode::ExecuteProcessRequest --scope camera --limit 3",
+      "elapsed_seconds": 0.1,
+      "stdout_bytes": 213,
+      "exit": 0
+    },
+    {
+      "command": "python3 scripts/refsearch.py source LA.UM.8.12.r1-11900-sm8250.0/camx/src/hwl/bps/camxbpsnode.cpp --line 1351 --limit 4",
+      "elapsed_seconds": 0.078,
+      "stdout_bytes": 483,
+      "exit": 0
+    },
+    {
+      "command": "python3 scripts/reindex.py --help",
+      "elapsed_seconds": 0.049,
+      "stdout_bytes": 1891,
+      "exit": 0
+    },
+    {
+      "command": "python3 scripts/benchmark_search.py --help",
+      "elapsed_seconds": 0.05,
+      "stdout_bytes": 2008,
+      "exit": 0
+    }
+  ]
+}
