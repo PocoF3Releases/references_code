@@ -20,16 +20,19 @@ FTS5/trigram support are required; ripgrep is optional for live text searches.
 - [Source provenance](docs/SOURCE_MAP.md)
 - [Current sizes/counts](docs/INDEX_GUIDE.md)
 - [Validation and evidence](docs/VALIDATION.md)
-- [Workspace maintenance](docs/MAINTENANCE.md)
+- [Workspace maintenance and local checks](docs/MAINTENANCE.md)
 - [Standalone repoindex documentation](tools/repoindex/README.md)
 
 `repoindex.json` owns tree names, scopes and benchmark cases. `index/` owns ready
 bundles; `evidence/` owns current source/audit/measurement records. Generic code,
 documentation and tests live together in `tools/repoindex/`, copied from the
-[canonical tool](https://github.com/johnmart19/repoindex). Existing `scripts/`
-commands remain small compatibility shims. The independent development checkout
+[canonical tool](https://github.com/johnmart19/repoindex). Search/reindex/benchmark scripts remain small compatibility shims;
+`scripts/check.py` owns workspace validation. The independent development checkout
 is `~/tools/repoindex`; this pinned copy works without it.
 
 Source contents/notices are preserved. These partial historical references do not
 establish Android 17 buildability or device behavior. Active project decisions:
 [workhub](https://github.com/PocoF3Releases/Agents.md).
+
+Agents start with [AGENTS.md](AGENTS.md), then the relevant search recipe.
+Do not load the generated census, evidence JSON or whole source files by default.
