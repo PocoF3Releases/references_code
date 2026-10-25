@@ -35,8 +35,9 @@ reports are recoverable from the pre-cleanup history backup rather than active d
 
 `tools/repoindex/UPSTREAM.md` records the canonical revision. Vendor the complete
 canonical directory without `.git`; retain the local provenance file. Generic
-frontends, checks, benchmarks and tests belong upstream. Consumer `scripts/` files
+frontends, checks, benchmarks and tests belong upstream. Search/reindex/benchmark scripts
 are thin compatibility routes and must not acquire a second implementation.
+`scripts/check.py` owns consumer validation using the shared checker.
 
 Develop in independent `~/tools/repoindex`. The implementation is a package under
 `src/repoindex/`; keep that entire directory when vendoring. See its

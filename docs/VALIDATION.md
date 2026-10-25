@@ -38,3 +38,14 @@ input and atomic/restore failures. Review agents checked correctness/security/
 performance and documentation/architecture; no further required findings remained
 in their reviewed scope. Workspace checks validate docs/config/part sizes without
 restoring databases or scanning source trees.
+
+A real [fresh GitHub sparse clone](../evidence/fresh-clone.json), with no source
+folders or existing caches, passed 29 acceptance checks and all 81 synthetic tool
+tests. Its isolated Python environment contained zero third-party distributions,
+no installed repoindex and no pip. The first ordinary query restored both caches;
+file/header/body/range searches worked for each tree and both-tree API queries
+passed with network, subprocess and ingestion guards. JSON/text budgets, scope
+intersections, compatibility scripts, nested/outside-workspace discovery and
+expected missing-live-source errors passed. Bundles, restored DB mtimes and the
+Git worktree stayed unchanged. Only runtime Python/SQLite and the checkout are
+needed; the isolated environment was test isolation, not a setup requirement.

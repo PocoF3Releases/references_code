@@ -5,15 +5,16 @@ body indexes. Source/tool folders are ordinary Git files; no submodules or LFS.
 Queries restore caches automatically and never rebuild source indexes.
 
 ```bash
-git clone --single-branch --branch main https://github.com/PocoF3Releases/references_code.git
+git clone --filter=blob:none --sparse --single-branch --branch main https://github.com/PocoF3Releases/references_code.git
 cd references_code
-python3 tools/repoindex workspace impl 'AudioFlinger::checkAttributionSourcePackage' --scope frameworks --limit 10
+git sparse-checkout set tools/repoindex index docs evidence scripts
+python3 tools/repoindex workspace impl 'AudioFlinger::checkAttributionSourcePackage' --limit 10
 python3 tools/repoindex workspace source android-t-qcom/frameworks/av/services/audioflinger/AudioFlinger.cpp --line 283 --limit 20
 ```
 
 Both trees are selected by default. `--tree` selects one; `--scope` selects a topic.
 Output is human-readable and bounded; add `--json` for JSON Lines. No initial scan,
-model service or Python package installation is needed. Linux/WSL and SQLite with
+model service, package installation, environment creation or setup script is needed. Linux/WSL and SQLite with
 FTS5/trigram support are required; ripgrep is optional for live text searches.
 
 - [Search recipes and index-only checkout](docs/SEARCH.md)
