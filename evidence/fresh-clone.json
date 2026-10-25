@@ -1,0 +1,221 @@
+{
+  "date": "2026-10-25",
+  "reference_revision": "c04bc32bc1542a3e5c83308e7030e2d73d8a7a76",
+  "tool_revision": "549b2eec1cdf6424933604c2a3002c63433dbffe",
+  "git_remote_clone": true,
+  "source_directories_present": false,
+  "cold_cache_start": true,
+  "runtime_installs_run": false,
+  "real_corpus_rebuilt": false,
+  "completed": true,
+  "checks": [
+    {
+      "command": "isolated Python environment",
+      "exit": 0,
+      "seconds": 0.058,
+      "stdout_bytes": 127
+    },
+    {
+      "command": "python3 tools/repoindex workspace --help",
+      "exit": 0,
+      "seconds": 0.076,
+      "stdout_bytes": 2052
+    },
+    {
+      "command": "python3 tools/repoindex workspace status --json",
+      "exit": 0,
+      "seconds": 0.088,
+      "stdout_bytes": 838,
+      "rows": 2
+    },
+    {
+      "command": "python3 tools/repoindex workspace scopes",
+      "exit": 0,
+      "seconds": 0.078,
+      "stdout_bytes": 1131
+    },
+    {
+      "command": "python3 scripts/check.py",
+      "exit": 0,
+      "seconds": 0.083,
+      "stdout_bytes": 77
+    },
+    {
+      "command": "python3 tools/repoindex workspace files *AudioFlinger* --limit 5 --json",
+      "exit": 0,
+      "seconds": 17.437,
+      "stdout_bytes": 544,
+      "rows": 5
+    },
+    {
+      "command": "python3 tools/repoindex workspace status --json",
+      "exit": 0,
+      "seconds": 0.077,
+      "stdout_bytes": 836,
+      "rows": 2
+    },
+    {
+      "command": "python3 tools/repoindex workspace files *camxbpsnode* --tree LA.UM.8.12.r1-11900-sm8250.0 --limit 5 --json",
+      "exit": 0,
+      "seconds": 0.088,
+      "stdout_bytes": 226,
+      "rows": 2
+    },
+    {
+      "command": "python3 tools/repoindex workspace symbol BPSNode --scope camera --limit 5 --json",
+      "exit": 0,
+      "seconds": 0.095,
+      "stdout_bytes": 181,
+      "rows": 1
+    },
+    {
+      "command": "python3 tools/repoindex workspace symbol AudioFlinger --tree android-t-qcom --limit 5 --json",
+      "exit": 0,
+      "seconds": 0.093,
+      "stdout_bytes": 203,
+      "rows": 1
+    },
+    {
+      "command": "python3 tools/repoindex workspace impl BPSNode::ExecuteProcessRequest --limit 5 --json",
+      "exit": 0,
+      "seconds": 0.142,
+      "stdout_bytes": 418,
+      "rows": 2
+    },
+    {
+      "command": "python3 tools/repoindex workspace impl AudioFlinger::checkAttributionSourcePackage --limit 5 --json",
+      "exit": 0,
+      "seconds": 0.131,
+      "stdout_bytes": 740,
+      "rows": 3
+    },
+    {
+      "command": "python3 tools/repoindex workspace impl AudioFlinger::checkAttributionSourcePackage --path-prefix android-t-qcom/frameworks/av/services/audioflinger --limit 5 --json",
+      "exit": 0,
+      "seconds": 0.113,
+      "stdout_bytes": 740,
+      "rows": 3
+    },
+    {
+      "command": "python3 tools/repoindex workspace source android-t-qcom/frameworks/av/services/audioflinger/AudioFlinger.cpp --line 283 --limit 4 --json",
+      "exit": 0,
+      "seconds": 0.096,
+      "stdout_bytes": 519,
+      "rows": 1
+    },
+    {
+      "command": "python3 tools/repoindex workspace source LA.UM.8.12.r1-11900-sm8250.0/camx/src/hwl/bps/camxbpsnode.cpp --line 1351 --limit 4 --json",
+      "exit": 0,
+      "seconds": 0.102,
+      "stdout_bytes": 483,
+      "rows": 1
+    },
+    {
+      "command": "python3 tools/repoindex workspace impl BPSNode --tree android-t-qcom --scope camera --json",
+      "exit": 0,
+      "seconds": 0.074,
+      "stdout_bytes": 0,
+      "rows": 0
+    },
+    {
+      "command": "python3 tools/repoindex workspace source android-t-qcom/frameworks/av/services/audioflinger/AudioFlinger.cpp --line 10000000 --json",
+      "exit": 0,
+      "seconds": 0.097,
+      "stdout_bytes": 0,
+      "rows": 0
+    },
+    {
+      "command": "python3 tools/repoindex workspace text AudioFlinger --scope frameworks",
+      "exit": 2,
+      "seconds": 0.074,
+      "stdout_bytes": 0
+    },
+    {
+      "command": "python3 tools/repoindex workspace files Mode --tree not-a-tree",
+      "exit": 2,
+      "seconds": 0.067,
+      "stdout_bytes": 0
+    },
+    {
+      "command": "python3 tools/repoindex workspace files *.cpp --limit 1000",
+      "exit": 0,
+      "seconds": 0.094,
+      "stdout_bytes": 12000
+    },
+    {
+      "command": "python3 tools/repoindex workspace files *.cpp --limit 1000 --json",
+      "exit": 0,
+      "seconds": 0.096,
+      "stdout_bytes": 11990,
+      "rows": 89
+    },
+    {
+      "command": "python3 tools/repoindex workspace files *.cpp --limit 2 --json",
+      "exit": 0,
+      "seconds": 0.097,
+      "stdout_bytes": 231,
+      "rows": 2
+    },
+    {
+      "command": "python3 scripts/refsearch.py impl BPSNode::ExecuteProcessRequest --scope camera --limit 2",
+      "exit": 0,
+      "seconds": 0.103,
+      "stdout_bytes": 418,
+      "rows": 2
+    },
+    {
+      "command": "python3 scripts/reindex.py --help",
+      "exit": 0,
+      "seconds": 0.066,
+      "stdout_bytes": 1891
+    },
+    {
+      "command": "python3 scripts/benchmark_search.py --help",
+      "exit": 0,
+      "seconds": 0.066,
+      "stdout_bytes": 2008
+    },
+    {
+      "command": "workspace discovery from a nested directory",
+      "exit": 0,
+      "seconds": 0.104,
+      "stdout_bytes": 148
+    },
+    {
+      "command": "explicit workspace from outside checkout",
+      "exit": 0,
+      "seconds": 0.098,
+      "stdout_bytes": 122
+    },
+    {
+      "command": "both-tree API with network/process/ingestion guards",
+      "exit": 0,
+      "seconds": 0.152,
+      "stdout_bytes": 59
+    },
+    {
+      "command": "python3 scripts/check.py --tests",
+      "exit": 0,
+      "seconds": 5.249,
+      "stdout_bytes": 163
+    }
+  ],
+  "environment": {
+    "python": "3.14.4",
+    "sqlite": "3.46.1",
+    "third_party_distributions": 0,
+    "repoindex_installed": false,
+    "pip_installed": false
+  },
+  "data_and_worktree_unchanged": true,
+  "restored_database_count": 2,
+  "synthetic_fixture_suite_run": true,
+  "partial_clone_filter": "blob:none",
+  "sample_source_blobs_absent_from_git": true,
+  "clone_recipe": [
+    "git clone --filter=blob:none --sparse --single-branch --branch main https://github.com/PocoF3Releases/references_code.git",
+    "cd references_code",
+    "git sparse-checkout set tools/repoindex index docs evidence scripts"
+  ],
+  "scope": "Real GitHub sparse clone; empty no-pip environment; 29 acceptance checks plus 81 synthetic tool tests. No real source indexing or runtime package installation."
+}

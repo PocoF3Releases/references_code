@@ -66,9 +66,19 @@ git sparse-checkout set tools/repoindex index docs evidence scripts
 python3 tools/repoindex workspace impl 'AudioFlinger::checkAttributionSourcePackage' --scope frameworks
 ```
 
-Root configuration is included by cone-mode sparse checkout. Add a needed source
+Root configuration and `AGENTS.md` are included by cone-mode sparse checkout.
+Run queries immediately: no pip install, virtual environment, setup script,
+submodules, LFS or rebuild step is needed. The first ordinary indexed query
+restores selected caches automatically from local chunks; no `restore` command
+is required. Both current caches total about 2.1 GiB after decompression from
+about 401 MiB of bundles. This one-time work is restoration, not indexing.
+Indexed queries then need no network.
+
+Add a needed source
 component with `git sparse-checkout add android-t-qcom/frameworks/av` before live
-search/editing. Source-free queries and indexed ranges were acceptance-tested.
+search/editing. Source-free queries and indexed ranges were acceptance-tested in a real fresh
+GitHub clone with no installed packages or existing caches; see the optional
+[record](../evidence/fresh-clone.json).
 
 The existing `scripts/refsearch.py` command forwards to the same frontend. It keeps
 JSON for indexed results and plain live/scopes output, with its historical 40-result
