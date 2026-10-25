@@ -1,0 +1,134 @@
+{
+  "trees": [
+    "LA.UM.8.12.r1-11900-sm8250.0",
+    "android-t-qcom"
+  ],
+  "ignore": [
+    "__pycache__"
+  ],
+  "implementation_extensions": [
+    ".cpp",
+    ".cc"
+  ],
+  "scopes": {
+    "android": [
+      "android-t-qcom"
+    ],
+    "qcom": [
+      "LA.UM.8.12.r1-11900-sm8250.0"
+    ],
+    "frameworks": [
+      "android-t-qcom/frameworks"
+    ],
+    "apps": [
+      "android-t-qcom/packages",
+      "android-t-qcom/miui"
+    ],
+    "system": [
+      "android-t-qcom/system",
+      "android-t-qcom/bionic",
+      "android-t-qcom/libcore",
+      "android-t-qcom/art"
+    ],
+    "hardware": [
+      "android-t-qcom/hardware",
+      "android-t-qcom/device"
+    ],
+    "vendor": [
+      "android-t-qcom/vendor"
+    ],
+    "camera": [
+      "LA.UM.8.12.r1-11900-sm8250.0/camx",
+      "LA.UM.8.12.r1-11900-sm8250.0/chi-cdk",
+      "LA.UM.8.12.r1-11900-sm8250.0/camera-devicetree"
+    ],
+    "audio": [
+      "LA.UM.8.12.r1-11900-sm8250.0/mm-audio",
+      "LA.UM.8.12.r1-11900-sm8250.0/mm-audio-cal",
+      "LA.UM.8.12.r1-11900-sm8250.0/bluetooth",
+      "android-t-qcom/frameworks/av"
+    ],
+    "display": [
+      "LA.UM.8.12.r1-11900-sm8250.0/display",
+      "LA.UM.8.12.r1-11900-sm8250.0/display-devicetree",
+      "android-t-qcom/frameworks/native"
+    ],
+    "radio": [
+      "LA.UM.8.12.r1-11900-sm8250.0/qcril",
+      "LA.UM.8.12.r1-11900-sm8250.0/qcril-hal",
+      "LA.UM.8.12.r1-11900-sm8250.0/qmi"
+    ],
+    "performance": [
+      "LA.UM.8.12.r1-11900-sm8250.0/android-perf",
+      "LA.UM.8.12.r1-11900-sm8250.0/thermal-engine"
+    ],
+    "external": [
+      "android-t-qcom/external"
+    ],
+    "prebuilts": [
+      "android-t-qcom/prebuilts",
+      "LA.UM.8.12.r1-11900-sm8250.0/prebuilt_HY11",
+      "LA.UM.8.12.r1-11900-sm8250.0/llvm-arm-toolchain-ship"
+    ]
+  },
+  "guide": "docs/INDEX_GUIDE.md",
+  "command": "python3 tools/repoindex workspace",
+  "benchmarks": [
+    {
+      "mode": "files",
+      "query": "*AudioFlinger*"
+    },
+    {
+      "mode": "files",
+      "query": "Mode.h"
+    },
+    {
+      "mode": "files",
+      "query": "*.h"
+    },
+    {
+      "mode": "symbol",
+      "query": "BPSNode"
+    },
+    {
+      "mode": "files",
+      "query": "*nothing_can_match_59746*"
+    },
+    {
+      "mode": "files",
+      "query": "*Audio*",
+      "prefixes": [
+        "android-t-qcom/frameworks/av"
+      ]
+    },
+    {
+      "mode": "impl",
+      "query": "AudioFlinger::checkAttributionSourcePackage",
+      "prefixes": [
+        "android-t-qcom/frameworks/av"
+      ]
+    },
+    {
+      "mode": "impl",
+      "query": "BPSNode::ExecuteProcessRequest",
+      "prefixes": [
+        "LA.UM.8.12.r1-11900-sm8250.0/camx"
+      ]
+    },
+    {
+      "mode": "impl",
+      "query": "pExecuteProcessRequestData->pNodeProcessRequestData",
+      "prefixes": [
+        "LA.UM.8.12.r1-11900-sm8250.0/camx"
+      ]
+    },
+    {
+      "mode": "impl",
+      "query": "return"
+    },
+    {
+      "mode": "impl",
+      "query": "never_a_real_body_marker_743953"
+    }
+  ]
+}
