@@ -103,3 +103,9 @@ instead of scanning source. For changed source, follow explicit maintainer refre
 instructions in [maintenance](MAINTENANCE.md); old audits do not prove freshness.
 Development/maintenance checks are opt-in: `python3 scripts/check.py` checks this
 workspace's documentation/configuration/part sizes without restoring or scanning.
+
+For an explicit end-to-end release check, run
+`python3 scripts/check_fresh_clone.py`; it clones and tests both ready indexes
+without installing packages or indexing source. See
+[maintenance](MAINTENANCE.md#fresh-index-only-acceptance) for costs/report options.
+Ordinary searches do not require this test.

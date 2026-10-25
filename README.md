@@ -37,3 +37,7 @@ establish Android 17 buildability or device behavior. Active project decisions:
 
 Agents start with [AGENTS.md](AGENTS.md), then the relevant search recipe.
 Do not load the generated census, evidence JSON or whole source files by default.
+
+Explicit fresh-clone acceptance: `python3 scripts/check_fresh_clone.py`. It checks
+both ready indexes without installs or rebuilding; [details](docs/MAINTENANCE.md#fresh-index-only-acceptance).
+This downloads the bundles again and is not a chat-startup command.

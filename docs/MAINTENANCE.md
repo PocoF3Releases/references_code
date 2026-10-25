@@ -31,6 +31,40 @@ can regenerate it separately. It replaces only its owned block and preserves
 curated surrounding text. Current evidence lives under `evidence/`; old prototype
 reports are recoverable from the pre-cleanup history backup rather than active docs.
 
+## Fresh index-only acceptance
+
+From this checkout, run one command:
+
+```bash
+python3 scripts/check_fresh_clone.py
+```
+
+This explicitly tests the **published `main` snapshot**, not uncommitted local
+runtime edits. It downloads a new sparse clone, keeps source folders absent,
+starts with empty caches, and checks both trees through cold/warm file, symbol,
+body and range queries. The isolated Python query probe uses `-I -S` and prohibits
+network access, subprocesses and ingestion. Separate processes also test the
+shipped directory/compatibility launchers and the cheap workspace validator.
+It checks limits, expected errors, unchanged data and a clean worktree.
+
+Only the existing Git and Linux/WSL Python/SQLite runtime are needed; no pip,
+virtual environment, service, setup script or extra Python package is required.
+Git needs network access to download about 401 MiB of bundles. Allow about 3 GiB
+of temporary disk space, including restored databases. The command creates an
+owned temporary directory below `.cache` and removes it on success or failure;
+it does not touch existing search caches. It prints a compact summary and exits
+nonzero on failure. Missing/corrupt bundles cause failure, never a source rebuild.
+
+Add `--report .cache/fresh-clone-report.json` to retain JSON evidence after
+cleanup. Optional `--repository URL`, `--ref BRANCH_OR_TAG` and `--temp-dir PATH`
+select another snapshot or temporary parent; `--help` lists them. The default
+command makes no report file and performs no synthetic fixture indexing.
+
+`python3 scripts/check.py --tests` is separate: it runs the 81 standalone tool
+fixtures and the small consumer-harness regressions in `scripts/tests`. Those
+fixtures build only disposable synthetic indexes. Neither command belongs at
+chat startup or before ordinary searches.
+
 ## Tool ownership
 
 `tools/repoindex/UPSTREAM.md` records the canonical revision. Vendor the complete
@@ -38,6 +72,8 @@ canonical directory without `.git`; retain the local provenance file. Generic
 frontends, checks, benchmarks and tests belong upstream. Search/reindex/benchmark scripts
 are thin compatibility routes and must not acquire a second implementation.
 `scripts/check.py` owns consumer validation using the shared checker.
+The fresh-clone driver, its internal probe and consumer tests belong here because
+their smoke samples describe this workspace, not generic repoindex behavior.
 
 Develop in independent `~/tools/repoindex`. The implementation is a package under
 `src/repoindex/`; keep that entire directory when vendoring. See its

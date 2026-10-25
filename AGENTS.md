@@ -20,7 +20,8 @@ without source folders. Use scoped live `text`/rg for edits, regex and other
 languages. Status/audits are saved evidence, not a future freshness guarantee.
 
 Read [search recipes](docs/SEARCH.md) only as needed; it routes all modes and
-index-only checkout. [Maintenance](docs/MAINTENANCE.md) owns explicit checks/refresh.
+index-only checkout. [Maintenance](docs/MAINTENANCE.md) owns explicit checks/refresh and the one-command
+fresh-clone acceptance check; none is a startup prerequisite.
 Tool code/docs/tests belong in `tools/repoindex`; config/evidence belong here.
 Develop upstream in independent `~/tools/repoindex`, retain this standalone copy.
 Preserve source bytes/licenses and legacy branches. These historical references

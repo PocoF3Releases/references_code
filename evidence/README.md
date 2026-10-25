@@ -12,4 +12,4 @@ were removed from the active tree after preserving recoverable Git history.
 
 - [Final tool review](review.json): patch scope, fixtures and review limits.
 
-- [Fresh index-only clone](fresh-clone.json): empty-environment acceptance and offline API guards.
+- [Fresh index-only clone](fresh-clone.json): reusable-command acceptance, isolation and query guards.
