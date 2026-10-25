@@ -1,0 +1,17 @@
+{
+  "date": "2026-10-25",
+  "tool_version": "2.1.1",
+  "tool_revision": "549b2eec1cdf6424933604c2a3002c63433dbffe",
+  "standalone_tests": 81,
+  "resource_warnings": 0,
+  "installed_sdist_wheel_check": "passed",
+  "review_agents": {
+    "model": "gpt-6.1-sol",
+    "reasoning": "low",
+    "correctness_security_performance": "no further required findings in reviewed scope",
+    "documentation_architecture": "vendor integration completed; README ownership wording clarified"
+  },
+  "data_rebuilt": false,
+  "data_audit": "verification.json",
+  "limits": "Fixture/package/host evidence; not a future freshness or build/device guarantee."
+}

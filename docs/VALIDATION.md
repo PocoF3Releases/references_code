@@ -14,7 +14,7 @@ No data rebuild was needed for the organization cleanup: source-tree and databas
 hashes are unchanged. Text normalization is disclosed in the tool's
 [format reference](../tools/repoindex/docs/FORMAT.md).
 
-The standalone suite contains 68 fixtures without resource warnings, including all six migrated consumer
+The standalone suite contains 81 fixtures without resource warnings, including all six migrated consumer
 contracts, source-free queries, output/JSON budgets, guide ownership and explicit
 maintenance completion. It requires no consumer checkout or real source scan.
 Current [measurements](../evidence/benchmarks.json) and the generated
@@ -26,8 +26,15 @@ reads small indexed ranges, checks compatibility shims and confirms default outp
 budgets. Saved audits do not guarantee future freshness. No compiler/ROM/device
 acceptance is implied by file/header/body search coverage.
 
-Repoindex 2.1 packaging also passed an isolated sdist-to-wheel acceptance check,
+Repoindex 2.1.1 packaging also passed an isolated sdist-to-wheel acceptance check,
 covering installed console/module/API entry points, every legacy command and
 synthetic source-free restoration. Parser, normalization and matching function
 ASTs match the previous release. The tested host uses Python 3.14; this is not
 a runtime certification of every supported Python/SQLite version.
+
+The final cleanup adds regression coverage for empty selections, query-only scope
+flags on maintenance, EOF ranges, cross-selection benchmark comparisons, malformed
+input and atomic/restore failures. Review agents checked correctness/security/
+performance and documentation/architecture; no further required findings remained
+in their reviewed scope. Workspace checks validate docs/config/part sizes without
+restoring databases or scanning source trees.

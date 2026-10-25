@@ -7,7 +7,7 @@ repository. Source directory names do not establish completeness or buildability
 | --- | --- |
 | `android-t-qcom/` | Existing unversioned Android T Qualcomm source snapshot; exact upstream manifest unavailable. Imported as-is in the clean snapshot, including prebuilts and its original generated header. |
 | `LA.UM.8.12.r1-11900-sm8250.0/` | Exact tree from existing Qualcomm SM8250 reference commit `ddf563c1d9ebfbc92452d7306a87e2c18ee40e7c` on the preserved historical branch of this remote. |
-| `tools/repoindex/` | Vendored johnmart19/repoindex 2.1.0, upstream revision `f9db8151942874848baf88bc3c1a0fa0a82bf2c0`; improvements also pushed upstream. See `UPSTREAM.md`. |
+| `tools/repoindex/` | Vendored johnmart19/repoindex 2.1.1, upstream revision `549b2eec1cdf6424933604c2a3002c63433dbffe`; improvements also pushed upstream. See `UPSTREAM.md`. |
 | `index/<source-name>/` | Portable per-tree manifest and compressed SQLite slices, committed in Git. |
 | `repoindex.json` | Roots, exclusions, scopes, benchmark cases and guide settings. |
 | `.cache/` | Ignored restored SQLite databases, writer locks, diagnostics and original nested Git metadata backup. |

@@ -14,10 +14,14 @@ workspace-specific policy.
   audit or benchmark. A tool/frontend documentation update alone needs no reindex.
 
 ```bash
+# Cheap local docs/config/chunk-size checks; no restore or source scan:
+python3 scripts/check.py
+# Add synthetic tool fixture tests when changing code:
+python3 scripts/check.py --tests
+# Only after actual source changes:
 python3 tools/repoindex workspace index --tree android-t-qcom
 python3 tools/repoindex workspace verify --live --hash-implementations
 python3 tools/repoindex workspace benchmark --samples 5 --budget-ms 100 --out evidence/benchmarks.json
-python3 tools/repoindex/scripts/check.py
 # Optional development packaging check; uses installed build tools, no network:
 python3 tools/repoindex/scripts/check_package.py
 ```
@@ -51,3 +55,8 @@ explicitly authorized. Preserve edits before reconciling an existing rewritten c
 
 No ROM builds, device changes, hosted index, scheduled scans or GitHub Actions are
 part of this setup. Reference evidence is distinct from active Android acceptance.
+
+Local workspace checks share the canonical Markdown validator instead of keeping
+a second implementation. All checks here are explicit maintenance operations,
+not startup prerequisites. The source-free acceptance record and saved data audit
+are under `evidence/`; only refresh relevant evidence after a meaningful change.

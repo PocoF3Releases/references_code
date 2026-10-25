@@ -6,17 +6,17 @@
       "LA.UM.8.12.r1-11900-sm8250.0",
       "android-t-qcom"
     ],
-    "median_ms": 6.422,
+    "median_ms": 6.776,
     "samples_ms": [
-      33.349,
-      6.422,
-      6.39,
-      6.199,
-      6.602
+      35.583,
+      7.008,
+      6.675,
+      6.776,
+      6.581
     ],
     "rows": 9,
-    "before_ms": 6.191,
-    "speedup": 0.96
+    "before_ms": 6.422,
+    "speedup": 0.95
   },
   {
     "mode": "files",
@@ -25,17 +25,17 @@
       "LA.UM.8.12.r1-11900-sm8250.0",
       "android-t-qcom"
     ],
-    "median_ms": 7.854,
+    "median_ms": 8.405,
     "samples_ms": [
-      59.643,
-      7.584,
-      7.854,
-      7.78,
-      8.491
+      57.257,
+      8.405,
+      7.95,
+      8.322,
+      8.47
     ],
     "rows": 20,
-    "before_ms": 7.713,
-    "speedup": 0.98
+    "before_ms": 7.854,
+    "speedup": 0.93
   },
   {
     "mode": "files",
@@ -44,17 +44,17 @@
       "LA.UM.8.12.r1-11900-sm8250.0",
       "android-t-qcom"
     ],
-    "median_ms": 1.558,
+    "median_ms": 1.739,
     "samples_ms": [
-      2.449,
-      1.298,
-      1.384,
-      1.558,
-      1.605
+      2.726,
+      2.072,
+      1.595,
+      1.739,
+      1.58
     ],
     "rows": 20,
-    "before_ms": 1.273,
-    "speedup": 0.82
+    "before_ms": 1.558,
+    "speedup": 0.9
   },
   {
     "mode": "symbol",
@@ -63,17 +63,17 @@
       "LA.UM.8.12.r1-11900-sm8250.0",
       "android-t-qcom"
     ],
-    "median_ms": 6.128,
+    "median_ms": 5.408,
     "samples_ms": [
-      6.574,
-      7.072,
-      6.128,
-      5.896,
-      5.952
+      7.597,
+      5.471,
+      5.277,
+      5.408,
+      5.358
     ],
     "rows": 1,
-    "before_ms": 4.913,
-    "speedup": 0.8
+    "before_ms": 6.128,
+    "speedup": 1.13
   },
   {
     "mode": "files",
@@ -82,17 +82,17 @@
       "LA.UM.8.12.r1-11900-sm8250.0",
       "android-t-qcom"
     ],
-    "median_ms": 5.753,
+    "median_ms": 5.956,
     "samples_ms": [
-      14.416,
-      5.712,
-      6.21,
-      5.583,
-      5.753
+      14.573,
+      6.236,
+      5.937,
+      5.857,
+      5.956
     ],
     "rows": 0,
-    "before_ms": 5.663,
-    "speedup": 0.98
+    "before_ms": 5.753,
+    "speedup": 0.97
   },
   {
     "mode": "files",
@@ -100,17 +100,17 @@
     "prefixes": [
       "android-t-qcom/frameworks/av"
     ],
-    "median_ms": 12.271,
+    "median_ms": 11.705,
     "samples_ms": [
-      75.972,
-      12.271,
-      12.411,
-      12.214,
-      11.238
+      74.055,
+      11.705,
+      11.843,
+      11.454,
+      11.394
     ],
     "rows": 20,
-    "before_ms": 10.441,
-    "speedup": 0.85
+    "before_ms": 12.271,
+    "speedup": 1.05
   },
   {
     "mode": "impl",
@@ -118,17 +118,17 @@
     "prefixes": [
       "android-t-qcom/frameworks/av"
     ],
-    "median_ms": 8.124,
+    "median_ms": 8.625,
     "samples_ms": [
-      49.797,
-      7.746,
-      8.034,
-      8.192,
-      8.124
+      50.225,
+      8.877,
+      8.427,
+      8.625,
+      7.806
     ],
     "rows": 3,
-    "before_ms": 9.14,
-    "speedup": 1.13
+    "before_ms": 8.124,
+    "speedup": 0.94
   },
   {
     "mode": "impl",
@@ -136,17 +136,17 @@
     "prefixes": [
       "LA.UM.8.12.r1-11900-sm8250.0/camx"
     ],
-    "median_ms": 6.067,
+    "median_ms": 4.793,
     "samples_ms": [
-      51.6,
-      6.35,
-      5.005,
-      6.067,
-      5.176
+      51.083,
+      4.768,
+      4.844,
+      4.793,
+      4.741
     ],
     "rows": 2,
-    "before_ms": 4.986,
-    "speedup": 0.82
+    "before_ms": 6.067,
+    "speedup": 1.27
   },
   {
     "mode": "impl",
@@ -154,17 +154,17 @@
     "prefixes": [
       "LA.UM.8.12.r1-11900-sm8250.0/camx"
     ],
-    "median_ms": 3.495,
+    "median_ms": 3.991,
     "samples_ms": [
-      7.397,
-      3.499,
-      3.464,
-      3.475,
-      3.495
+      7.941,
+      3.991,
+      4.386,
+      3.919,
+      3.987
     ],
     "rows": 20,
-    "before_ms": 3.405,
-    "speedup": 0.97
+    "before_ms": 3.495,
+    "speedup": 0.88
   },
   {
     "mode": "impl",
@@ -173,17 +173,17 @@
       "LA.UM.8.12.r1-11900-sm8250.0",
       "android-t-qcom"
     ],
-    "median_ms": 6.976,
+    "median_ms": 5.09,
     "samples_ms": [
-      54.592,
-      6.976,
-      8.424,
-      6.302,
-      5.816
+      53.255,
+      5.539,
+      5.09,
+      5.05,
+      5.076
     ],
     "rows": 20,
-    "before_ms": 5.112,
-    "speedup": 0.73
+    "before_ms": 6.976,
+    "speedup": 1.37
   },
   {
     "mode": "impl",
@@ -192,16 +192,16 @@
       "LA.UM.8.12.r1-11900-sm8250.0",
       "android-t-qcom"
     ],
-    "median_ms": 6.901,
+    "median_ms": 6.123,
     "samples_ms": [
-      14.517,
-      6.262,
-      6.771,
-      6.901,
-      7.097
+      14.531,
+      6.402,
+      6.023,
+      6.123,
+      5.985
     ],
     "rows": 0,
-    "before_ms": 6.359,
-    "speedup": 0.92
+    "before_ms": 6.901,
+    "speedup": 1.13
   }
 ]

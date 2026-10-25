@@ -9,3 +9,5 @@ freshness, compiler semantics or device behavior. Historical prototype reports
 were removed from the active tree after preserving recoverable Git history.
 
 - [Package acceptance](package-check.json): source-free restoration and CLI checks.
+
+- [Final tool review](review.json): patch scope, fixtures and review limits.
