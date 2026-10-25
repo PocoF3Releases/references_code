@@ -13,9 +13,10 @@ import tempfile
 import unittest
 from unittest import mock
 
-SPEC = importlib.util.spec_from_file_location("repoindex", Path(__file__).resolve().parents[1] / "repoindex.py")
-r = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(r)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+import repoindex as r
+from repoindex import guides, scanner, legacy_queries
+
 
 
 class RepoindexTests(unittest.TestCase):
@@ -40,6 +41,24 @@ class RepoindexTests(unittest.TestCase):
         opts.update(kw)
         with contextlib.redirect_stdout(io.StringIO()):
             r.cmd_agentsmd(argparse.Namespace(**opts))
+
+    def test_legacy_search_closes_connection_on_success_and_output_failure(self):
+        self.index()
+        args = argparse.Namespace(db=str(self.db), root=str(self.root),
+            pattern="*.h", ext=None, limit=1, path_prefix=None,
+            json=False, paths_only=True)
+        real_open = r.open_db_required
+        for fail in (False, True):
+            connection = real_open(str(self.db))
+            with mock.patch.object(legacy_queries, "open_db_required", return_value=connection), contextlib.redirect_stderr(io.StringIO()):
+                if fail:
+                    with mock.patch("builtins.print", side_effect=BrokenPipeError), self.assertRaises(BrokenPipeError):
+                        r.cmd_search(args)
+                else:
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        r.cmd_search(args)
+            with self.assertRaises(sqlite3.ProgrammingError):
+                connection.execute("SELECT 1")
 
     def test_scoped_search_streams_json_without_sibling_leak(self):
         for folder in ("vendor/cam", "vendor/camera", "vendor/ca_m%"):
@@ -73,7 +92,7 @@ class RepoindexTests(unittest.TestCase):
         self.assertFalse(self.db.exists())
 
     def test_invalid_database_is_not_modified(self):
-        with sqlite3.connect(self.db) as db:
+        with contextlib.closing(sqlite3.connect(self.db)) as db, db:
             db.execute("CREATE TABLE unrelated(value)")
         before = self.db.read_bytes()
         with self.assertRaises(SystemExit):
@@ -88,7 +107,7 @@ class RepoindexTests(unittest.TestCase):
             db.execute("DELETE FROM files")
 
     def test_guide_requires_explicit_scan(self):
-        with mock.patch.object(r, "cmd_index") as scan:
+        with mock.patch.object(guides, "build_index") as scan:
             with self.assertRaises(SystemExit):
                 self.guide()
             scan.assert_not_called()
@@ -104,7 +123,7 @@ class RepoindexTests(unittest.TestCase):
 
     def test_compact_avoids_full_inventory_aggregation(self):
         self.index()
-        with mock.patch.object(r, "dir_aggregates", side_effect=AssertionError("full scan")):
+        with mock.patch.object(guides, "dir_aggregates", side_effect=AssertionError("full scan")):
             self.guide()
         self.assertIn("snapshot", (self.root / "AGENTS.md").read_text())
 
@@ -179,7 +198,7 @@ class RepoindexTests(unittest.TestCase):
     def test_parallel_and_serial_have_same_records(self):
         self.index()
         def read():
-            with sqlite3.connect(self.db) as db:
+            with contextlib.closing(sqlite3.connect(self.db)) as db, db:
                 return [db.execute("SELECT * FROM " + v + " ORDER BY 1,2").fetchall()
                         for v in ("vfiles", "vsymbols", "vincludes")]
         first = read()
@@ -193,7 +212,7 @@ class RepoindexTests(unittest.TestCase):
 
     def test_cli_defaults_to_compact_and_full_is_explicit(self):
         self.index()
-        tool = str(Path(r.__file__))
+        tool = str(Path(__file__).resolve().parents[1] / "repoindex.py")
         compact = subprocess.check_output([sys.executable, tool, "agentsmd", str(self.root)], text=True)
         self.assertNotIn("## Directory map", compact)
         full = subprocess.check_output([sys.executable, tool, "agentsmd", str(self.root), "--full"], text=True)
@@ -201,7 +220,7 @@ class RepoindexTests(unittest.TestCase):
 
     def test_old_schema2_coverage_remains_unknown(self):
         self.index()
-        with sqlite3.connect(self.db) as db:
+        with contextlib.closing(sqlite3.connect(self.db)) as db, db:
             db.execute("DELETE FROM meta WHERE key IN ('error_count','ignore_directories','symbols_enabled')")
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
@@ -213,7 +232,7 @@ class RepoindexTests(unittest.TestCase):
         def fail_one(*args):
             files, symbols, includes, errors = original(*args)
             return files, symbols, includes, errors + 1
-        with mock.patch.object(r, "scan_directory", side_effect=fail_one):
+        with mock.patch.object(scanner, "scan_directory", side_effect=fail_one):
             self.index()
         warning = io.StringIO()
         with contextlib.redirect_stderr(warning):
@@ -224,7 +243,7 @@ class RepoindexTests(unittest.TestCase):
 
     def test_guide_uses_snapshot_date_not_generation_date(self):
         self.index()
-        with sqlite3.connect(self.db) as db:
+        with contextlib.closing(sqlite3.connect(self.db)) as db, db:
             db.execute("UPDATE meta SET value='2000-01-01' WHERE key='updated'")
         self.guide(compact=False)
         self.assertIn("Index snapshot: 2000-01-01", (self.root / "AGENTS.md").read_text())

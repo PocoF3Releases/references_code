@@ -27,7 +27,8 @@ FTS5/trigram support are required; ripgrep is optional for live text searches.
 bundles; `evidence/` owns current source/audit/measurement records. Generic code,
 documentation and tests live together in `tools/repoindex/`, copied from the
 [canonical tool](https://github.com/johnmart19/repoindex). Existing `scripts/`
-commands remain small compatibility shims.
+commands remain small compatibility shims. The independent development checkout
+is `~/tools/repoindex`; this pinned copy works without it.
 
 Source contents/notices are preserved. These partial historical references do not
 establish Android 17 buildability or device behavior. Active project decisions:
