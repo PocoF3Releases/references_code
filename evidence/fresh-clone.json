@@ -18,77 +18,77 @@
       "check": "cold saved status",
       "exit": 0,
       "expected_exit": 0,
-      "seconds": 0.009,
+      "seconds": 0.011,
       "stdout_bytes": 838
     },
     {
       "check": "configured scopes",
       "exit": 0,
       "expected_exit": 0,
-      "seconds": 0.004,
+      "seconds": 0.005,
       "stdout_bytes": 1529
     },
     {
       "check": "first ordinary query restores both",
       "exit": 0,
       "expected_exit": 0,
-      "seconds": 16.741,
+      "seconds": 16.405,
       "stdout_bytes": 1007
     },
     {
       "check": "warm saved status",
       "exit": 0,
       "expected_exit": 0,
-      "seconds": 0.008,
+      "seconds": 0.01,
       "stdout_bytes": 836
     },
     {
       "check": "android-t-qcom files",
       "exit": 0,
       "expected_exit": 0,
-      "seconds": 0.009,
+      "seconds": 0.011,
       "stdout_bytes": 544
     },
     {
       "check": "android-t-qcom symbol",
       "exit": 0,
       "expected_exit": 0,
-      "seconds": 0.009,
+      "seconds": 0.011,
       "stdout_bytes": 203
     },
     {
       "check": "android-t-qcom body",
       "exit": 0,
       "expected_exit": 0,
-      "seconds": 0.023,
+      "seconds": 0.025,
       "stdout_bytes": 740
     },
     {
       "check": "android-t-qcom default body",
       "exit": 0,
       "expected_exit": 0,
-      "seconds": 0.023,
+      "seconds": 0.027,
       "stdout_bytes": 740
     },
     {
       "check": "android-t-qcom scoped body",
       "exit": 0,
       "expected_exit": 0,
-      "seconds": 0.014,
+      "seconds": 0.019,
       "stdout_bytes": 740
     },
     {
       "check": "android-t-qcom source range",
       "exit": 0,
       "expected_exit": 0,
-      "seconds": 0.01,
+      "seconds": 0.012,
       "stdout_bytes": 519
     },
     {
       "check": "LA.UM.8.12.r1-11900-sm8250.0 files",
       "exit": 0,
       "expected_exit": 0,
-      "seconds": 0.004,
+      "seconds": 0.005,
       "stdout_bytes": 226
     },
     {
@@ -116,14 +116,14 @@
       "check": "LA.UM.8.12.r1-11900-sm8250.0 scoped body",
       "exit": 0,
       "expected_exit": 0,
-      "seconds": 0.012,
+      "seconds": 0.011,
       "stdout_bytes": 418
     },
     {
       "check": "LA.UM.8.12.r1-11900-sm8250.0 source range",
       "exit": 0,
       "expected_exit": 0,
-      "seconds": 0.006,
+      "seconds": 0.005,
       "stdout_bytes": 557
     },
     {
@@ -134,7 +134,7 @@
       "check": "empty tree/scope intersection",
       "exit": 0,
       "expected_exit": 0,
-      "seconds": 0.004,
+      "seconds": 0.005,
       "stdout_bytes": 0
     },
     {
@@ -148,21 +148,21 @@
       "check": "missing live source is explicit",
       "exit": 2,
       "expected_exit": 2,
-      "seconds": 0.005,
+      "seconds": 0.006,
       "stdout_bytes": 0
     },
     {
       "check": "unknown tree fails",
       "exit": 2,
       "expected_exit": 2,
-      "seconds": 0.001,
+      "seconds": 0.002,
       "stdout_bytes": 0
     },
     {
       "check": "bounded text",
       "exit": 0,
       "expected_exit": 0,
-      "seconds": 0.011,
+      "seconds": 0.01,
       "stdout_bytes": 12000
     },
     {
@@ -176,7 +176,7 @@
       "check": "global result limit",
       "exit": 0,
       "expected_exit": 0,
-      "seconds": 0.009,
+      "seconds": 0.008,
       "stdout_bytes": 231
     },
     {
@@ -200,10 +200,10 @@
       "exit": 0
     }
   ],
-  "reference_revision": "c41843a03b2ab6c532e4efca6038cdfded4552bf",
+  "reference_revision": "7973f535d890b1a6bc65da73c6a781a2492a4c12",
   "data_and_worktree_unchanged": true,
   "runtime_installs_run": false,
   "real_corpus_rebuilt": false,
-  "elapsed_seconds": 38.299,
+  "elapsed_seconds": 34.666,
   "command": "python3 scripts/check_fresh_clone.py"
 }
