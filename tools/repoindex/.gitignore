@@ -1,0 +1,17 @@
+# repoindex.py generated artifacts (if you run the tool inside this repo)
+.repoindex.db
+.repoindex.db-*
+SYMBOLS/
+HEADERS.md
+*_HEADERS.md
+
+# Python
+__pycache__/
+*.pyc
+
+# Local packaging and development environments
+build/
+dist/
+*.egg-info/
+.venv/
+.*.log

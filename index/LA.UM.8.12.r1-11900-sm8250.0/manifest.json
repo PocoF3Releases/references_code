@@ -1,0 +1,59 @@
+{
+  "database_bytes": 139284480,
+  "database_sha256": "09e295f2593a92b64d05d72b71b80c6230cf579eb7edc001a84a9b9dd4b5ce1a",
+  "format": 1,
+  "live_tree_verified": false,
+  "metadata": {
+    "error_count": "0",
+    "file_count": "44561",
+    "ignore_directories": "[\".git\", \".hg\", \".repo\", \".svn\", \"__pycache__\"]",
+    "implementation_backend": "trigram",
+    "implementation_bytes": "61327285",
+    "implementation_count": "2490",
+    "implementation_decode_errors": "2",
+    "implementation_extensions": "[\".cc\", \".cpp\"]",
+    "implementation_normalized_files": "2",
+    "implementation_schema": "1",
+    "schema_version": "2",
+    "search_backend": "trigram",
+    "search_schema": "1",
+    "symbol_count": "225021",
+    "symbols_enabled": "true",
+    "symlink_policy": "record file links; do not parse or traverse links",
+    "total_bytes": "4314522968",
+    "updated": "2026-10-25"
+  },
+  "parts": [
+    {
+      "bytes": 4836585,
+      "file": "part-4d50285506e6636e2c18d35cd04cac21559568718df4a1d684030800c59975a3.gz",
+      "raw_bytes": 33554432,
+      "sha256": "4d50285506e6636e2c18d35cd04cac21559568718df4a1d684030800c59975a3"
+    },
+    {
+      "bytes": 5756326,
+      "file": "part-0af1d58718cba46a9303cc88c2ce4c0e4fd133ec9786fa12a069178c01d68fa2.gz",
+      "raw_bytes": 33554432,
+      "sha256": "0af1d58718cba46a9303cc88c2ce4c0e4fd133ec9786fa12a069178c01d68fa2"
+    },
+    {
+      "bytes": 4518028,
+      "file": "part-cc15ef404ebf9a4c321fc85cea1eb6d199d8930de6ed9f85ffd2e27704cfe822.gz",
+      "raw_bytes": 33554432,
+      "sha256": "cc15ef404ebf9a4c321fc85cea1eb6d199d8930de6ed9f85ffd2e27704cfe822"
+    },
+    {
+      "bytes": 4113210,
+      "file": "part-daa7ab50043b2679f23bdba3b8937faffb8d0cee67f23092c4535deca34db34a.gz",
+      "raw_bytes": 33554432,
+      "sha256": "daa7ab50043b2679f23bdba3b8937faffb8d0cee67f23092c4535deca34db34a"
+    },
+    {
+      "bytes": 1844434,
+      "file": "part-438241d01f2f2b1854e7c882ade4c85ee475c644a2a2fb10c36c4738da2d3509.gz",
+      "raw_bytes": 5066752,
+      "sha256": "438241d01f2f2b1854e7c882ade4c85ee475c644a2a2fb10c36c4738da2d3509"
+    }
+  ],
+  "tree": "LA.UM.8.12.r1-11900-sm8250.0"
+}

@@ -1,0 +1,45 @@
+# Android reference workspace
+
+Historical Android/Qualcomm sources with ready file, header and complete .cpp/.cc
+body indexes. Source/tool folders are ordinary Git files; no submodules or LFS.
+Queries restore caches automatically and never rebuild source indexes.
+
+```bash
+git clone --filter=blob:none --sparse --single-branch --branch main https://github.com/PocoF3Releases/references_code.git
+cd references_code
+git sparse-checkout set tools/repoindex index docs evidence scripts
+python3 tools/repoindex workspace impl 'AudioFlinger::checkAttributionSourcePackage' --limit 10
+python3 tools/repoindex workspace source android-t-qcom/frameworks/av/services/audioflinger/AudioFlinger.cpp --line 283 --limit 20
+```
+
+Both trees are selected by default. `--tree` selects one; `--scope` selects a topic.
+Output is human-readable and bounded; add `--json` for JSON Lines. No initial scan,
+model service, package installation, environment creation or setup script is needed. Linux/WSL and SQLite with
+FTS5/trigram support are required; ripgrep is optional for live text searches.
+
+- [Search recipes and index-only checkout](docs/SEARCH.md)
+- [Source provenance](docs/SOURCE_MAP.md)
+- [Current sizes/counts](docs/INDEX_GUIDE.md)
+- [Validation and evidence](docs/VALIDATION.md)
+- [Workspace maintenance and local checks](docs/MAINTENANCE.md)
+- [Standalone repoindex documentation](tools/repoindex/README.md)
+
+`repoindex.json` owns tree names, scopes and benchmark cases. `index/` owns ready
+bundles; `evidence/` owns current source/audit/measurement records. Generic code,
+documentation and tests live together in `tools/repoindex/`, copied from the
+[canonical tool](https://github.com/johnmart19/repoindex). Search/reindex/benchmark scripts remain small compatibility shims;
+`scripts/check.py` owns workspace validation. The independent development checkout
+is `~/tools/repoindex`; this pinned copy works without it.
+
+Source contents/notices are preserved. These partial historical references do not
+establish Android 17 buildability or device behavior. Active project decisions:
+[workhub](https://github.com/PocoF3Releases/Agents.md).
+
+Agents start with [AGENTS.md](AGENTS.md), then the relevant search recipe.
+Claude Code loads the same rules through [CLAUDE.md](CLAUDE.md); no separate index
+or model-specific search setup is required.
+Do not load the generated census, evidence JSON or whole source files by default.
+
+Explicit fresh-clone acceptance: `python3 scripts/check_fresh_clone.py`. It checks
+both ready indexes without installs or rebuilding; [details](docs/MAINTENANCE.md#fresh-index-only-acceptance).
+This downloads the bundles again and is not a chat-startup command.

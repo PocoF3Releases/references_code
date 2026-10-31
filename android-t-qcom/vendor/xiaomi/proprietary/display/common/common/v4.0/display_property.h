@@ -1,0 +1,33 @@
+#ifndef _DISPLAY_PROPERTY_H_
+#define _DISPLAY_PROPERTY_H_
+
+#define RO_EYECARE_BRIGHTNESS_THRESHOLD       "ro.vendor.eyecare.threshold"
+#define RO_EYECARE_BRIGHTNESS_LEVEL           "ro.vendor.eyecare.level"
+#define RO_HIST_BRIGHTNESS_THRESHOLD          "ro.vendor.hist.threshold"
+#define RO_DISPLAYFEATURE_HISTOGRAM_ENABLE    "ro.vendor.histogram.enable"
+#define RO_WHITEPOINT_CALIBRATION_ENABLE      "ro.vendor.whitepoint_calibration_enable"
+#define SYS_DISPLAYFEATURE_ENTRY_ENABLE       "vendor.displayfeature.entry.enable"
+#define SYS_DISPLAYFEATURE_HBM_ENABLE         "vendor.hbm.enable"
+#define PERSIST_VENDOR_DF_EXTCOLOR_PROC       "persist.vendor.df.extcolor.proc"
+#define PERSIST_VENDOR_MAX_BRIGHTNESS         "persist.vendor.max.brightness"
+#define RO_XIAOMI_BL_NOTIFY                   "ro.vendor.xiaomi.bl.notify"
+#define RO_XIAOMI_BL_POLL                     "ro.vendor.xiaomi.bl.poll"
+#define PERSIST_COLOR_TEMP_VALUE              "persist.vendor.df.color.temp"
+#define PERSIST_DISPLAYFEATURE_DC_BL_ENABLE   "persist.vendor.dc_backlight.enable"
+#define PERSIST_FOD_MODIFIED_DC_STATUS        "persist.vendor.fod.modified.dc_status"
+#define RO_BOOT_OLED_PANEL_ID                 "ro.boot.oled_panel_id"
+#define RO_VENDOR_FPS_SWITCH_DEFAULT          "ro.vendor.fps.switch.default"
+#define PERSIST_VENDOR_DFPS_LEVEL             "persist.vendor.dfps.level"
+#define RO_VENDOR_SMART_DFPS_ENABLE           "ro.vendor.smart_dfps.enable"
+#define PERSIST_VENDOR_POWER_DFPS_LEVEL       "persist.vendor.power.dfps.level"
+#define RO_VENDOR_SOFT_BL_ENABLE              "ro.vendor.soft_backlight.enable"
+#define RO_VENDOR_SRE_ENABLE                  "ro.vendor.sre.enable"
+#define RO_VENDOR_DISP_MI_CALIB_ENABLE        "ro.vendor.display.mi_calib.enable"
+#define RO_VENDOR_DISP_NATURE_MODE_ENABLE     "ro.vendor.display.nature_mode.enable"
+#define RO_VENDOR_PCC_DC_ENABLE               "ro.vendor.pcc.dc.enable"
+#define RO_VENDOR_AI_DISP_ENABLE              "ro.vendor.display.ai_disp.enable"
+#define RO_VENDOR_EXPERT_CALIB_ENABLE         "ro.vendor.display.expert_calib.enable"
+#define RO_VENDOR_LOCALHBM_ENABLE             "ro.vendor.localhbm.enable"
+#define RO_VENDOR_FOD_110NIT_LUX_LEVEL        "ro.vendor.fod.110nit.lux.level"
+
+#endif //_DISPLAY_PROPERTY_H_
