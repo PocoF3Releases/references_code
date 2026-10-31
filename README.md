@@ -36,6 +36,8 @@ establish Android 17 buildability or device behavior. Active project decisions:
 [workhub](https://github.com/PocoF3Releases/Agents.md).
 
 Agents start with [AGENTS.md](AGENTS.md), then the relevant search recipe.
+Claude Code loads the same rules through [CLAUDE.md](CLAUDE.md); no separate index
+or model-specific search setup is required.
 Do not load the generated census, evidence JSON or whole source files by default.
 
 Explicit fresh-clone acceptance: `python3 scripts/check_fresh_clone.py`. It checks
