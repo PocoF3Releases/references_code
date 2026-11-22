@@ -166,14 +166,15 @@ def format_record(row, width=400):
         if "start_line" in row:
             numbered = ["%d | %s" % (row["start_line"] + index, line) for index, line in enumerate(row["text"].split("\n"))]
             return path + ":%d-%d\n" % (row["start_line"], row["end_line"]) + "\n".join(numbered)
+        copies = "  (+%d identical cop%s)" % (row["copies"], "y" if row["copies"] == 1 else "ies") if row.get("copies") else ""
         if "line" in row:
-            result = "%s:%s: %s" % (path, row["line"], row["text"])
+            result = "%s:%s: %s%s" % (path, row["line"], row["text"], copies)
             if "context" in row:
                 result += "\n" + row["context"]
             return result
         if "declaration" in row:
             declaration = row["declaration"]
-            return "%s [%s] %s" % (path, row["kind"], declaration[:width] + ("…" if len(declaration) > width else ""))
+            return "%s [%s] %s%s" % (path, row["kind"], declaration[:width] + ("…" if len(declaration) > width else ""), copies)
         return path
     if "files" in row and "cache_ready" in row:
         return "%s: %s files, %s implementations, %s symbols; cache=%s, backend=%s, errors=%s" % (
@@ -231,6 +232,8 @@ def main(argv=None):
     parser.add_argument("--context", type=int, default=0)
     parser.add_argument("--line", type=int, default=1)
     parser.add_argument("--regex", action="store_true", help="Live text only")
+    parser.add_argument("--expand-copies", action="store_true",
+                        help="impl/symbol: list identical copies separately instead of one record with +N copies")
     parser.add_argument("--jobs", type=int, default=8)
     parser.add_argument("--chunk-mib", type=int, default=32)
     parser.add_argument("--live", action="store_true", help="verify: compare live file metadata")
@@ -280,7 +283,8 @@ def main(argv=None):
                         stream.close()
                 rows = bounded_live()
             else:
-                rows = workspace.query(root, names, action, args.query, args.limit, prefixes, args.context, args.max_chars)
+                rows = workspace.query(root, names, action, args.query, args.limit, prefixes, args.context, args.max_chars,
+                                       collapse=not args.expand_copies)
         elif action == "status":
             rows = status(root, names)
         elif action == "scopes":

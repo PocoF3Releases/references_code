@@ -2,7 +2,7 @@
 
 Source: https://github.com/johnmart19/repoindex
 
-Revision: `549b2eec1cdf6424933604c2a3002c63433dbffe` (2.1.1). This directory is ordinary tracked source;
+Revision: `1367d6019cd8025952040a4977ab1a335d8d87af` (2.2.0). This directory is ordinary tracked source;
 its code, tests and generic documentation match that canonical revision.
 `UPSTREAM.md` is consumer-owned provenance and is not part of the upstream tool.
 

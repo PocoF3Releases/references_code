@@ -1,7 +1,8 @@
 # repoindex
 
 Standalone, local search for large source workspaces. It indexes paths, heuristic
-C/C++ header declarations/includes, and complete `.cpp`/`.cc` implementation text.
+C/C++ header declarations/includes, and the complete text of configured source
+files (`.cpp`/`.cc` by default), storing identical copies once.
 Ready SQLite bundles restore automatically; queries never rebuild source indexes.
 
 Run the complete directory with Python—no installation, service or model API:

@@ -59,20 +59,28 @@ def verify(root, tree, live=False, hash_implementations=False):
         if implementation_meta:
             ext = json.loads(data["metadata"]["implementation_extensions"])
             placeholders = ",".join("?" for _ in ext)
-            expected = db.execute("SELECT count(*),coalesce(sum(size),0) FROM vfiles WHERE ext IN (" + placeholders + ")", ext).fetchone()
+            skip_sql, skip_params = "", []
+            for prefix in json.loads(data["metadata"].get("implementation_exclude", "[]")):
+                skip_sql += " AND NOT (path=? OR (path>=? AND path<?))"
+                skip_params += [prefix, prefix + "/", prefix + "0"]
+            selection = "FROM vfiles WHERE ext IN (" + placeholders + ")" + skip_sql
+            ext = list(ext) + skip_params
+            expected = db.execute("SELECT count(*),coalesce(sum(size),0) " + selection, ext).fetchone()
             actual = db.execute("SELECT count(*),coalesce(sum(size),0) FROM implementation_files").fetchone()
             if actual != expected or actual != (int(data["metadata"]["implementation_count"]), int(data["metadata"]["implementation_bytes"])):
                 raise ValueError("Implementation coverage mismatch")
-            missing = db.execute("SELECT path,size,mtime FROM vfiles WHERE ext IN (" + placeholders + ") EXCEPT SELECT path,size,mtime FROM implementation_files LIMIT 1", ext).fetchone()
+            missing = db.execute("SELECT path,size,mtime " + selection + " EXCEPT SELECT path,size,mtime FROM implementation_files LIMIT 1", ext).fetchone()
             if missing:
                 raise ValueError("Implementation paths/metadata differ from file inventory")
             with tempfile.TemporaryDirectory(prefix="implementation-fts-check-") as temp:
                 with closing(sqlite3.connect(Path(temp) / "check.db")) as check:
                     db.backup(check)
                     check.execute("INSERT INTO implementation_fts(implementation_fts,rank) VALUES('integrity-check',1)")
-            for path, body, sha in db.execute("SELECT path,body,body_sha256 FROM implementation_files"):
+            stored = ("SELECT body_sha256,body,body_sha256 FROM implementation_bodies" if implementation_meta == "2"
+                      else "SELECT path,body,body_sha256 FROM implementation_files")
+            for label, body, sha in db.execute(stored):
                 if hashlib.sha256(body.encode("utf-8")).hexdigest() != sha:
-                    raise ValueError("Stored implementation text hash mismatch: " + path)
+                    raise ValueError("Stored implementation text hash mismatch: " + label)
             if hash_implementations:
                 implementation_hashes = {path: (raw_sha, body_sha) for path, raw_sha, body_sha in db.execute("SELECT path,source_sha256,body_sha256 FROM implementation_files")}
         elif hash_implementations:

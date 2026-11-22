@@ -6,17 +6,19 @@
       "LA.UM.8.12.r1-11900-sm8250.0",
       "android-t-qcom"
     ],
-    "median_ms": 6.776,
+    "median_ms": 11.485,
     "samples_ms": [
-      35.583,
-      7.008,
-      6.675,
-      6.776,
-      6.581
+      25.889,
+      11.428,
+      12.704,
+      9.857,
+      11.485,
+      11.964,
+      11.065
     ],
     "rows": 9,
-    "before_ms": 6.422,
-    "speedup": 0.95
+    "before_ms": 6.776,
+    "speedup": 0.59
   },
   {
     "mode": "files",
@@ -25,17 +27,19 @@
       "LA.UM.8.12.r1-11900-sm8250.0",
       "android-t-qcom"
     ],
-    "median_ms": 8.405,
+    "median_ms": 13.559,
     "samples_ms": [
-      57.257,
-      8.405,
-      7.95,
-      8.322,
-      8.47
+      16.173,
+      13.559,
+      11.976,
+      13.684,
+      13.727,
+      11.876,
+      12.621
     ],
     "rows": 20,
-    "before_ms": 7.854,
-    "speedup": 0.93
+    "before_ms": 8.405,
+    "speedup": 0.62
   },
   {
     "mode": "files",
@@ -44,17 +48,19 @@
       "LA.UM.8.12.r1-11900-sm8250.0",
       "android-t-qcom"
     ],
-    "median_ms": 1.739,
+    "median_ms": 2.534,
     "samples_ms": [
-      2.726,
-      2.072,
-      1.595,
-      1.739,
-      1.58
+      2.444,
+      2.49,
+      2.413,
+      2.534,
+      2.559,
+      2.815,
+      2.605
     ],
     "rows": 20,
-    "before_ms": 1.558,
-    "speedup": 0.9
+    "before_ms": 1.739,
+    "speedup": 0.69
   },
   {
     "mode": "symbol",
@@ -63,17 +69,19 @@
       "LA.UM.8.12.r1-11900-sm8250.0",
       "android-t-qcom"
     ],
-    "median_ms": 5.408,
+    "median_ms": 9.777,
     "samples_ms": [
-      7.597,
-      5.471,
-      5.277,
-      5.408,
-      5.358
+      9.184,
+      9.719,
+      10.624,
+      9.777,
+      10.856,
+      10.905,
+      8.928
     ],
     "rows": 1,
-    "before_ms": 6.128,
-    "speedup": 1.13
+    "before_ms": 5.408,
+    "speedup": 0.55
   },
   {
     "mode": "files",
@@ -82,17 +90,19 @@
       "LA.UM.8.12.r1-11900-sm8250.0",
       "android-t-qcom"
     ],
-    "median_ms": 5.956,
+    "median_ms": 10.883,
     "samples_ms": [
-      14.573,
-      6.236,
-      5.937,
-      5.857,
-      5.956
+      10.883,
+      11.211,
+      10.728,
+      11.507,
+      10.778,
+      11.241,
+      9.571
     ],
     "rows": 0,
-    "before_ms": 5.753,
-    "speedup": 0.97
+    "before_ms": 5.956,
+    "speedup": 0.55
   },
   {
     "mode": "files",
@@ -100,17 +110,19 @@
     "prefixes": [
       "android-t-qcom/frameworks/av"
     ],
-    "median_ms": 11.705,
+    "median_ms": 16.783,
     "samples_ms": [
-      74.055,
-      11.705,
-      11.843,
-      11.454,
-      11.394
+      19.801,
+      15.784,
+      17.867,
+      15.822,
+      16.257,
+      16.783,
+      17.185
     ],
     "rows": 20,
-    "before_ms": 12.271,
-    "speedup": 1.05
+    "before_ms": 11.705,
+    "speedup": 0.7
   },
   {
     "mode": "impl",
@@ -118,17 +130,19 @@
     "prefixes": [
       "android-t-qcom/frameworks/av"
     ],
-    "median_ms": 8.625,
+    "median_ms": 26.543,
     "samples_ms": [
-      50.225,
-      8.877,
-      8.427,
-      8.625,
-      7.806
+      33.246,
+      27.514,
+      26.796,
+      25.496,
+      25.085,
+      26.543,
+      23.823
     ],
     "rows": 3,
-    "before_ms": 8.124,
-    "speedup": 0.94
+    "before_ms": 8.625,
+    "speedup": 0.32
   },
   {
     "mode": "impl",
@@ -136,17 +150,19 @@
     "prefixes": [
       "LA.UM.8.12.r1-11900-sm8250.0/camx"
     ],
-    "median_ms": 4.793,
+    "median_ms": 5.608,
     "samples_ms": [
-      51.083,
-      4.768,
-      4.844,
-      4.793,
-      4.741
+      6.039,
+      5.944,
+      5.295,
+      5.608,
+      5.587,
+      5.436,
+      6.175
     ],
     "rows": 2,
-    "before_ms": 6.067,
-    "speedup": 1.27
+    "before_ms": 4.793,
+    "speedup": 0.85
   },
   {
     "mode": "impl",
@@ -154,17 +170,19 @@
     "prefixes": [
       "LA.UM.8.12.r1-11900-sm8250.0/camx"
     ],
-    "median_ms": 3.991,
+    "median_ms": 6.585,
     "samples_ms": [
-      7.941,
-      3.991,
-      4.386,
-      3.919,
-      3.987
+      6.585,
+      6.438,
+      7.236,
+      8.088,
+      6.875,
+      6.561,
+      6.217
     ],
     "rows": 20,
-    "before_ms": 3.495,
-    "speedup": 0.88
+    "before_ms": 3.991,
+    "speedup": 0.61
   },
   {
     "mode": "impl",
@@ -173,17 +191,19 @@
       "LA.UM.8.12.r1-11900-sm8250.0",
       "android-t-qcom"
     ],
-    "median_ms": 5.09,
+    "median_ms": 3.489,
     "samples_ms": [
-      53.255,
-      5.539,
-      5.09,
-      5.05,
-      5.076
+      3.054,
+      3.125,
+      3.583,
+      4.167,
+      3.908,
+      3.489,
+      3.004
     ],
     "rows": 20,
-    "before_ms": 6.976,
-    "speedup": 1.37
+    "before_ms": 5.09,
+    "speedup": 1.46
   },
   {
     "mode": "impl",
@@ -192,16 +212,131 @@
       "LA.UM.8.12.r1-11900-sm8250.0",
       "android-t-qcom"
     ],
-    "median_ms": 6.123,
+    "median_ms": 16.034,
     "samples_ms": [
-      14.531,
-      6.402,
-      6.023,
-      6.123,
-      5.985
+      19.959,
+      15.541,
+      16.614,
+      16.019,
+      15.641,
+      16.034,
+      19.31
     ],
     "rows": 0,
-    "before_ms": 6.901,
-    "speedup": 1.13
+    "before_ms": 6.123,
+    "speedup": 0.38
+  },
+  {
+    "mode": "impl",
+    "query": "checkAttributionSourcePackage",
+    "prefixes": [
+      "LA.UM.8.12.r1-11900-sm8250.0",
+      "android-t-qcom"
+    ],
+    "median_ms": 54.655,
+    "samples_ms": [
+      59.602,
+      51.683,
+      54.331,
+      56.192,
+      54.007,
+      56.477,
+      54.655
+    ],
+    "rows": 4
+  },
+  {
+    "mode": "impl",
+    "query": "AUDIO_OUTPUT_FLAG_DIRECT",
+    "prefixes": [
+      "LA.UM.8.12.r1-11900-sm8250.0",
+      "android-t-qcom"
+    ],
+    "median_ms": 30.8,
+    "samples_ms": [
+      40.724,
+      44.418,
+      34.662,
+      30.8,
+      27.643,
+      25.781,
+      27.471
+    ],
+    "rows": 20
+  },
+  {
+    "mode": "impl",
+    "query": "getSlotIndex",
+    "prefixes": [
+      "LA.UM.8.12.r1-11900-sm8250.0"
+    ],
+    "median_ms": 7.148,
+    "samples_ms": [
+      6.71,
+      7.191,
+      7.574,
+      7.148,
+      6.854,
+      6.969,
+      7.26
+    ],
+    "rows": 20
+  },
+  {
+    "mode": "symbol",
+    "query": "audio_stream_out_t",
+    "prefixes": [
+      "LA.UM.8.12.r1-11900-sm8250.0",
+      "android-t-qcom"
+    ],
+    "median_ms": 9.459,
+    "samples_ms": [
+      11.131,
+      10.727,
+      9.324,
+      9.459,
+      9.078,
+      9.756,
+      9.303
+    ],
+    "rows": 1
+  },
+  {
+    "mode": "symbol",
+    "query": "get_presentation_position",
+    "prefixes": [
+      "LA.UM.8.12.r1-11900-sm8250.0",
+      "android-t-qcom"
+    ],
+    "median_ms": 9.764,
+    "samples_ms": [
+      9.76,
+      10.071,
+      9.612,
+      9.947,
+      9.764,
+      9.756,
+      9.938
+    ],
+    "rows": 3
+  },
+  {
+    "mode": "symbol",
+    "query": "CAMERA3_STREAM_OUTPUT",
+    "prefixes": [
+      "LA.UM.8.12.r1-11900-sm8250.0",
+      "android-t-qcom"
+    ],
+    "median_ms": 10.791,
+    "samples_ms": [
+      10.597,
+      10.243,
+      12.018,
+      10.791,
+      10.762,
+      11.612,
+      11.189
+    ],
+    "rows": 1
   }
 ]

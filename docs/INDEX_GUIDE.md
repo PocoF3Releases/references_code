@@ -5,8 +5,8 @@ Stored provenance only; not a live freshness check. No source scan is needed to 
 
 | Tree | Files | Header symbols | Implementations | SQLite MiB | Bundle MiB | Chunks |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| LA.UM.8.12.r1-11900-sm8250.0 | 44561 | 225021 | 2490 | 132.8 | 20.1 | 5 |
-| android-t-qcom | 212048 | 2977498 | 72079 | 1995.1 | 380.8 | 63 |
+| LA.UM.8.12.r1-11900-sm8250.0 | 44561 | 383733 | 20559 | 520.0 | 123.2 | 17 |
+| android-t-qcom | 212048 | 5292945 | 212048 | 3488.2 | 636.0 | 110 |
 
 All configured trees are selected by default; narrow with `--tree` or `--scope`.
 Queries restore verified caches once; they never rebuild source indexes.

@@ -25,12 +25,14 @@ No complete source-content reads occur during normal indexed queries.
 | Header symbols | `symbols`; `vsymbols` exposes names/kinds/declarations/paths |
 | Header includes | `inc_targets`, `includes`; `vincludes` exposes targets |
 | Path acceleration | `search_files`, optional external-content `search_paths_fts` |
-| Complete bodies | `implementation_files`, external-content `implementation_fts` |
+| Complete bodies | `implementation_bodies` (one row per distinct body), `implementation_paths` (path → body), external-content `implementation_fts`, large-body `implementation_segments` + contentless `implementation_segments_fts`; view `implementation_files` keeps one row per path |
 | Provenance/coverage | `meta` |
 
 Header extraction is comment-aware and heuristic: classes, structs, enums, unions,
-macros and selected globals. It is not a full C++ grammar, ABI or function-symbol
-index. Implementation text covers every selected regular file in full, including
+macros, selected globals, enumerators, typedef names, one-line function prototypes
+and function-pointer fields. Names produced by macro expansion (X-macro lists) are
+not visible to it; search their text with `impl`. It is not a full C++ grammar or
+ABI index. Implementation text covers every selected regular file in full, including
 bodies/comments/strings. Source and output completeness are different: display
 limits never sample stored text. Directory links are not traversed; nonregular or
 unreadable implementation inputs fail publication rather than being silently skipped.
@@ -48,10 +50,19 @@ materialized paths avoid repeated joins and permit early LIMIT stops. Optional
 FTS5 trigram candidates accelerate longer path patterns; exact filters remain.
 
 Body search uses whole-file documents so multiline matches cannot disappear at
-chunk/block boundaries. With `detail=none`, queries AND at most eight individually
-quoted three-codepoint tokens, then verify the entire case-sensitive literal in
-Python. Candidate false positives cannot become returned hits. One record is
-emitted per starting line. Short queries work through ordered documents without
+chunk/block boundaries. Implementation schema 2 stores each distinct normalized
+body once (by SHA-256) and indexes it once, so vendored or prebuilt copies cost one
+document. With `detail=none`, queries AND every distinct quoted three-codepoint
+token of the literal (up to 64, spread evenly), then verify the entire
+case-sensitive literal in Python. Bodies above 1M characters also have
+index-only (contentless) postings for 256K-character segments that overlap by the
+4,096-character query maximum; such a body is read only when one segment holds every
+query trigram, so large generated or test-data files stop costing a full read. Candidate false positives cannot become returned hits. One record is
+emitted per starting line. By default identical copies collapse into one record
+with `copies` and up to three `other_paths`; the first in-scope path is shown.
+`symbol` collapses rows with the same kind and declaration likewise.
+`--expand-copies` (API `collapse=False`) restores one record per path. Schema 1
+bundles remain readable. Short queries work through ordered documents without
 trigram acceleration. The result cap spans configured trees in order.
 
 This is literal retrieval, not AST/overload resolution or proof of build/device

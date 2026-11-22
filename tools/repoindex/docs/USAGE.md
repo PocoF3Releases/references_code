@@ -10,6 +10,7 @@ files; no submodules are required. Existing ready bundles need no initial scan.
   "trees": ["platform", "vendor"],
   "ignore": ["out", "__pycache__"],
   "implementation_extensions": [".cpp", ".cc"],
+  "implementation_exclude": ["vendor/generated"],
   "scopes": {"core": ["platform/src"], "drivers": ["vendor/drivers"]},
   "guide": "docs/INDEX_GUIDE.md",
   "command": "python3 /path/to/repoindex workspace",
@@ -18,7 +19,9 @@ files; no submodules are required. Existing ready bundles need no initial scan.
 ```
 
 `trees` is required: unique immediate source-directory names. Other fields are
-optional. Exclusions are directory names. `scopes` map names to paths below the
+optional. `implementation_extensions` selects files whose complete text `impl`
+and `source` serve; `implementation_exclude` lists workspace-relative path prefixes
+kept out of that text index (they stay in `files`). Exclusions are directory names. `scopes` map names to paths below the
 configured trees. `guide` is a workspace-relative generated Markdown destination;
 `command` is display text for that guide, never executed. Benchmarks are explicit
 workspace data, not built-in assumptions. Legacy `config/search-scopes.json` is
@@ -49,13 +52,15 @@ tree order, then path order; implementation hits follow starting line order.
 | Mode | Matching / result |
 | --- | --- |
 | `files` | Case-insensitive path substring, or case-sensitive `*`/`?` glob |
-| `symbol` | Exact heuristic C/C++ header symbol name |
-| `impl` | Exact case-sensitive literal anywhere in complete selected implementation text |
+| `symbol` | Exact heuristic C/C++ header name: type, macro, global, enumerator, typedef, prototype, function-pointer field |
+| `impl` | Exact case-sensitive literal anywhere in complete text of the `implementation_extensions` files |
 | `source` | A workspace-qualified implementation path and bounded indexed line range |
 | `text` | Live fixed-string ripgrep; `--regex` explicitly enables regex |
 
 Body search includes comments/strings and supports multiline literals. It is not
-AST/overload analysis. Short queries work but lack trigram acceleration. A hit
+AST/overload analysis. Identical file copies are reported once with
+`(+N identical copies)` (JSON: `copies`, `other_paths`); `--expand-copies` lists
+each path. Short queries work but lack trigram acceleration. A hit
 contains path, starting/ending line, column and a clipped line excerpt. Use a small
 `source` range after a hit, rather than returning an entire function/file.
 

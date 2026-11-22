@@ -11,6 +11,16 @@ from .database import open_db_required, prepare_search, files_sql
 from .scanner import build_index
 from .verification import verify
 
+def implementation_exclusions(root, tree):
+    """Tree-relative prefixes from workspace-relative ``implementation_exclude``."""
+    prefixes = []
+    for item in config(root).get("implementation_exclude", []):
+        item = normalized_path(root, item)
+        if item.startswith(tree + "/"):
+            prefixes.append(item[len(tree) + 1:])
+    return prefixes
+
+
 def build(root, tree, jobs=8, chunk_bytes=MAX_RAW_PART):
     source = contained(root, tree)
     if not source.is_dir():
@@ -23,15 +33,19 @@ def build(root, tree, jobs=8, chunk_bytes=MAX_RAW_PART):
                         ignores=config(root).get("ignore", ["out", "__pycache__"]))
             from . import implementations as implementation_index
             with closing(sqlite3.connect(db)) as writer:
-                implementation_index.build(writer, source, config(root).get("implementation_extensions", implementation_index.EXTENSIONS))
+                implementation_index.build(writer, source, config(root).get("implementation_extensions", implementation_index.EXTENSIONS),
+                                           implementation_exclusions(root, tree))
             result = pack(db, contained(root, "index/" + tree), tree, chunk_bytes)
     return {"tree": tree, "elapsed_seconds": round(time.monotonic() - started, 3),
             "database_bytes": result["database_bytes"], "compressed_bytes": sum(x["bytes"] for x in result["parts"]),
             "chunks": len(result["parts"]), "metadata": result["metadata"]}
 
 
-def query(root, names, mode, pattern, limit=40, prefixes=None, context=0, max_chars=400):
-    """Global limit across selected trees; paths always relative to the workspace."""
+def query(root, names, mode, pattern, limit=40, prefixes=None, context=0, max_chars=400, collapse=True):
+    """Global limit across selected trees; paths always relative to the workspace.
+
+    collapse (default) folds identical copies into one record carrying ``copies``
+    and ``other_paths``: same body for impl, same kind/declaration for symbol."""
     if limit < 1 or mode not in ("files", "symbol", "impl"):
         raise ValueError("Positive limit and files/symbol/impl mode required")
     names = selected(root, names)
@@ -51,13 +65,15 @@ def query(root, names, mode, pattern, limit=40, prefixes=None, context=0, max_ch
         try:
             if mode == "impl":
                 from . import implementations as implementation_index
-                for row in implementation_index.search(db, pattern, local, context, max_chars):
+                for row in implementation_index.search(db, pattern, local, context, max_chars, collapse):
                     if count == limit:
                         print("More matches exist; narrow the tree/scope or raise --limit.", file=sys.stderr)
                         return
                     count += 1
                     row = dict(row)
                     row.update(tree=tree, path=tree + "/" + row["path"])
+                    if "other_paths" in row:
+                        row["other_paths"] = [tree + "/" + other for other in row["other_paths"]]
                     yield row
                 continue
             if mode == "files":
@@ -71,15 +87,27 @@ def query(root, names, mode, pattern, limit=40, prefixes=None, context=0, max_ch
                         conds.append("(path=? OR (path>=? AND path<?))")
                         params += [prefix, prefix + "/", prefix + "0"]
                 where = "(" + " OR ".join(conds) + ") AND name=?"
-                params += [pattern, limit - count + 1]
-                sql = "SELECT DISTINCT path,kind,decl FROM vsymbols WHERE " + where + " ORDER BY path,kind,decl LIMIT ?"
-            for row in db.execute(sql, params):
+                params += [pattern]
+                sql = "SELECT DISTINCT path,kind,decl FROM vsymbols WHERE " + where + " ORDER BY path,kind,decl"
+                if not collapse:
+                    sql += " LIMIT ?"
+                    params.append(limit - count + 1)
+            rows = db.execute(sql, params)
+            if mode == "symbol" and collapse:
+                groups = {}
+                for path, kind, decl in rows:
+                    groups.setdefault((kind, decl), []).append(path)
+                rows = [(paths[0], kind, decl, paths) for (kind, decl), paths in
+                        sorted(groups.items(), key=lambda item: item[1][0])]
+            for row in rows:
                 if count == limit:
                     print("More matches exist; narrow the tree/scope or raise --limit.", file=sys.stderr)
                     return
                 result = {"tree": tree, "path": tree + "/" + row[0]}
                 if mode == "symbol":
                     result.update(kind=row[1], declaration=row[2])
+                    if len(row) > 3 and len(row[3]) > 1:
+                        result.update(copies=len(row[3]) - 1, other_paths=[tree + "/" + p for p in row[3][1:4]])
                 count += 1
                 yield result
         finally:
@@ -107,7 +135,8 @@ def optimize(root, tree, implementations=False):
             if implementations:
                 from . import implementations as implementation_index
                 with closing(sqlite3.connect(db)) as writer:
-                    implementation_index.build(writer, contained(root, tree), config(root).get("implementation_extensions", implementation_index.EXTENSIONS))
+                    implementation_index.build(writer, contained(root, tree), config(root).get("implementation_extensions", implementation_index.EXTENSIONS),
+                                               implementation_exclusions(root, tree))
             result = pack(db, contained(root, "index/" + tree), tree)
     return {"tree": tree, "elapsed_seconds": round(time.monotonic() - started, 3),
             "database_bytes": result["database_bytes"], "compressed_bytes": sum(x["bytes"] for x in result["parts"]),

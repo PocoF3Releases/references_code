@@ -66,13 +66,27 @@ class FrontendTests(unittest.TestCase):
         self.assertEqual(1, len(self.query(["files", "Mode", "--tree", "alpha"])))
         self.assertEqual([], self.query(["files", "Mode", "--scope", "core", "--tree", "alpha"]))
 
+    def test_symbol_collapses_identical_declarations(self):
+        rows = [json.loads(line) for line in self.query(["symbol", "UniqueMode", "--tree", "beta"])]
+        self.assertEqual(1, len(rows))
+        self.assertEqual(1, rows[0]["copies"])
+        self.assertEqual(2, len(self.query(["symbol", "UniqueMode", "--tree", "beta", "--expand-copies"])))
+
     def test_text_stops_at_global_limit(self):
         rows = self.query(["text", "needle", "--limit", "1"], json_output=False)
         self.assertEqual(1, len(rows))
         self.assertIn("Mode.h:2:needle", rows[0])
 
     def test_indexed_implementation_default_both_and_scope(self):
-        self.assertEqual(3, len(self.query(["impl", "run_body"])))
+        rows = [json.loads(line) for line in self.query(["impl", "run_body"])]
+        # beta/core and beta/core-extra hold identical bodies: one record, one copy.
+        self.assertEqual(2, len(rows))
+        self.assertEqual([("alpha/drivers/Impl.cpp", 0), ("beta/core-extra/Impl.cpp", 1)],
+                         [(row["path"], row.get("copies", 0)) for row in rows])
+        self.assertEqual(["beta/core/Impl.cpp"], rows[1]["other_paths"])
+        self.assertEqual(3, len(self.query(["impl", "run_body", "--expand-copies"])))
+        human = self.query(["impl", "run_body"], json_output=False)
+        self.assertIn("(+1 identical copy)", human[1])
         rows = [json.loads(line) for line in self.query(["impl", "run_body", "--scope", "core", "--context", "1"])]
         self.assertEqual(1, len(rows))
         self.assertEqual("beta/core/Impl.cpp", rows[0]["path"])
@@ -136,7 +150,7 @@ class FrontendTests(unittest.TestCase):
         output = io.StringIO()
         with mock.patch.object(workspace, "build", side_effect=AssertionError("must not build")), contextlib.redirect_stdout(output):
             self.assertEqual(0, cli.main(["impl", "run_body", "--workspace", str(offline), "--json"]))
-        self.assertEqual(3, len(output.getvalue().splitlines()))
+        self.assertEqual(2, len(output.getvalue().splitlines()))
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(2, cli.main(["text", "needle", "--workspace", str(offline)]))
 

@@ -1,7 +1,7 @@
 # Android reference workspace
 
-Historical Android/Qualcomm sources with ready file, header and complete .cpp/.cc
-body indexes. Source/tool folders are ordinary Git files; no submodules or LFS.
+Historical Android/Qualcomm sources with ready file, declaration and complete
+source-text indexes (C/C++ incl. headers, Java/Kotlin, AIDL/HAL, XML, build files). Source/tool folders are ordinary Git files; no submodules or LFS.
 Queries restore caches automatically and never rebuild source indexes.
 
 ```bash

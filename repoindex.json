@@ -7,8 +7,36 @@
     "__pycache__"
   ],
   "implementation_extensions": [
+    ".aidl",
+    ".bp",
+    ".c",
+    ".cc",
+    ".cfg",
+    ".conf",
     ".cpp",
-    ".cc"
+    ".dts",
+    ".dtsi",
+    ".h",
+    ".hal",
+    ".hh",
+    ".hpp",
+    ".hxx",
+    ".java",
+    ".json",
+    ".kt",
+    ".mk",
+    ".proto",
+    ".py",
+    ".rc",
+    ".sh",
+    ".te",
+    ".txt",
+    ".xml",
+    ".xsd"
+  ],
+  "implementation_exclude": [
+    "LA.UM.8.12.r1-11900-sm8250.0/chi-cdk/oem/qcom/tuning",
+    "LA.UM.8.12.r1-11900-sm8250.0/chi-cdk/oem/qcom/tuningdeprecated"
   ],
   "scopes": {
     "android": [
@@ -69,6 +97,52 @@
       "android-t-qcom/prebuilts",
       "LA.UM.8.12.r1-11900-sm8250.0/prebuilt_HY11",
       "LA.UM.8.12.r1-11900-sm8250.0/llvm-arm-toolchain-ship"
+    ],
+    "xiaomi": [
+      "android-t-qcom/vendor/xiaomi",
+      "android-t-qcom/miui"
+    ],
+    "video": [
+      "LA.UM.8.12.r1-11900-sm8250.0/mm-video",
+      "LA.UM.8.12.r1-11900-sm8250.0/mm-video-utils",
+      "LA.UM.8.12.r1-11900-sm8250.0/vpp",
+      "LA.UM.8.12.r1-11900-sm8250.0/wfd"
+    ],
+    "sensors": [
+      "LA.UM.8.12.r1-11900-sm8250.0/sensors-see"
+    ],
+    "gps": [
+      "LA.UM.8.12.r1-11900-sm8250.0/gps",
+      "LA.UM.8.12.r1-11900-sm8250.0/gps-release"
+    ],
+    "wifi": [
+      "LA.UM.8.12.r1-11900-sm8250.0/wlan",
+      "LA.UM.8.12.r1-11900-sm8250.0/wigig"
+    ],
+    "security": [
+      "LA.UM.8.12.r1-11900-sm8250.0/securemsm",
+      "LA.UM.8.12.r1-11900-sm8250.0/sectools"
+    ],
+    "telephony": [
+      "LA.UM.8.12.r1-11900-sm8250.0/telephony-apps",
+      "LA.UM.8.12.r1-11900-sm8250.0/ims-ship",
+      "LA.UM.8.12.r1-11900-sm8250.0/qcril-data-hal",
+      "LA.UM.8.12.r1-11900-sm8250.0/data",
+      "LA.UM.8.12.r1-11900-sm8250.0/cne"
+    ],
+    "devicetree": [
+      "LA.UM.8.12.r1-11900-sm8250.0/devicetree-4.19",
+      "LA.UM.8.12.r1-11900-sm8250.0/camera-devicetree",
+      "LA.UM.8.12.r1-11900-sm8250.0/display-devicetree"
+    ],
+    "interfaces": [
+      "android-t-qcom/hardware/interfaces",
+      "LA.UM.8.12.r1-11900-sm8250.0/interfaces"
+    ],
+    "nfc": [
+      "LA.UM.8.12.r1-11900-sm8250.0/nqnfc-firmware",
+      "android-t-qcom/hardware/nxp",
+      "android-t-qcom/vendor/nxp"
     ]
   },
   "guide": "docs/INDEX_GUIDE.md",
@@ -129,6 +203,33 @@
     {
       "mode": "impl",
       "query": "never_a_real_body_marker_743953"
+    },
+    {
+      "mode": "impl",
+      "query": "checkAttributionSourcePackage"
+    },
+    {
+      "mode": "impl",
+      "query": "AUDIO_OUTPUT_FLAG_DIRECT"
+    },
+    {
+      "mode": "impl",
+      "query": "getSlotIndex",
+      "prefixes": [
+        "LA.UM.8.12.r1-11900-sm8250.0"
+      ]
+    },
+    {
+      "mode": "symbol",
+      "query": "audio_stream_out_t"
+    },
+    {
+      "mode": "symbol",
+      "query": "get_presentation_position"
+    },
+    {
+      "mode": "symbol",
+      "query": "CAMERA3_STREAM_OUTPUT"
     }
   ]
 }

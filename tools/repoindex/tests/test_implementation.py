@@ -38,6 +38,64 @@ class ImplementationTests(unittest.TestCase):
         self.assertEqual([], list(w.read_source(self.root, [], "alpha/src/engine.cpp")))
         self.assertEqual([], list(w.read_source(self.root, None, "alpha/src/engine.cpp", prefixes=[])))
 
+    def test_identical_bodies_are_stored_once_and_reported_as_copies(self):
+        folder = self.root / "alpha" / "copy"
+        folder.mkdir()
+        (folder / "engine.cpp").write_text(self.body)
+        w.build(self.root, "alpha", jobs=1, chunk_bytes=1024)
+        with contextlib.closing(sqlite3.connect(w.ensure_db(self.root, "alpha"))) as db:
+            self.assertEqual(3, db.execute("SELECT count(*) FROM implementation_paths").fetchone()[0])
+            self.assertEqual(2, db.execute("SELECT count(*) FROM implementation_bodies").fetchone()[0])
+            self.assertEqual(3, db.execute("SELECT count(*) FROM implementation_files").fetchone()[0])
+        self.assertEqual("2", w.manifest(self.root, "alpha")["metadata"]["implementation_unique_bodies"])
+        rows = list(w.query(self.root, ["alpha"], "impl", "Needle_TOKEN"))
+        self.assertEqual(1, len(rows))
+        self.assertEqual(("alpha/copy/engine.cpp", 1, ["alpha/src/engine.cpp"]),
+                         (rows[0]["path"], rows[0]["copies"], rows[0]["other_paths"]))
+        expanded = list(w.query(self.root, ["alpha"], "impl", "Needle_TOKEN", collapse=False))
+        self.assertEqual(["alpha/copy/engine.cpp", "alpha/src/engine.cpp"], [row["path"] for row in expanded])
+        self.assertNotIn("copies", expanded[0])
+        scoped = list(w.query(self.root, ["alpha"], "impl", "Needle_TOKEN", prefixes=["alpha/src"]))
+        self.assertEqual([("alpha/src/engine.cpp", None)], [(row["path"], row.get("copies")) for row in scoped])
+        block = list(w.read_source(self.root, ["alpha"], "alpha/copy/engine.cpp", line=2, limit=1))
+        self.assertEqual("int Engine::run(int value) {", block[0]["text"])
+
+    def test_configured_exclusions_skip_content_and_still_verify(self):
+        config = json.loads((self.root / "repoindex.json").read_text())
+        config["implementation_exclude"] = ["alpha/src/helper.cc", "beta/nothing"]
+        (self.root / "repoindex.json").write_text(json.dumps(config))
+        w.build(self.root, "alpha", jobs=1, chunk_bytes=1024)
+        meta = w.manifest(self.root, "alpha")["metadata"]
+        self.assertEqual("1", meta["implementation_count"])
+        self.assertEqual('["src/helper.cc"]', meta["implementation_exclude"])
+        self.assertEqual([], list(w.query(self.root, ["alpha"], "impl", "helper_body")))
+        self.assertEqual(["alpha/src/helper.cc"], [r["path"] for r in w.query(self.root, ["alpha"], "files", "helper.cc")])
+        self.assertEqual(1, w.verify(self.root, "alpha")["implementation_files"])
+
+    def test_large_bodies_are_filtered_by_overlapping_segments(self):
+        folder = self.root / "alpha" / "big"
+        folder.mkdir()
+        filler = "abcdefghij" * 40
+        # Trigrams of the literal are scattered far apart, plus one real match on a segment boundary.
+        (folder / "scatter.cpp").write_text("needle_X" + filler * 10 + "le_Xyz_tail" + filler * 10 + "\n")
+        (folder / "boundary.cpp").write_text(filler[:1000 - 5] + "needle_Xyz_tail" + filler + "\n")
+        old = (impl.SEGMENT_THRESHOLD, impl.SEGMENT_SIZE, impl.SEGMENT_OVERLAP)
+        impl.SEGMENT_THRESHOLD, impl.SEGMENT_SIZE, impl.SEGMENT_OVERLAP = 500, 1000, 32
+        try:
+            w.build(self.root, "alpha", jobs=1, chunk_bytes=1024)
+        finally:
+            impl.SEGMENT_THRESHOLD, impl.SEGMENT_SIZE, impl.SEGMENT_OVERLAP = old
+        self.assertEqual("2", w.manifest(self.root, "alpha")["metadata"]["implementation_segmented_bodies"])
+        rows = list(w.query(self.root, ["alpha"], "impl", "needle_Xyz_tail"))
+        self.assertEqual(["alpha/big/boundary.cpp"], [row["path"] for row in rows])
+        self.assertEqual([], list(w.query(self.root, ["alpha"], "impl", "needle_Xyz_absent")))
+
+    def test_match_expression_uses_every_distinct_trigram(self):
+        self.assertIsNone(impl.match_expression("ab"))
+        self.assertEqual('"abc" AND "bcd"', impl.match_expression("abcd"))
+        long = "".join(chr(0x4e00 + i) for i in range(200))
+        self.assertEqual(impl.MAX_TOKENS, impl.match_expression(long).count(" AND ") + 1)
+
     def test_source_past_end_returns_no_range(self):
         self.assertEqual([], list(w.read_source(self.root, None, "alpha/src/engine.cpp", line=10000)))
 

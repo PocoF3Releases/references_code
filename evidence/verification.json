@@ -1,36 +1,36 @@
 {
-  "checked_on": "2026-10-25",
-  "checks": "chunk/database hashes, SQLite/FTS integrity, file/header/body coverage, live metadata and all implementation raw/normalized hashes",
+  "checked_on": "2026-11-22",
+  "checks": "chunk/database hashes, SQLite/FTS integrity, file/header/body coverage, live metadata and all implementation raw/normalized hashes; schema-2 deduplicated bodies hashed once",
   "trees": [
     {
       "tree": "LA.UM.8.12.r1-11900-sm8250.0",
-      "chunks_verified": 5,
+      "chunks_verified": 17,
       "database_integrity": "ok",
       "files": 44561,
-      "header_symbols": 225021,
+      "header_symbols": 383733,
       "includes": 20546,
       "search_backend": "trigram",
       "live_metadata_verified": true,
       "live_contents_hashed": false,
-      "implementation_files": 2490,
-      "implementation_bytes": 61327285,
+      "implementation_files": 20559,
+      "implementation_bytes": 407731619,
       "implementation_hashes_verified": true,
-      "database_sha256": "09e295f2593a92b64d05d72b71b80c6230cf579eb7edc001a84a9b9dd4b5ce1a"
+      "database_sha256": "37e4de5a29c38490bda98241834bef8012d227a0fe4c15bc11b30ee58694f468"
     },
     {
       "tree": "android-t-qcom",
-      "chunks_verified": 63,
+      "chunks_verified": 110,
       "database_integrity": "ok",
       "files": 212048,
-      "header_symbols": 2977498,
+      "header_symbols": 5292945,
       "includes": 458588,
       "search_backend": "trigram",
       "live_metadata_verified": true,
       "live_contents_hashed": false,
-      "implementation_files": 72079,
-      "implementation_bytes": 1426541925,
+      "implementation_files": 212048,
+      "implementation_bytes": 3157863915,
       "implementation_hashes_verified": true,
-      "database_sha256": "74533fed0eed37069ceac93733678ca517b4bbeca8f133932a39d957114e2a4a"
+      "database_sha256": "d25a6b2675b47e6330ba73a182cb3d1d527ad4584a726c8d0343d1a3134c5ed9"
     }
   ]
 }
